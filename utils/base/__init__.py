@@ -8,7 +8,7 @@ from .distance_metrics import (
     angular_distance,
     get_distance_function
 )
-from .main_memory import MainMemory
+from .main_memory import MainMemory, range_search
 from .kv_cache import KVCache, CacheEntry
 from .lemmas import (
     lemma1_circular_inclusion,
@@ -36,6 +36,7 @@ __all__ = [
     'angular_distance',
     'get_distance_function',
     'MainMemory',
+    'range_search',
     'KVCache',
     'CacheEntry',
     'lemma1_circular_inclusion',
