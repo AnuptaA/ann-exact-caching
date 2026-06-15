@@ -79,6 +79,8 @@ def select_candidates(
 #-------------------------------------------------------------------------------
 
 def _fits_budget(c: CandidateEntry, cached_vector_set: set, budget_B: int) -> bool:
+    if c.R_c is None:
+        raise ValueError("_fits_budget requires R_c; use store_rc=True in propose_candidates")
     return len(cached_vector_set | c.R_c) <= budget_B
 
 #-------------------------------------------------------------------------------

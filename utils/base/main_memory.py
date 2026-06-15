@@ -35,6 +35,8 @@ class MainMemory:
             self.M = len(vectors)
             self.d = vectors[0].shape[0]
             self.seed = None
+            self._vectors_matrix = np.array(vectors)
+            self._B_hat = self._normalize_matrix(self._vectors_matrix)
         else:
             if M is None or d is None:
                 raise ValueError("M and d must be provided if vectors is None.")
@@ -47,6 +49,14 @@ class MainMemory:
                 np.random.seed(seed)
 
             self.vectors = self._generate_random_vectors()
+            self._vectors_matrix = np.array(self.vectors)
+            self._B_hat = self._normalize_matrix(self._vectors_matrix)
+
+    @staticmethod
+    def _normalize_matrix(mat: np.ndarray) -> np.ndarray:
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms[norms == 0.0] = 1.0
+        return mat / norms
 
     def _generate_random_vectors(self) -> List[np.ndarray]:
         """Generate M random vectors of dimensionality d."""
@@ -82,31 +92,45 @@ class MainMemory:
             plus top_k_indices when return_indices is True.
         """
         distance_func = get_distance_function(metric)
-        if distance_tracker is not None:
-            distance_func = distance_tracker
-        
-        distances = []
-        for i, vec in enumerate(self.vectors):
-            dist = distance_func(query, vec)
-            distances.append((dist, i))
-        
-        # sort by distance and get top k
-        distances.sort(key=lambda x: x[0])
-        top_k = distances[:k]
-        
-        top_k_vectors = [self.vectors[i] for _, i in top_k]
-        top_k_distances = [d for d, _ in top_k]
-        top_k_indices = [i for _, i in top_k]
-        
-        # compute gap
-        if len(distances) > k:
-            gap = distances[k][0] - distances[k-1][0]
+
+        if distance_tracker is None:
+            # fast path: one matrix multiply for all distances
+            q_norm = float(np.linalg.norm(query))
+            q_hat = query / q_norm if q_norm != 0.0 else query.copy()
+            if metric == "angular":
+                dots = np.clip(self._B_hat @ q_hat, -1.0, 1.0)
+                dists = np.arccos(dots) / np.pi
+            else:
+                dists = np.linalg.norm(self._B_hat - q_hat, axis=1)
+
+            # top-k via partial sort; get k+1 indices to compute gap
+            n = len(dists)
+            if n <= k:
+                top_idx = np.argsort(dists)
+            else:
+                part = np.argpartition(dists, min(k, n - 1))[:k + 1]
+                top_idx = part[np.argsort(dists[part])]
+
+            top_k_indices = top_idx[:k].tolist()
+            top_k_distances = dists[top_k_indices].tolist()
+            top_k_vectors = [self.vectors[i] for i in top_k_indices]
+            gap = float(dists[top_idx[k]] - dists[top_idx[k - 1]]) if n > k else 0.0
         else:
-            gap = 0.0
-        
+            # tracked path: Python loop so every call goes through distance_tracker
+            distance_func = distance_tracker
+            distances = []
+            for i, vec in enumerate(self.vectors):
+                dist = distance_func(query, vec)
+                distances.append((dist, i))
+            distances.sort(key=lambda x: x[0])
+            top_k = distances[:k]
+            top_k_vectors = [self.vectors[i] for _, i in top_k]
+            top_k_distances = [d for d, _ in top_k]
+            top_k_indices = [i for _, i in top_k]
+            gap = distances[k][0] - distances[k - 1][0] if len(distances) > k else 0.0
+
         if return_indices:
             return top_k_vectors, top_k_distances, gap, top_k_indices
-
         return top_k_vectors, top_k_distances, gap
     
     def get_all_vectors(self) -> List[np.ndarray]:

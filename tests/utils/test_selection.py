@@ -32,6 +32,7 @@ def _make_candidate(
         alpha=alpha,
         r_c=alpha * r_Q,
         R_c=R_c,
+        rc_size=len(R_c),
         covered_train_indices=covered,
         covered_test_indices=covered,
         top_k_vectors=[q],

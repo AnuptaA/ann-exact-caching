@@ -7,7 +7,6 @@ from typing import List
 
 from .distance_metrics import DistanceMetric
 from .kv_cache import CacheEntry
-from .main_memory import range_search
 
 #-------------------------------------------------------------------------------
 
@@ -84,6 +83,11 @@ def propose_candidates(
     train_hat = _normalize(train_queries.copy())
     test_hat = _normalize(test_queries.copy())
 
+    # precompute normalized base matrix once — avoids re-normalizing per query
+    base_norms = np.linalg.norm(base_vectors, axis=1, keepdims=True)
+    base_norms[base_norms == 0.0] = 1.0
+    base_hat = base_vectors / base_norms  # (M, d)
+
     candidates: List[CandidateEntry] = []
 
     for i in range(len(observed_queries)):
@@ -92,10 +96,15 @@ def propose_candidates(
         q_norm = float(np.linalg.norm(observed_queries[i]))
         q_hat = observed_queries[i] / q_norm if q_norm != 0.0 else observed_queries[i].copy()
 
+        if metric == "angular":
+            all_dists = np.arccos(np.clip(base_hat @ q_hat, -1.0, 1.0)) / np.pi
+        else:
+            all_dists = np.linalg.norm(base_hat - q_hat, axis=1)
+
         for alpha in alpha_values:
             r_c = alpha * r_Q
 
-            R_c_arr = range_search(observed_queries[i], r_c, base_vectors, metric)
+            R_c_arr = np.where(all_dists <= r_c)[0].astype(np.int64)
             rc_size = len(R_c_arr)
             R_c = set(R_c_arr.tolist()) if store_rc else None
 
