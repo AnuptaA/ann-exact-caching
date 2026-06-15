@@ -120,3 +120,38 @@ class MainMemory:
     
     def __repr__(self) -> str:
         return f"MainMemory(M={self.M}, d={self.d})"
+
+#-------------------------------------------------------------------------------
+
+def range_search(
+    query: np.ndarray,
+    radius: float,
+    base_vectors: np.ndarray,
+    metric: DistanceMetric,
+) -> np.ndarray:
+    """
+    Return indices of base_vectors within radius of query.
+
+    Vectorized: computes all distances in a single matrix operation.
+    Supports 'angular' and 'euclidean' metrics (both on normalized vectors).
+    """
+    q_norm = float(np.linalg.norm(query))
+    if q_norm == 0.0:
+        return np.empty(0, dtype=np.int64)
+    q_hat = query / q_norm
+
+    row_norms = np.linalg.norm(base_vectors, axis=1, keepdims=True)
+    row_norms[row_norms == 0.0] = 1.0
+    B_hat = base_vectors / row_norms  # (M, d)
+
+    if metric == "angular":
+        dots = B_hat @ q_hat  # (M,)
+        dots = np.clip(dots, -1.0, 1.0)
+        dists = np.arccos(dots) / np.pi
+    elif metric == "euclidean":
+        diff = B_hat - q_hat  # (M, d)
+        dists = np.linalg.norm(diff, axis=1)
+    else:
+        raise ValueError(f"range_search: unsupported metric '{metric}'")
+
+    return np.where(dists <= radius)[0].astype(np.int64)

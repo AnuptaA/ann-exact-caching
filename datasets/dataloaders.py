@@ -293,7 +293,7 @@ def save_esci_benchmark(
 
 #-------------------------------------------------------------------------------
 
-def load_esci_benchmark(benchmark_dir: str) -> Tuple[np.ndarray, np.ndarray, Dict]:
+def load_esci_benchmark(benchmark_dir: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict]:
     """
     Load a previously prepared ESCI benchmark.
 
@@ -301,10 +301,11 @@ def load_esci_benchmark(benchmark_dir: str) -> Tuple[np.ndarray, np.ndarray, Dic
         benchmark_dir: Directory containing benchmark files
 
     Returns:
-        Tuple of (cache_queries, test_queries, config)
+        Tuple of (base_vectors, cache_queries, test_queries, config)
     """
     path = Path(benchmark_dir)
 
+    base_vectors = np.load(path / "base_vectors.npy")
     cache_queries = np.load(path / "cache_queries.npy")
     test_queries = np.load(path / "test_queries.npy")
 
@@ -312,9 +313,10 @@ def load_esci_benchmark(benchmark_dir: str) -> Tuple[np.ndarray, np.ndarray, Dic
         config = json.load(f)
 
     print(f"Loading ESCI benchmark from: {path}")
+    print(f"  Loaded {base_vectors.shape[0]} base vectors")
     print(f"  Loaded {cache_queries.shape[0]} cache queries")
     print(f"  Loaded {test_queries.shape[0]} test queries")
 
-    return cache_queries, test_queries, config
+    return base_vectors, cache_queries, test_queries, config
 
 #-------------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
+import json
 import numpy as np
 import argparse
 from datasets.dataloaders import load_esci_data, save_esci_benchmark
@@ -239,6 +240,317 @@ def prepare_esci_benchmark(
     return str(output_dir)
 
 #-------------------------------------------------------------------------------
+# Population pipeline extension
+#-------------------------------------------------------------------------------
+
+K_VALUES = [1, 5, 10, 20]        # per-K GT files for K-microbenchmark
+
+POPULATION_BASE_N = 50000        # number of product vectors to sample
+POPULATION_BASE_SEED = 0         # fixed seed for reproducible sample
+POPULATION_K = 100               # brute-force KNN for population GT
+
+# k99 source benchmarks used to create k100 population counterparts
+_POPULATION_SOURCES = [
+    "esci_c256k99_t512n20_s42",
+    "esci_c256k99_t512n20_s43",
+    "esci_c256k99_t512n20_s44",
+    "esci_c512k99_t512n20_s42",
+    "esci_c512k99_t512n20_s43",
+    "esci_c512k99_t512n20_s44",
+    "esci_c1024k99_t512n20_s42",
+    "esci_c1024k99_t512n20_s43",
+    "esci_c1024k99_t512n20_s44",
+    "esci_c2048k99_t512n20_s42",
+    "esci_c2048k99_t512n20_s43",
+    "esci_c2048k99_t512n20_s44",
+]
+
+# k100 population benchmark directories (brute-force GT, used by run scripts)
+POPULATION_BENCHMARKS = [
+    "esci_c256k100_t512n20_s42",
+    "esci_c256k100_t512n20_s43",
+    "esci_c256k100_t512n20_s44",
+    "esci_c512k100_t512n20_s42",
+    "esci_c512k100_t512n20_s43",
+    "esci_c512k100_t512n20_s44",
+    "esci_c1024k100_t512n20_s42",
+    "esci_c1024k100_t512n20_s43",
+    "esci_c1024k100_t512n20_s44",
+    "esci_c2048k100_t512n20_s42",
+    "esci_c2048k100_t512n20_s43",
+    "esci_c2048k100_t512n20_s44",
+]
+
+#-------------------------------------------------------------------------------
+
+def _sample_base_vectors(
+    product_embeddings: np.ndarray,
+    n: int = POPULATION_BASE_N,
+    seed: int = POPULATION_BASE_SEED,
+) -> np.ndarray:
+    """Sample n product vectors with a fixed seed. Returns (n, D) float32 array."""
+    rng = np.random.default_rng(seed)
+    idx = rng.choice(len(product_embeddings), n, replace=False)
+    idx.sort()
+    return product_embeddings[idx].astype(np.float32), idx
+
+#-------------------------------------------------------------------------------
+
+def _brute_force_knn_angular(
+    queries: np.ndarray,
+    base: np.ndarray,
+    K: int,
+) -> list:
+    """
+    Brute-force top-K angular KNN of queries against base.
+
+    Returns list of (indices, distances, gap) per query, where distances are
+    angular (arccos / pi) and gap = dist[K] - dist[K-1].
+    """
+    q = queries / np.linalg.norm(queries, axis=1, keepdims=True)
+    b = base / np.linalg.norm(base, axis=1, keepdims=True)
+
+    kp1 = min(K + 1, len(base))
+    results = []
+    batch = 256  # process in batches to limit peak memory
+    for start in range(0, len(queries), batch):
+        qb = q[start:start + batch]
+        scores = qb @ b.T  # (batch, N_base)
+        top_idx = np.argsort(-scores, axis=1)[:, :kp1]
+        top_scores = np.take_along_axis(scores, top_idx, axis=1)
+        dists = (np.arccos(np.clip(top_scores, -1.0, 1.0)) / np.pi).astype(np.float32)
+        for i in range(len(qb)):
+            idx = top_idx[i, :K]
+            d = dists[i, :K]
+            gap = float(dists[i, K] - dists[i, K - 1]) if kp1 > K else 0.0
+            results.append((idx, d, gap))
+    return results
+
+#-------------------------------------------------------------------------------
+
+def _save_population_gt(
+    queries: np.ndarray,
+    base: np.ndarray,
+    K: int,
+    out_path: Path,
+) -> None:
+    """Compute brute-force KNN and save GT (indices_i, r_Q_i, half_gap_i)."""
+    if out_path.exists():
+        print(f"  Population GT already exists: {out_path.name}")
+        return
+    print(f"  Computing population GT for {len(queries)} queries (K={K}) on {len(base)} base vectors...")
+    results = _brute_force_knn_angular(queries, base, K)
+    save_dict = {}
+    for i, (idx, d, gap) in enumerate(results):
+        save_dict[f'indices_{i}'] = idx
+        save_dict[f'r_Q_{i}'] = np.float32(float(d[-1]))
+        save_dict[f'half_gap_{i}'] = np.float32(gap / 2.0)
+    np.savez_compressed(out_path, **save_dict)
+    print(f"  Saved: {out_path.name}")
+
+#-------------------------------------------------------------------------------
+
+def create_esci_population_benchmark(
+    source_dir: Path,
+    product_embeddings: np.ndarray,
+) -> None:
+    """
+    Create a K=100 population benchmark directory from an existing K=99 benchmark.
+
+    The new directory shares cache_queries.npy and test_queries.npy with the source
+    but uses K=100 brute-force GT against the 50K base sample, so all K+1 neighbors
+    are guaranteed to exist.
+    """
+    config_file = source_dir / 'config.json'
+    with open(config_file) as f:
+        source_config = json.load(f)
+
+    num_cache = source_config['num_cache_queries']
+    num_test = source_config['num_test_queries']
+    test_N = source_config['test_N']
+    seed = source_config['seed']
+    benchmark_name = create_benchmark_name(num_cache, POPULATION_K, num_test, test_N, seed)
+    output_dir = ESCI_DIR / benchmark_name
+
+    cache_gt_file = output_dir / f'cache_gt_population_K{POPULATION_K}.npz'
+    test_gt_file = output_dir / f'test_gt_population_K{POPULATION_K}.npz'
+    k_gts_exist = all(
+        (output_dir / f'cache_gt_population_K{k}.npz').exists() for k in K_VALUES
+    )
+    test_k_gts_exist = all(
+        (output_dir / f'test_gt_population_K{k}.npz').exists() for k in K_VALUES
+    )
+    if (cache_gt_file.exists() and test_gt_file.exists()
+            and (output_dir / 'test_r_t.npy').exists()
+            and k_gts_exist and test_k_gts_exist):
+        print(f"  Population benchmark already complete: {benchmark_name}")
+        return
+
+    print(f"\n{'='*80}")
+    print(f"Creating K=100 population benchmark: {benchmark_name}")
+    print(f"{'='*80}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_q = np.load(source_dir / 'cache_queries.npy')
+    test_q = np.load(source_dir / 'test_queries.npy')
+    np.save(output_dir / 'cache_queries.npy', cache_q)
+    np.save(output_dir / 'test_queries.npy', test_q)
+
+    config = dict(source_config)
+    config['cache_K'] = POPULATION_K
+    config['benchmark_name'] = benchmark_name
+    with open(output_dir / 'config.json', 'w') as f:
+        json.dump(config, f, indent=2)
+
+    # base_vectors.npy — 50K sample, fixed seed
+    base_file = output_dir / 'base_vectors.npy'
+    idx_file = output_dir / 'base_sample_indices.npy'
+    if base_file.exists():
+        print("  base_vectors.npy already exists, loading...")
+        base = np.load(base_file)
+    else:
+        print(f"  Sampling {POPULATION_BASE_N} base vectors (seed={POPULATION_BASE_SEED})...")
+        base, sample_idx = _sample_base_vectors(product_embeddings, POPULATION_BASE_N, POPULATION_BASE_SEED)
+        np.save(base_file, base)
+        np.save(idx_file, sample_idx)
+        print(f"  Saved: base_vectors.npy  shape={base.shape}")
+
+    # cache_gt_population_K100.npz
+    _save_population_gt(cache_q, base, POPULATION_K, cache_gt_file)
+
+    # cache_r_Q.npy
+    r_Q_file = output_dir / 'cache_r_Q.npy'
+    if r_Q_file.exists():
+        print("  cache_r_Q.npy already exists, skipping.")
+    else:
+        data = np.load(cache_gt_file)
+        r_Q = np.array([float(data[f'r_Q_{i}']) for i in range(len(cache_q))], dtype=np.float32)
+        np.save(r_Q_file, r_Q)
+        print(f"  Saved: cache_r_Q.npy  range=[{r_Q.min():.4f}, {r_Q.max():.4f}]")
+
+    # test_gt_population_K100.npz
+    _save_population_gt(test_q, base, POPULATION_K, test_gt_file)
+
+    # test_r_t.npy
+    r_t_file = output_dir / 'test_r_t.npy'
+    if r_t_file.exists():
+        print("  test_r_t.npy already exists, skipping.")
+    else:
+        data = np.load(test_gt_file)
+        r_t = np.array([float(data[f'r_Q_{i}']) for i in range(len(test_q))], dtype=np.float32)
+        np.save(r_t_file, r_t)
+        print(f"  Saved: test_r_t.npy  range=[{r_t.min():.4f}, {r_t.max():.4f}]")
+
+    # per-K GT files for K-microbenchmark (K=[1,5,10,20])
+    for k in K_VALUES:
+        _save_population_gt(cache_q, base, k, output_dir / f"cache_gt_population_K{k}.npz")
+
+    # per-K test GT files for K-override runs
+    for k in K_VALUES:
+        _save_population_gt(test_q, base, k, output_dir / f"test_gt_population_K{k}.npz")
+
+    config['has_population_data'] = True
+    with open(output_dir / 'config.json', 'w') as f:
+        json.dump(config, f, indent=2)
+    print(f"  Done: {benchmark_name}")
+
+#-------------------------------------------------------------------------------
+
+def extend_benchmark_with_population_data(
+    benchmark_dir: Path,
+    product_embeddings: np.ndarray = None,
+) -> None:
+    """
+    Extend an existing ESCI benchmark with population-pipeline data files:
+      base_vectors.npy, cache_gt_population_K100.npz, cache_r_Q.npy,
+      test_gt_population_K100.npz, test_r_t.npy
+
+    All files are guarded by existence checks; safe to re-run on a partially
+    extended benchmark. Patches config.json with has_population_data=true.
+
+    product_embeddings can be passed in to avoid reloading 1.82M vectors per call.
+    """
+    config_file = benchmark_dir / 'config.json'
+    if not config_file.exists():
+        raise FileNotFoundError(f"No config.json in {benchmark_dir}")
+    with open(config_file) as f:
+        config = json.load(f)
+
+    cache_q = np.load(benchmark_dir / 'cache_queries.npy')
+    test_q = np.load(benchmark_dir / 'test_queries.npy')
+
+    print(f"\n{'='*80}")
+    print(f"Extending with population data: {benchmark_dir.name}")
+    print(f"{'='*80}")
+
+    # base_vectors.npy — 50K sample, fixed seed
+    base_file = benchmark_dir / 'base_vectors.npy'
+    idx_file = benchmark_dir / 'base_sample_indices.npy'
+    if base_file.exists():
+        print("  base_vectors.npy already exists, loading...")
+        base = np.load(base_file)
+    else:
+        if product_embeddings is None:
+            print("  Loading product embeddings (1.82M vectors)...")
+            product_embeddings = np.load(ESCI_DIR / 'product_embeddings.npy')
+        print(f"  Sampling {POPULATION_BASE_N} base vectors (seed={POPULATION_BASE_SEED})...")
+        base, sample_idx = _sample_base_vectors(product_embeddings, POPULATION_BASE_N, POPULATION_BASE_SEED)
+        np.save(base_file, base)
+        np.save(idx_file, sample_idx)
+        print(f"  Saved: base_vectors.npy  shape={base.shape}")
+
+    # cache_gt_population_K100.npz
+    cache_gt_file = benchmark_dir / f'cache_gt_population_K{POPULATION_K}.npz'
+    _save_population_gt(cache_q, base, POPULATION_K, cache_gt_file)
+
+    # cache_r_Q.npy
+    r_Q_file = benchmark_dir / 'cache_r_Q.npy'
+    if r_Q_file.exists():
+        print("  cache_r_Q.npy already exists, skipping.")
+    else:
+        data = np.load(cache_gt_file)
+        r_Q = np.array(
+            [float(data[f'r_Q_{i}']) for i in range(len(cache_q))],
+            dtype=np.float32,
+        )
+        np.save(r_Q_file, r_Q)
+        print(f"  Saved: cache_r_Q.npy  range=[{r_Q.min():.4f}, {r_Q.max():.4f}]")
+
+    # test_gt_population_K100.npz
+    test_gt_file = benchmark_dir / f'test_gt_population_K{POPULATION_K}.npz'
+    _save_population_gt(test_q, base, POPULATION_K, test_gt_file)
+
+    # test_r_t.npy
+    r_t_file = benchmark_dir / 'test_r_t.npy'
+    if r_t_file.exists():
+        print("  test_r_t.npy already exists, skipping.")
+    else:
+        data = np.load(test_gt_file)
+        r_t = np.array(
+            [float(data[f'r_Q_{i}']) for i in range(len(test_q))],
+            dtype=np.float32,
+        )
+        np.save(r_t_file, r_t)
+        print(f"  Saved: test_r_t.npy  range=[{r_t.min():.4f}, {r_t.max():.4f}]")
+
+    # per-K GT files for K-microbenchmark (K=[1,5,10,20])
+    for k in K_VALUES:
+        _save_population_gt(cache_q, base, k, benchmark_dir / f"cache_gt_population_K{k}.npz")
+
+    # per-K test GT files for K-override runs
+    for k in K_VALUES:
+        _save_population_gt(test_q, base, k, benchmark_dir / f"test_gt_population_K{k}.npz")
+
+    # patch config
+    if not config.get('has_population_data'):
+        config['has_population_data'] = True
+        with open(config_file, 'w') as f:
+            json.dump(config, f, indent=2)
+        print("  Patched config.json with has_population_data=true.")
+
+    print(f"  Done: {benchmark_dir.name}")
+
+#-------------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -257,6 +569,11 @@ def main():
         type=str,
         choices=['baseline', 'cache_scaling', 'kn_relationship'],
         help='Prepare benchmarks for one test set'
+    )
+    group.add_argument(
+        '--extend-population',
+        action='store_true',
+        help='Extend all population benchmarks with base_vectors + population GT files'
     )
 
     parser.add_argument('--cache', type=int, default=1024, help='Number of cache queries')
@@ -277,6 +594,35 @@ def main():
         'kn_relationship': [b for b in RESEARCH_BENCHMARKS
                             if b['num_cache'] == 1024 and b['num_test'] == 256],
     }
+
+    if args.extend_population:
+        print(f"\n{'='*80}")
+        print(f"Creating K=100 population benchmarks from {len(_POPULATION_SOURCES)} source benchmarks")
+        print(f"{'='*80}\n")
+        product_embeddings = None
+        failed = []
+        for name in _POPULATION_SOURCES:
+            source_dir = ESCI_DIR / name
+            if not source_dir.exists():
+                print(f"Skipping {name}: source benchmark not prepared yet")
+                failed.append(name)
+                continue
+            try:
+                if product_embeddings is None:
+                    print("Loading product embeddings (1.82M vectors)...")
+                    product_embeddings = np.load(ESCI_DIR / 'product_embeddings.npy')
+                create_esci_population_benchmark(source_dir, product_embeddings)
+            except Exception as e:
+                print(f"\nERROR: {name} failed: {e}")
+                failed.append(name)
+        print(f"\n{'='*80}")
+        print(f"Done: {len(_POPULATION_SOURCES) - len(failed)}/{len(_POPULATION_SOURCES)} succeeded")
+        if failed:
+            for b in failed:
+                print(f"  {b}")
+        print(f"{'='*80}")
+        import sys
+        sys.exit(1 if failed else 0)
 
     if args.all:
         configs = RESEARCH_BENCHMARKS
