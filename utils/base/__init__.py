@@ -28,6 +28,7 @@ from .perturbation import (
     ALPHA,
     BETA
 )
+from .selection_fast import select_candidates_fast
 
 __all__ = [
     'DistanceMetric',
@@ -53,4 +54,5 @@ __all__ = [
     'PerturbationLevel',
     'ALPHA',
     'BETA',
+    'select_candidates_fast',
 ]
