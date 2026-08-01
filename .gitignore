@@ -230,6 +230,10 @@ simulations/sift/raw/
 simulations/sift/processed/
 simulations/synthetic/raw/
 simulations/synthetic/processed/
+simulations/characterization/
+simulations/results/
+simulations/debug/
+simulations/population_proposal_sigma/
 
 # Local editor settings
 .claude/settings.local.json

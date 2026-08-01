@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
-from simulations.simulate import (
+from simulations.core.simulate import (
     QueryResult,
     SimulationResult,
     DistanceCalculationTracker,
@@ -47,18 +47,18 @@ def test_query_result_dataclass():
     
     result = QueryResult(
         query_id=0,
-        algorithm="lemma1",
+        algorithm="lemma1_no_union",
         cache_hit=True,
         correct=True,
         distance_calculations=50,
         time_us=123.45,
-        hit_source="lemma1",
+        hit_source="lemma1_no_union",
         vectors_from_cache=10
     )
-    
+
     d = result.to_dict()
     assert d['query_id'] == 0
-    assert d['algorithm'] == "lemma1"
+    assert d['algorithm'] == "lemma1_no_union"
     assert d['cache_hit'] == True
     assert d['correct'] == True
     assert d['distance_calculations'] == 50
@@ -74,7 +74,7 @@ def test_simulation_result_properties():
     
     result = SimulationResult(
         dataset_name="test",
-        algorithm="combined",
+        algorithm="lemma1_no_union",
         metric="euclidean",
         total_queries=100,
         cache_hits=75,
@@ -142,8 +142,9 @@ def test_cache_population():
     
     entries = simulator.cache.get_all_entries()
     assert len(entries) == 5
-    assert len(entries[0].top_k_vectors) == 10, "Each entry should have K=10 vectors"
-    
+    # index-only entries: no private top_k_vectors copy, just K=10 indices
+    assert len(entries[0].top_k_indices) == 10, "Each entry should have K=10 indices"
+
     print("Cache population works.")
 
 #-------------------------------------------------------------------------------
@@ -165,13 +166,15 @@ def test_run_single_query():
     
     # run one query
     query = test_queries[0]
-    result = simulator.run_query(0, query, "combined")
-    
+    result = simulator.run_query(0, query, "lemma1_no_union")
+
     assert result.query_id == 0
-    assert result.algorithm == "combined"
+    assert result.algorithm == "lemma1_no_union"
     assert isinstance(result.cache_hit, bool)
     assert isinstance(result.correct, bool)
-    assert result.distance_calculations >= 0
+    # distance-call counting was removed (unnecessary functionality per design
+    # decision); always None now.
+    assert result.distance_calculations is None
     assert result.time_us > 0
     
     print(f"Query result: hit={result.cache_hit}, correct={result.correct}")
@@ -204,34 +207,142 @@ def test_brute_force_algorithm():
 #-------------------------------------------------------------------------------
 
 def test_lemma_algorithms():
-    """Test lemma1, lemma2, and combined algorithms."""
+    """Test the canonical no-union algorithms (lemma1_no_union, lemma2_no_union).
+
+    lemma1/lemma2/combined (union-based) are deprecated -- see
+    simulations/core/simulate.py.
+    """
     print("\nTest 8: Lemma algorithms")
-    
+
     base_vectors = np.random.randn(200, 32).astype(np.float32)
     cache_queries = np.random.randn(10, 32).astype(np.float32)
     test_queries = np.random.randn(20, 32).astype(np.float32)
-    
+
     simulator = CacheSimulator(
         base_vectors, cache_queries, test_queries,
         K=20, N=10, metric="euclidean"
     )
-    
+
     simulator.populate_cache()
-    
-    # test all algorithms
-    for algo in ["lemma1", "lemma2", "combined"]:
+
+    # test all canonical algorithms
+    for algo in ["lemma1_no_union", "lemma2_no_union"]:
         result = simulator.run_query(0, test_queries[0], algo)
-        
+
         assert result.algorithm == algo
         assert isinstance(result.cache_hit, bool)
-        
+
         # if it's a hit, verify correctness was checked
         if result.cache_hit:
             assert isinstance(result.correct, bool)
             if result.correct:
                 print(f"{algo}: Cache hit and correct.")
-        
+
         print(f"{algo} executed successfully.")
+
+
+def test_lemma_algorithms_sigma_relaxed():
+    """lemma1_no_union/lemma2_no_union both support sigma < 1.0 through run_query."""
+    print("\nTest 8b: Sigma-relaxed no-union algorithms")
+
+    np.random.seed(7)
+    base_vectors = np.random.randn(200, 32).astype(np.float32)
+    cache_queries = np.random.randn(10, 32).astype(np.float32)
+    # test queries similar to cache queries to encourage hits
+    test_queries = np.array(
+        [cache_queries[i % len(cache_queries)] + np.random.randn(32) * 0.01 for i in range(10)],
+        dtype=np.float32
+    )
+
+    for algo in ["lemma1_no_union", "lemma2_no_union"]:
+        simulator = CacheSimulator(
+            base_vectors, cache_queries, test_queries,
+            K=20, N=10, metric="angular"
+        )
+        simulator.populate_cache()
+
+        for sigma in (1.0, 0.7):
+            result = simulator.run_query(0, test_queries[0], algo, sigma=sigma)
+            assert result.algorithm == algo
+            assert isinstance(result.cache_hit, bool)
+            if result.cache_hit and sigma < 1.0:
+                assert result.certified_indices is not None, (
+                    f"{algo} sigma={sigma}: certified_indices should be set on a hit"
+                )
+
+        print(f"{algo}: sigma sweep executed successfully.")
+
+
+def test_sigma_guard_rejects_unsupported_algorithm():
+    """sigma != 1.0 must raise for algorithms that don't support relaxation."""
+    print("\nTest 8c: sigma guard")
+
+    base_vectors = np.random.randn(50, 16).astype(np.float32)
+    cache_queries = np.random.randn(5, 16).astype(np.float32)
+    test_queries = np.random.randn(3, 16).astype(np.float32)
+
+    simulator = CacheSimulator(
+        base_vectors, cache_queries, test_queries,
+        K=5, N=3, metric="angular"
+    )
+    simulator.populate_cache()
+
+    try:
+        simulator.run_query(0, test_queries[0], "brute", sigma=0.8)
+        assert False, "expected ValueError for sigma != 1.0 with algorithm='brute'"
+    except ValueError as e:
+        assert "sigma" in str(e).lower()
+
+    print("sigma guard correctly rejects unsupported algorithm.")
+
+
+def test_unknown_algorithm_raises():
+    """An unrecognized algorithm string raises ValueError -- dispatch errors
+    are no longer swallowed into a query-level miss."""
+    print("\nTest 8d: unknown algorithm")
+
+    base_vectors = np.random.randn(50, 16).astype(np.float32)
+    cache_queries = np.random.randn(5, 16).astype(np.float32)
+    test_queries = np.random.randn(3, 16).astype(np.float32)
+
+    simulator = CacheSimulator(
+        base_vectors, cache_queries, test_queries,
+        K=5, N=3, metric="angular"
+    )
+    simulator.populate_cache()
+
+    try:
+        simulator.run_query(0, test_queries[0], "not_a_real_algorithm")
+        assert False, "expected ValueError for unknown algorithm"
+    except ValueError as e:
+        assert "Unknown algorithm" in str(e)
+
+    print("Unknown algorithm raises ValueError.")
+
+
+def test_run_query_before_populate_raises():
+    """Calling run_query before populate_cache() raises AttributeError
+    (self.cache is None) -- dispatch errors propagate rather than being
+    captured as a query-level miss."""
+    print("\nTest 8e: run_query before populate_cache()")
+
+    base_vectors = np.random.randn(50, 16).astype(np.float32)
+    cache_queries = np.random.randn(5, 16).astype(np.float32)
+    test_queries = np.random.randn(3, 16).astype(np.float32)
+
+    simulator = CacheSimulator(
+        base_vectors, cache_queries, test_queries,
+        K=5, N=3, metric="angular"
+    )
+    # deliberately skip simulator.populate_cache()
+
+    try:
+        simulator.run_query(0, test_queries[0], "lemma1_no_union")
+        assert False, "expected AttributeError from self.cache being None"
+    except AttributeError:
+        pass
+
+    print("run_query-before-populate raises AttributeError.")
 
 #-------------------------------------------------------------------------------
 
@@ -248,7 +359,7 @@ def test_full_simulation():
         K=10, N=5, metric="euclidean"
     )
     
-    result = simulator.run_simulation("combined", verbose=False)
+    result = simulator.run_simulation("lemma1_no_union", verbose=False)
     
     assert result.total_queries == 10
     assert result.cache_hits + (result.total_queries - result.cache_hits) == result.total_queries
@@ -276,13 +387,15 @@ def test_different_metrics():
             K=10, N=5, metric=metric
         )
         
-        result = simulator.run_simulation("combined", verbose=True)
+        result = simulator.run_simulation("lemma1_no_union", verbose=True)
         
         assert result.metric == metric
         assert result.total_queries == 10
-        assert result.total_distance_calcs > 0
+        # distance-call counting was removed; total_distance_calcs stays at 0
+        # for non-brute algorithms now.
+        assert result.total_distance_calcs == 0
         assert result.avg_time_us > 0
-        
+
         results[metric] = result
         print(f"{metric} metric: {result.cache_hits} hits, {result.avg_distance_calcs:.1f} avg calcs")
     
@@ -313,12 +426,12 @@ def test_override_n():
     simulator.populate_cache()
 
     # run with default N=5
-    result_default = simulator.run_query(0, test_queries[0], "combined")
-    assert result_default.algorithm == "combined", "Algorithm label mismatch"
+    result_default = simulator.run_query(0, test_queries[0], "lemma1_no_union")
+    assert result_default.algorithm == "lemma1_no_union", "Algorithm label mismatch"
 
     # run with override_N=3; should use N=3 instead of N=5
-    result_override = simulator.run_query(0, test_queries[0], "combined", override_N=3)
-    assert result_override.algorithm == "combined", "Algorithm label mismatch"
+    result_override = simulator.run_query(0, test_queries[0], "lemma1_no_union", override_N=3)
+    assert result_override.algorithm == "lemma1_no_union", "Algorithm label mismatch"
 
     # if hit with override, returned vectors should be <= override_N
     if result_override.cache_hit:
@@ -327,7 +440,7 @@ def test_override_n():
         )
 
     # override_N=None should behave identically to no override
-    result_none = simulator.run_query(0, test_queries[0], "combined", override_N=None)
+    result_none = simulator.run_query(0, test_queries[0], "lemma1_no_union", override_N=None)
     assert result_none.cache_hit == result_default.cache_hit, \
         "override_N=None should match default behavior"
 
@@ -355,7 +468,7 @@ def test_similar_query_high_hit_rate():
         K=20, N=10, metric="euclidean"
     )
     
-    result = simulator.run_simulation("combined", verbose=False)
+    result = simulator.run_simulation("lemma1_no_union", verbose=False)
     
     print(f"Hit rate with similar queries: {result.hit_rate:.1%}")
     print(f"Lemma 1 hits: {result.lemma1_hits}")
@@ -380,6 +493,10 @@ if __name__ == "__main__":
     test_run_single_query()
     test_brute_force_algorithm()
     test_lemma_algorithms()
+    test_lemma_algorithms_sigma_relaxed()
+    test_sigma_guard_rejects_unsupported_algorithm()
+    test_unknown_algorithm_raises()
+    test_run_query_before_populate_raises()
     test_full_simulation()
     test_different_metrics()
     test_override_n()

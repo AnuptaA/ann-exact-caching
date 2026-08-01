@@ -1,70 +1,62 @@
 VENV = venv
 PYTHON = $(VENV)/bin/python
 PIP = $(VENV)/bin/pip
+# The population sweep is memory-bound, not CPU-bound: a single work item's
+# propose_candidates stage alone was measured peaking at ~2.3GB (see
+# docs/POPULATION_DESIGN.md), and this is an 8GB machine -- 3+ simultaneous
+# workers risks exceeding available RAM and thrashing (slower, not faster),
+# even with other applications closed. 2 is the configuration actually
+# measured giving a real ~1.38x speedup; it is not a guess or the CPU count
+# (8 cores are available, but irrelevant here).
+WORKERS ?= 2
 
-K ?=
-_K_FLAG = $(if $(K),--K $(K),)
+SHELL := /bin/bash
+.SHELLFLAGS := -o pipefail -c
+LOGDIR = logs
+RUN_LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 
 .PHONY: all help
 .PHONY: synthetic-generate synthetic-run synthetic-analyze
-.PHONY: sift-prepare sift-run sift-analyze
-.PHONY: sift-population-prepare sift-population-run sift-population-run-all sift-population-analyze sift-population
-.PHONY: sift-population-run-K sift-population-run-all-K
-.PHONY: sift-alpha-microbenchmark sift-k-microbenchmark
-.PHONY: esci-prepare esci-run esci-analyze
-.PHONY: esci-population-prepare esci-population-run esci-population-run-all esci-population-analyze esci-population
-.PHONY: esci-population-run-K esci-population-run-all-K
-.PHONY: esci-alpha-microbenchmark esci-k-microbenchmark
+.PHONY: sift-prepare sift-hit-policy-run sift-hit-policy-analyze
+.PHONY: sift-population-prepare
+.PHONY: esci-prepare esci-hit-policy-run esci-hit-policy-analyze
+.PHONY: esci-population-prepare
+.PHONY: microbenchmark
 .PHONY: population
-.PHONY: characterize
-.PHONY: test \
-        test-utils test-distance-metrics test-kv-cache test-lemmas test-main-memory \
-        test-perturbation test-simulate \
-        test-range-search test-population test-selection \
-        test-synthetic test-generator test-e2e-synthetic test-analysis \
-        test-sift test-sift-edge-cases test-sift-e2e test-dataloaders \
-        test-sift-population-e2e test-sift-microbenchmark test-sift-microbenchmark-k \
-        test-esci test-esci-edge-cases test-esci-e2e \
-        test-esci-population-e2e test-esci-microbenchmark test-esci-microbenchmark-k \
-        test-population-all
+.PHONY: esci-population-ball sift-population-ball
+.PHONY: population-proposal-analyze population-proposal
+.PHONY: esci-population-ball-exact sift-population-ball-exact
+.PHONY: population-proposal-exact
+.PHONY: debug-ball-geometry debug-trajectory debug-sigma-sensitivity debug-distance-concentration debug-vector-coverage debug-population
+.PHONY: analyze-hit-policy
+.PHONY: dataset-characterize full-pipeline
+.PHONY: test test-utils test-synthetic test-sift test-esci
+.PHONY: test-hit-policy test-population test-containment test-proposal
+.PHONY: test-dataloaders test-generation test-sigma
 .PHONY: count-datasets
 .PHONY: clobber clobber-synthetic clobber-sift clobber-esci clean-cache
 
 all: help
 
 help:
-	@echo "Synthetic:  synthetic-generate | synthetic-run | synthetic-analyze"
-	@echo "SIFT:       sift-prepare | sift-run | sift-analyze"
-	@echo "Population: sift-population-prepare | sift-population-run | sift-population-analyze"
-	@echo "            sift-population  (all three in sequence)"
-	@echo "            sift-population-run K=<n>  (quick run with K override)"
-	@echo "            sift-population-run-K      (quick run for all K=[1,5,10,20])"
-	@echo "            sift-population-run-all-K  (full run for all K=[1,5,10,20])"
-	@echo "ESCI:       esci-prepare | esci-run | esci-analyze"
-	@echo "            esci-population-prepare | esci-population-run | esci-population-analyze"
-	@echo "            esci-population  (all three in sequence)"
-	@echo "            esci-population-run K=<n>  (quick run with K override)"
-	@echo "            esci-population-run-K      (quick run for all K=[1,5,10,20])"
-	@echo "            esci-population-run-all-K  (full run for all K=[1,5,10,20])"
-	@echo "Combined:   population  (sift-population + esci-population)"
-	@echo "Microbenchmark: sift-alpha-microbenchmark | sift-k-microbenchmark"
-	@echo "                esci-alpha-microbenchmark | esci-k-microbenchmark"
-	@echo "All:        analyze  (runs all workloads + collects results)"
-	@echo "Characterize: characterize (all workloads, cross-workload plots)"
-	@echo "Tests:      test | test-utils | test-synthetic | test-sift | test-esci"
-	@echo "            test-population-all  (all population tests, both datasets)"
-	@echo "            utils:     test-distance-metrics test-kv-cache test-lemmas"
-	@echo "                       test-main-memory test-perturbation test-simulate"
-	@echo "                       test-range-search test-population test-selection"
-	@echo "            synthetic: test-generator test-e2e-synthetic test-analysis"
-	@echo "            sift:      test-sift-edge-cases test-sift-e2e test-dataloaders"
-	@echo "                       test-sift-population-e2e"
-	@echo "                       test-sift-microbenchmark test-sift-microbenchmark-k"
-	@echo "            esci:      test-esci-edge-cases test-esci-e2e"
-	@echo "                       test-esci-population-e2e"
-	@echo "                       test-esci-microbenchmark test-esci-microbenchmark-k"
-	@echo "Utilities:  count-datasets"
-	@echo "Cleanup:    clobber[-synthetic|-sift|-esci]"
+	@echo "Synthetic:    synthetic-generate | synthetic-run | synthetic-analyze"
+	@echo "SIFT hit-policy: sift-prepare | sift-hit-policy-run | sift-hit-policy-analyze"
+	@echo "ESCI hit-policy: esci-prepare | esci-hit-policy-run | esci-hit-policy-analyze"
+	@echo "Population:   population  (microbenchmark + collected results, both datasets)"
+	@echo "              microbenchmark        (containment microbenchmark, both datasets)"
+	@echo "              {sift,esci}-population-prepare"
+	@echo "              population-proposal"
+	@echo "              population-proposal-exact  (sigma=1.0 only)"
+	@echo "              {esci,sift}-population-ball[-exact]"
+	@echo "              debug-population       (ball-geometry + trajectory + sigma-sensitivity + distance-concentration diagnostics)"
+	@echo "              debug-ball-geometry | debug-trajectory | debug-sigma-sensitivity | debug-distance-concentration"
+	@echo "              debug-vector-coverage  (standalone: coverage ceiling vs actual hit rate, sigma=1.0 only)"
+	@echo "Characterize: dataset-characterize  (query-clustering ratio benchmark)"
+	@echo "              full-pipeline         (dataset-characterize then population)"
+	@echo "Tests:        test  (full suite)  |  test-utils | test-synthetic | test-sift | test-esci"
+	@echo "              test-hit-policy | test-population | test-containment | test-proposal"
+	@echo "              test-dataloaders | test-generation | test-sigma"
+	@echo "Cleanup:      clobber[-synthetic|-sift|-esci]"
 
 # ── Synthetic workflow ────────────────────────────────────────────────────────
 
@@ -76,208 +68,165 @@ synthetic-run:
 
 synthetic-analyze:
 	$(PYTHON) simulations/synthetic/analyze_synthetic.py
-	$(PYTHON) simulations/synthetic/compile_pdf.py
+	$(PYTHON) simulations/pdf/compile.py --dataset synthetic
 
-# ── SIFT workflow ─────────────────────────────────────────────────────────────
+# ── SIFT hit-policy workflow ──────────────────────────────────────────────────
 
 sift-prepare:
 	$(PYTHON) datasets/sift/prepare_benchmark.py --all
 
-sift-run:
-	$(PYTHON) simulations/sift/run_sift.py
+sift-hit-policy-run:
+	$(PYTHON) simulations/hit_policy/run_hit_policy.py --dataset sift
 
-sift-analyze:
-	$(PYTHON) simulations/sift/analyze_sift.py
-	$(PYTHON) simulations/sift/compile_pdf.py
+sift-hit-policy-analyze:
+	$(PYTHON) simulations/hit_policy/analyze_hit_policy.py --dataset sift
+	$(PYTHON) simulations/pdf/compile.py --dataset sift
 
 # ── SIFT population workflow ──────────────────────────────────────────────────
 
-datasets/sift/.population_prepared:
+sift-population-prepare:
 	$(PYTHON) datasets/sift/prepare_benchmark.py --all
 	$(PYTHON) datasets/sift/prepare_benchmark.py --extend-population
-	touch $@
 
-sift-population-prepare: datasets/sift/.population_prepared
-
-sift-population-run: datasets/sift/.population_prepared
-	$(PYTHON) simulations/sift/run_population_sift.py --quick $(_K_FLAG)
-
-sift-population-run-all: datasets/sift/.population_prepared
-	$(PYTHON) simulations/sift/run_population_sift.py $(_K_FLAG)
-
-sift-population-run-K: datasets/sift/.population_prepared
-	for k in 1 5 10 20; do \
-		$(PYTHON) simulations/sift/run_population_sift.py --quick --K $$k; \
-	done
-
-sift-population-run-all-K: datasets/sift/.population_prepared
-	for k in 1 5 10 20; do \
-		$(PYTHON) simulations/sift/run_population_sift.py --K $$k; \
-	done
-
-sift-population-analyze:
-	$(PYTHON) simulations/sift/analyze_population_sift.py
-
-sift-population: sift-population-prepare sift-population-run sift-population-analyze
-
-sift-alpha-microbenchmark: datasets/sift/.population_prepared
-	$(PYTHON) simulations/sift/microbenchmark_candidates.py
-
-sift-k-microbenchmark: datasets/sift/.population_prepared
-	$(PYTHON) simulations/sift/microbenchmark_k.py
-
-# ── ESCI workflow ─────────────────────────────────────────────────────────────
+# ── ESCI hit-policy workflow ──────────────────────────────────────────────────
 
 esci-prepare:
 	$(PYTHON) datasets/esci/prepare_benchmark.py --all
 
-esci-run:
-	$(PYTHON) simulations/esci/run_esci.py
+esci-hit-policy-run:
+	$(PYTHON) simulations/hit_policy/run_hit_policy.py --dataset esci
 
-esci-analyze:
-	$(PYTHON) simulations/esci/analyze_esci.py
-	$(PYTHON) simulations/esci/compile_pdf.py
+esci-hit-policy-analyze:
+	$(PYTHON) simulations/hit_policy/analyze_hit_policy.py --dataset esci
+	$(PYTHON) simulations/pdf/compile.py --dataset esci
 
 # ── ESCI population workflow ──────────────────────────────────────────────────
 
-datasets/esci/.population_prepared:
-	$(PYTHON) datasets/esci/prepare_benchmark.py --all
+esci-population-prepare:
+	$(PYTHON) datasets/esci/prepare_benchmark.py --preset population
 	$(PYTHON) datasets/esci/prepare_benchmark.py --extend-population
-	touch $@
 
-esci-population-prepare: datasets/esci/.population_prepared
+# ── Microbenchmark ────────────────────────────────────────────────────────────
 
-esci-population-run: datasets/esci/.population_prepared
-	$(PYTHON) simulations/esci/run_population_esci.py --quick $(_K_FLAG)
-
-esci-population-run-all: datasets/esci/.population_prepared
-	$(PYTHON) simulations/esci/run_population_esci.py $(_K_FLAG)
-
-esci-population-run-K: datasets/esci/.population_prepared
-	for k in 1 5 10 20; do \
-		$(PYTHON) simulations/esci/run_population_esci.py --quick --K $$k; \
-	done
-
-esci-population-run-all-K: datasets/esci/.population_prepared
-	for k in 1 5 10 20; do \
-		$(PYTHON) simulations/esci/run_population_esci.py --K $$k; \
-	done
-
-esci-population-analyze:
-	$(PYTHON) simulations/esci/analyze_population_esci.py
-
-esci-population: esci-population-prepare esci-population-run esci-population-analyze
-
-esci-alpha-microbenchmark: datasets/esci/.population_prepared
-	$(PYTHON) simulations/esci/microbenchmark_candidates.py
-
-esci-k-microbenchmark: datasets/esci/.population_prepared
-	$(PYTHON) simulations/esci/microbenchmark_k.py
+microbenchmark: sift-population-prepare esci-population-prepare
+	@mkdir -p $(LOGDIR)
+	set -o pipefail; $(PYTHON) simulations/population/microbenchmarks/microbenchmark_containment.py --dataset sift 2>&1 | tee $(LOGDIR)/microbenchmark-sift_$(RUN_LOG_TS).log
+	set -o pipefail; $(PYTHON) simulations/population/microbenchmarks/microbenchmark_containment.py --dataset esci 2>&1 | tee $(LOGDIR)/microbenchmark-esci_$(RUN_LOG_TS).log
 
 # ── Combined population ───────────────────────────────────────────────────────
 
-population: sift-population esci-population
+population: microbenchmark
+	$(PYTHON) simulations/pdf/collect_results_population.py
 
-# ── Combined analysis ─────────────────────────────────────────────────────────
+# ── Ball-like population runs ──────────────────────────────────────────────────
 
-analyze: synthetic-analyze sift-analyze esci-analyze
-	$(PYTHON) simulations/collect_results.py
+SIGMA_VALUES ?= 0.70 0.80 0.90 1.00
+
+esci-population-ball: esci-population-prepare
+	@mkdir -p $(LOGDIR)
+	set -o pipefail; $(PYTHON) simulations/population/run_population.py --dataset esci --workers $(WORKERS) --sigma $(SIGMA_VALUES) 2>&1 | tee $(LOGDIR)/esci-population-ball_$(RUN_LOG_TS).log
+
+sift-population-ball: sift-population-prepare
+	@mkdir -p $(LOGDIR)
+	set -o pipefail; $(PYTHON) simulations/population/run_population.py --dataset sift --workers $(WORKERS) --sigma $(SIGMA_VALUES) 2>&1 | tee $(LOGDIR)/sift-population-ball_$(RUN_LOG_TS).log
+
+population-proposal-analyze: debug-distance-concentration
+	@mkdir -p $(LOGDIR)
+	set -o pipefail; $(PYTHON) simulations/population/analyze_population_proposal.py 2>&1 | tee $(LOGDIR)/population-proposal-analyze_$(RUN_LOG_TS).log
+	$(PYTHON) simulations/pdf/compile_proposal.py
+
+population-proposal: esci-population-ball sift-population-ball \
+                     debug-ball-geometry debug-trajectory \
+                     population-proposal-analyze
+
+# ── Exact (sigma=1.0, no sweep) population runs ───────────────────────────────
+
+esci-population-ball-exact: esci-population-prepare
+	$(PYTHON) simulations/population/run_population.py --dataset esci --workers $(WORKERS) --sigma 1.0
+
+sift-population-ball-exact: sift-population-prepare
+	$(PYTHON) simulations/population/run_population.py --dataset sift --workers $(WORKERS) --sigma 1.0
+
+population-proposal-exact: esci-population-ball-exact sift-population-ball-exact \
+                           population-proposal-analyze
+
+# ── Population debug diagnostics (Phase 3 Round 14) ───────────────────────────
+# Standalone: call propose_candidates_ball/select_candidates directly against
+# already-prepared benchmark data, no changes to population_runner.py/
+# selection.py. See docs/POPULATION_DESIGN.md.
+
+debug-ball-geometry:
+	@mkdir -p $(LOGDIR)
+	set -o pipefail; $(PYTHON) simulations/population/debug_ball_geometry.py 2>&1 | tee $(LOGDIR)/debug-ball-geometry_$(RUN_LOG_TS).log
+
+debug-trajectory:
+	@mkdir -p $(LOGDIR)
+	set -o pipefail; $(PYTHON) simulations/population/debug_trajectory.py 2>&1 | tee $(LOGDIR)/debug-trajectory_$(RUN_LOG_TS).log
+
+debug-sigma-sensitivity:
+	@mkdir -p $(LOGDIR)
+	set -o pipefail; $(PYTHON) simulations/population/debug_sigma_sensitivity.py 2>&1 | tee $(LOGDIR)/debug-sigma-sensitivity_$(RUN_LOG_TS).log
+
+debug-distance-concentration:
+	@mkdir -p $(LOGDIR)
+	set -o pipefail; $(PYTHON) simulations/population/debug_distance_concentration.py 2>&1 | tee $(LOGDIR)/debug-distance-concentration_$(RUN_LOG_TS).log
+
+debug-vector-coverage:
+	@mkdir -p $(LOGDIR)
+	set -o pipefail; $(PYTHON) simulations/population/debug_vector_coverage.py 2>&1 | tee $(LOGDIR)/debug-vector-coverage_$(RUN_LOG_TS).log
+
+debug-population: debug-ball-geometry debug-trajectory debug-sigma-sensitivity debug-distance-concentration debug-vector-coverage
+
+# ── Combined hit-policy analysis ──────────────────────────────────────────────
+
+analyze-hit-policy: synthetic-analyze sift-hit-policy-analyze esci-hit-policy-analyze
+	$(PYTHON) simulations/pdf/collect_results.py
 
 # ── Characterization ──────────────────────────────────────────────────────────
 
-characterize:
-	$(PYTHON) simulations/characterize.py
+dataset-characterize:
+	$(PYTHON) simulations/analysis/query_clustering_ratio.py
+
+full-pipeline: dataset-characterize population
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-test: test-utils test-synthetic test-sift test-esci
+test:
+	$(PYTHON) -m pytest tests/ -q
 
-# utils tests
-test-utils: test-distance-metrics test-kv-cache test-lemmas test-main-memory \
-            test-perturbation test-simulate \
-            test-range-search test-population test-selection
+test-utils:
+	$(PYTHON) -m pytest tests/utils/ -q
 
-test-distance-metrics:
-	$(PYTHON) tests/utils/test_distance_metrics.py
+test-synthetic:
+	$(PYTHON) -m pytest tests/synthetic/ -q
 
-test-kv-cache:
-	$(PYTHON) tests/utils/test_kv_cache.py
+test-sift:
+	$(PYTHON) -m pytest tests/ -k "sift" -q
 
-test-lemmas:
-	$(PYTHON) tests/utils/test_lemmas.py
+test-esci:
+	$(PYTHON) -m pytest tests/ -k "esci" -q
 
-test-main-memory:
-	$(PYTHON) tests/utils/test_main_memory.py
-
-test-perturbation:
-	$(PYTHON) tests/utils/test_perturbation.py
-
-test-simulate:
-	$(PYTHON) tests/utils/test_simulate.py
-
-test-range-search:
-	$(PYTHON) tests/utils/test_range_search.py
+test-hit-policy:
+	$(PYTHON) -m pytest tests/hit_policy/ -q
 
 test-population:
-	$(PYTHON) tests/utils/test_population.py
+	$(PYTHON) -m pytest tests/population/ -q
 
-test-selection:
-	$(PYTHON) tests/utils/test_selection.py
+test-containment:
+	$(PYTHON) -m pytest tests/population/microbenchmarks/test_microbenchmark_containment.py -q
 
-# synthetic tests
-test-synthetic: test-generator test-e2e-synthetic test-analysis
-
-test-generator:
-	$(PYTHON) tests/synthetic/test_generator.py
-
-test-e2e-synthetic:
-	$(PYTHON) tests/synthetic/test_e2e_mini.py
-
-test-analysis:
-	$(PYTHON) tests/synthetic/test_analysis.py
-
-# sift tests
-test-sift: test-sift-edge-cases test-sift-e2e test-dataloaders test-sift-population-e2e test-sift-microbenchmark test-sift-microbenchmark-k
-
-test-sift-edge-cases:
-	$(PYTHON) tests/sift/test_edge_cases.py
-
-test-sift-e2e:
-	$(PYTHON) tests/sift/test_e2e_mini.py
+test-proposal:
+	$(PYTHON) -m pytest tests/utils/test_proposals.py tests/utils/test_selection_with_new_candidates.py \
+		tests/population/test_e2e_population_proposal.py tests/population/test_analyze_proposal.py -q
 
 test-dataloaders:
-	$(PYTHON) tests/sift/test_dataloaders.py
+	$(PYTHON) -m pytest tests/dataloaders/ -q
 
-test-sift-population-e2e:
-	$(PYTHON) tests/sift/test_e2e_population.py
+test-generation:
+	$(PYTHON) -m pytest tests/generation/ -q
 
-test-sift-microbenchmark:
-	$(PYTHON) tests/sift/test_microbenchmark.py
-
-test-sift-microbenchmark-k:
-	$(PYTHON) tests/sift/test_microbenchmark_k.py
-
-# esci tests
-test-esci: test-esci-edge-cases test-esci-e2e test-esci-population-e2e test-esci-microbenchmark test-esci-microbenchmark-k
-
-test-esci-edge-cases:
-	$(PYTHON) tests/esci/test_edge_cases.py
-
-test-esci-e2e:
-	$(PYTHON) tests/esci/test_e2e_mini.py
-
-test-esci-population-e2e:
-	$(PYTHON) tests/esci/test_e2e_population.py
-
-test-esci-microbenchmark:
-	$(PYTHON) tests/esci/test_microbenchmark.py
-
-test-esci-microbenchmark-k:
-	$(PYTHON) tests/esci/test_microbenchmark_k.py
-
-# population tests (both datasets)
-test-population-all: test-sift-population-e2e test-sift-microbenchmark test-sift-microbenchmark-k \
-                     test-esci-population-e2e test-esci-microbenchmark test-esci-microbenchmark-k
+test-sigma:
+	$(PYTHON) -m pytest tests/ -k "sigma" -q
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 

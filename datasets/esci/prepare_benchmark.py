@@ -36,6 +36,11 @@ RESEARCH_BENCHMARKS = [
     dict(num_cache=4096, num_test=512, cache_K=99, test_N=20, seed=42, test_start=5000),
     dict(num_cache=4096, num_test=512, cache_K=99, test_N=20, seed=43, test_start=5000),
     dict(num_cache=4096, num_test=512, cache_K=99, test_N=20, seed=44, test_start=5000),
+    # Set 2b: cache density investigation (8192, single seed) -- test_start
+    # must clear 8192 (can't reuse Set 2's test_start=5000, which would
+    # overlap an 8192-sized cache range), so this uses a different held-out
+    # test set than the 256-4096 rows above.
+    dict(num_cache=8192, num_test=512, cache_K=99, test_N=20, seed=42, test_start=8692),
     # Set 3: K/N relationship -- 9 pairs x 3 seeds; (K,N) in {20,50,99}^2
     dict(num_cache=1024, num_test=256, cache_K=20,  test_N=20,  seed=42),
     dict(num_cache=1024, num_test=256, cache_K=20,  test_N=20,  seed=43),
@@ -263,6 +268,9 @@ _POPULATION_SOURCES = [
     "esci_c2048k99_t512n20_s42",
     "esci_c2048k99_t512n20_s43",
     "esci_c2048k99_t512n20_s44",
+    # Cache density investigation (single seed only)
+    "esci_c4096k99_t512n20_s42",
+    "esci_c8192k99_t512n20_s42",
 ]
 
 # k100 population benchmark directories (brute-force GT, used by run scripts)
@@ -279,6 +287,9 @@ POPULATION_BENCHMARKS = [
     "esci_c2048k100_t512n20_s42",
     "esci_c2048k100_t512n20_s43",
     "esci_c2048k100_t512n20_s44",
+    # Cache density investigation (single seed only)
+    "esci_c4096k100_t512n20_s42",
+    "esci_c8192k100_t512n20_s42",
 ]
 
 #-------------------------------------------------------------------------------
@@ -347,6 +358,78 @@ def _save_population_gt(
         save_dict[f'half_gap_{i}'] = np.float32(gap / 2.0)
     np.savez_compressed(out_path, **save_dict)
     print(f"  Saved: {out_path.name}")
+
+#-------------------------------------------------------------------------------
+
+def _brute_force_knn_angular_multi_k(
+    queries: np.ndarray,
+    base: np.ndarray,
+    K_list: list,
+) -> dict:
+    """
+    Brute-force top-K_max angular KNN of queries against base, sliced per K
+    in K_list -- one shared O(n_queries * n_base) matmul pass instead of one
+    pass per K (top-1 subset top-5 subset ... subset top-k_max are nested).
+    Identical math to _brute_force_knn_angular, just parameterized by
+    k_max = max(K_list) and sliced afterward (verified bit-identical in
+    tests/datasets/test_multi_k_gt.py).
+
+    Returns {k: [(indices, distances, gap), ...] per query} for k in K_list.
+    """
+    k_max = max(K_list)
+    q = queries / np.linalg.norm(queries, axis=1, keepdims=True)
+    b = base / np.linalg.norm(base, axis=1, keepdims=True)
+
+    kp1 = min(k_max + 1, len(base))
+    results = {k: [] for k in K_list}
+    batch = 256
+    for start in range(0, len(queries), batch):
+        qb = q[start:start + batch]
+        scores = qb @ b.T
+        top_idx = np.argsort(-scores, axis=1)[:, :kp1]
+        top_scores = np.take_along_axis(scores, top_idx, axis=1)
+        dists = (np.arccos(np.clip(top_scores, -1.0, 1.0)) / np.pi).astype(np.float32)
+        for k in K_list:
+            kp1_k = min(k + 1, len(base))
+            for i in range(len(qb)):
+                idx = top_idx[i, :k]
+                d = dists[i, :k]
+                gap = float(dists[i, k] - dists[i, k - 1]) if kp1_k > k else 0.0
+                results[k].append((idx, d, gap))
+    return results
+
+
+def _save_population_gt_multi_k(
+    queries: np.ndarray,
+    base: np.ndarray,
+    K_list: list,
+    output_dir: Path,
+    file_prefix: str,
+) -> None:
+    """Save {file_prefix}_gt_population_K{k}.npz for every k in K_list from
+    one shared brute-force pass. Skips any K whose file already exists;
+    skips the whole pass if every K is already complete."""
+    pending_k = [
+        k for k in K_list
+        if not (output_dir / f"{file_prefix}_gt_population_K{k}.npz").exists()
+    ]
+    if not pending_k:
+        print(f"  All {file_prefix} multi-K population GT files already exist, skipping.")
+        return
+
+    print(f"  Computing {file_prefix} population GT for {len(queries)} queries "
+          f"(K={pending_k}) on {len(base)} base vectors...")
+    results_by_k = _brute_force_knn_angular_multi_k(queries, base, pending_k)
+
+    for k in pending_k:
+        save_dict = {}
+        for i, (idx, d, gap) in enumerate(results_by_k[k]):
+            save_dict[f'indices_{i}'] = idx
+            save_dict[f'r_Q_{i}'] = np.float32(float(d[-1]))
+            save_dict[f'half_gap_{i}'] = np.float32(gap / 2.0)
+        out_path = output_dir / f"{file_prefix}_gt_population_K{k}.npz"
+        np.savez_compressed(out_path, **save_dict)
+        print(f"  Saved: {out_path.name}")
 
 #-------------------------------------------------------------------------------
 
@@ -441,13 +524,12 @@ def create_esci_population_benchmark(
         np.save(r_t_file, r_t)
         print(f"  Saved: test_r_t.npy  range=[{r_t.min():.4f}, {r_t.max():.4f}]")
 
-    # per-K GT files for K-microbenchmark (K=[1,5,10,20])
-    for k in K_VALUES:
-        _save_population_gt(cache_q, base, k, output_dir / f"cache_gt_population_K{k}.npz")
+    # per-K GT files for K-microbenchmark (K=[1,5,10,20]): one shared pass
+    # at max(K_VALUES), sliced per K, instead of one pass per K.
+    _save_population_gt_multi_k(cache_q, base, K_VALUES, output_dir, "cache")
 
     # per-K test GT files for K-override runs
-    for k in K_VALUES:
-        _save_population_gt(test_q, base, k, output_dir / f"test_gt_population_K{k}.npz")
+    _save_population_gt_multi_k(test_q, base, K_VALUES, output_dir, "test")
 
     config['has_population_data'] = True
     with open(output_dir / 'config.json', 'w') as f:
@@ -533,13 +615,12 @@ def extend_benchmark_with_population_data(
         np.save(r_t_file, r_t)
         print(f"  Saved: test_r_t.npy  range=[{r_t.min():.4f}, {r_t.max():.4f}]")
 
-    # per-K GT files for K-microbenchmark (K=[1,5,10,20])
-    for k in K_VALUES:
-        _save_population_gt(cache_q, base, k, benchmark_dir / f"cache_gt_population_K{k}.npz")
+    # per-K GT files for K-microbenchmark (K=[1,5,10,20]): one shared pass
+    # at max(K_VALUES), sliced per K, instead of one pass per K.
+    _save_population_gt_multi_k(cache_q, base, K_VALUES, benchmark_dir, "cache")
 
     # per-K test GT files for K-override runs
-    for k in K_VALUES:
-        _save_population_gt(test_q, base, k, benchmark_dir / f"test_gt_population_K{k}.npz")
+    _save_population_gt_multi_k(test_q, base, K_VALUES, benchmark_dir, "test")
 
     # patch config
     if not config.get('has_population_data'):
@@ -567,7 +648,7 @@ def main():
     group.add_argument(
         '--preset',
         type=str,
-        choices=['baseline', 'cache_scaling', 'kn_relationship'],
+        choices=['baseline', 'cache_scaling', 'kn_relationship', 'population'],
         help='Prepare benchmarks for one test set'
     )
     group.add_argument(
@@ -593,6 +674,13 @@ def main():
                           if b['cache_K'] == 99 and b['test_N'] == 20],
         'kn_relationship': [b for b in RESEARCH_BENCHMARKS
                             if b['num_cache'] == 1024 and b['num_test'] == 256],
+        # exactly the K=99 source benchmarks _POPULATION_SOURCES derives the
+        # K=100 population benchmarks from -- avoids --all's wasted prep of
+        # the K/N-relationship and c4096 benchmarks population work never uses.
+        'population': [b for b in RESEARCH_BENCHMARKS
+                       if create_benchmark_name(
+                           b['num_cache'], b['cache_K'], b['num_test'], b['test_N'], b['seed']
+                       ) in _POPULATION_SOURCES],
     }
 
     if args.extend_population:

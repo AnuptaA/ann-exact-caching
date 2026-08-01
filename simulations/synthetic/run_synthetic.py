@@ -12,7 +12,7 @@ from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 
 from datasets.synthetic.generator import load_synthetic_dataset
-from simulations.simulate import CacheSimulator, SimulationResult
+from simulations.core.simulate import CacheSimulator, SimulationResult
 from utils.base import MainMemory, KVCache
 from datetime import datetime
 
@@ -159,7 +159,9 @@ def run_synthetic_simulations(
         num_workers: Number of parallel workers
     """
     if algorithms is None:
-        algorithms = ["lemma1", "lemma2", "combined", "brute"]
+        # lemma1/lemma2/combined (union-based) are deprecated -- see
+        # simulations/core/simulate.py.
+        algorithms = ["lemma1_no_union", "lemma2_no_union", "brute"]
     
     if metrics is None:
         metrics = ["euclidean", "angular"]
@@ -400,7 +402,7 @@ if __name__ == "__main__":
     for dataset_path in datasets:
         run_synthetic_simulations(
             str(dataset_path),
-            algorithms=["lemma1", "lemma1_no_union", "lemma2", "lemma2_no_union", "combined", "brute"],
+            algorithms=["lemma1_no_union", "lemma2_no_union", "brute"],
             metrics=["euclidean", "angular"],
             output_dir=output_dir,
             use_cache=True,

@@ -14,7 +14,8 @@ from datasets.dataloaders import (
     load_sift_dataset,
     load_sift_benchmark,
     create_sift_benchmark_split,
-    save_sift_benchmark
+    save_sift_benchmark,
+    sift_query_split_indices,
 )
 from utils.base import MainMemory
 
@@ -49,6 +50,14 @@ RESEARCH_BENCHMARKS = [
          cache_K=100, test_N=20, seed=43, test_start=2048),
     dict(num_base_vectors=50_000, num_cache_queries=2048, num_test_queries=512,
          cache_K=100, test_N=20, seed=44, test_start=2048),
+    # Set 3: cache density investigation (4096/8192, single seed) -- share
+    # test_start=8192 between the two so they use the identical held-out
+    # test set for a controlled comparison; can't reuse Set 1/2's
+    # test_start=2048 since cache_queries would then overlap the test range.
+    dict(num_base_vectors=50_000, num_cache_queries=4096, num_test_queries=512,
+         cache_K=100, test_N=20, seed=42, test_start=8192),
+    dict(num_base_vectors=50_000, num_cache_queries=8192, num_test_queries=512,
+         cache_K=100, test_N=20, seed=42, test_start=8192),
 ]
 
 #-------------------------------------------------------------------------------
@@ -78,6 +87,50 @@ def _compute_single_query_gt(args):
     )
 
     return query_id, np.array(top_k_indices), np.array(top_k_dists), gap
+
+#-------------------------------------------------------------------------------
+
+def _compute_single_query_gt_multi_k(args):
+    """helper for parallel multi-K ground truth computation.
+
+    Duplicates MainMemory.top_k_search's fast-path formula directly
+    (same normalization, dot product, argpartition call), parameterized by
+    k_max = max(K_list) instead of a single k, so it produces bit-identical
+    results to calling top_k_search once per K (verified in
+    tests/datasets/test_multi_k_gt.py) -- but computes the full base
+    distance vector only once per query instead of once per K, since
+    top-1 subset top-5 subset ... subset top-k_max are nested and every
+    smaller K's result is just a slice of the shared top-(k_max+1) pass.
+
+    Returns (query_id, {k: (indices, r_Q, half_gap) for k in K_list}).
+    """
+    query_id, query, base_vectors, K_list, metric = args
+    k_max = max(K_list)
+
+    mm = MainMemory(vectors=list(base_vectors))
+    q_norm = float(np.linalg.norm(query))
+    q_hat = query / q_norm if q_norm != 0.0 else query.copy()
+    if metric == "angular":
+        dots = np.clip(mm._B_hat @ q_hat, -1.0, 1.0)
+        dists = np.arccos(dots) / np.pi
+    else:
+        dists = np.linalg.norm(mm._B_hat - q_hat, axis=1)
+
+    n = len(dists)
+    kp1 = min(k_max + 1, n)
+    part = np.argpartition(dists, min(k_max, n - 1))[:kp1]
+    top_idx = part[np.argsort(dists[part])]
+    top_dists = dists[top_idx]
+
+    results = {}
+    for k in K_list:
+        kp1_k = min(k + 1, n)
+        idx_k = top_idx[:k]
+        d_k = top_dists[:k]
+        gap = float(top_dists[k] - top_dists[k - 1]) if kp1_k > k else 0.0
+        results[k] = (idx_k, float(d_k[-1]), gap / 2.0)
+
+    return query_id, results
 
 #-------------------------------------------------------------------------------
 
@@ -190,6 +243,130 @@ def precompute_cache_ground_truth(
 
 #-------------------------------------------------------------------------------
 
+def precompute_multi_k_ground_truth(
+    base_vectors: np.ndarray,
+    queries: np.ndarray,
+    K_list: list,
+    output_dir: Path,
+    file_prefix: str,
+    num_workers: int = None,
+    checkpoint_interval: int = 100,
+) -> None:
+    """
+    Precompute {file_prefix}_gt_population_K{k}.npz for every k in K_list in
+    one brute-force pass per query instead of one pass per K -- top-1 subset
+    top-5 subset ... subset top-max(K_list) are nested, so a single pass at
+    the max K, sliced per K, produces every smaller K's file exactly (see
+    _compute_single_query_gt_multi_k). Skips any K whose file already
+    exists; skips the whole pass if every K is already complete.
+    """
+    pending_k = sorted({
+        k for k in K_list
+        if not (output_dir / f"{file_prefix}_gt_population_K{k}.npz").exists()
+    })
+    if not pending_k:
+        print(f"  All {file_prefix} multi-K ground truth files already exist, skipping.")
+        return
+
+    print(f"\nPrecomputing {file_prefix} ground truth for K={pending_k} "
+          f"({len(queries)} queries, one shared brute-force pass)...")
+
+    if num_workers is None:
+        num_workers = max(1, cpu_count() - 1)
+
+    ground_truth_by_k = {k: {} for k in pending_k}
+    args_list = [(i, queries[i], base_vectors, pending_k, "angular") for i in range(len(queries))]
+
+    with Pool(num_workers) as pool:
+        for chunk_start in range(0, len(args_list), checkpoint_interval):
+            chunk_end = min(chunk_start + checkpoint_interval, len(args_list))
+            chunk = args_list[chunk_start:chunk_end]
+
+            print(f"\n  Processing chunk {chunk_start // checkpoint_interval + 1}/"
+                  f"{(len(args_list) + checkpoint_interval - 1) // checkpoint_interval}...")
+
+            results = list(tqdm(
+                pool.imap(_compute_single_query_gt_multi_k, chunk),
+                total=len(chunk),
+                desc=f"  Computing {file_prefix} multi-K GT",
+                file=sys.stderr,
+            ))
+
+            for query_id, per_k in results:
+                for k, (indices, r_Q, half_gap) in per_k.items():
+                    ground_truth_by_k[k][query_id] = (indices, r_Q, half_gap)
+
+    for k in pending_k:
+        save_dict = {}
+        for i, (indices, r_Q, half_gap) in ground_truth_by_k[k].items():
+            save_dict[f'indices_{i}'] = indices
+            save_dict[f'r_Q_{i}'] = np.float32(r_Q)
+            save_dict[f'half_gap_{i}'] = np.float32(half_gap)
+        gt_file = output_dir / f"{file_prefix}_gt_population_K{k}.npz"
+        np.savez_compressed(gt_file, **save_dict)
+        print(f"  Saved: {gt_file}")
+
+#-------------------------------------------------------------------------------
+
+def build_cache_gt_full(
+    cache_query_indices: np.ndarray,
+    groundtruth: np.ndarray,
+    full_base_vectors: np.ndarray,
+    query_vectors: np.ndarray,
+    cache_K: int,
+    output_dir: Path,
+):
+    """
+    Build and save cache query ground truth from SIFT's precomputed top-100
+    groundtruth (sift_groundtruth.ivecs), which is computed with EUCLIDEAN
+    distance against the TRUE full 1M base -- not the angular metric or the
+    sampled base used elsewhere in this pipeline.
+
+    Mirrors ESCI's build_cache_gt lean schema (same indices/vectors/distances/gap
+    file layout), giving SIFT the same optional full-catalog validation
+    capability ESCI already has. Off by default; opt in via --full-base.
+
+    Args:
+        cache_query_indices: indices into the full 10K query set for cache queries
+        groundtruth: precomputed top-100 neighbor indices, shape (10000, 100)
+        full_base_vectors: the full 1M SIFT base vectors (not a subsample)
+        query_vectors: the full 10K SIFT query vectors
+        cache_K: number of neighbors to use (must be < 100)
+        output_dir: benchmark directory to save cache_gt_K{K}.npz
+    """
+    assert cache_K < 100, f"cache_K must be < 100 to derive gap from precomputed top-100 groundtruth (got {cache_K}); use cache_K=99 instead of 100"
+
+    gt_file = output_dir / f"cache_gt_K{cache_K}.npz"
+    if gt_file.exists():
+        print(f"  Cache GT (full-base) already exists: {gt_file.name}")
+        return
+
+    print(f"  Building full-base cache GT for {len(cache_query_indices)} cache queries (K={cache_K})...")
+
+    save_dict = {}
+    for local_i, global_i in enumerate(cache_query_indices):
+        # K+1 entries from precomputed top-100 to compute true gap D(Q,e_{K+1}) - D(Q,e_K)
+        ids = groundtruth[global_i, :cache_K]                 # (K,) base indices
+        ids_kp1 = groundtruth[global_i, :cache_K + 1]         # (K+1,) base indices
+        query = query_vectors[global_i]
+
+        neighbor_vectors_kp1 = full_base_vectors[ids_kp1]     # (K+1, D)
+        distances_kp1 = np.linalg.norm(neighbor_vectors_kp1 - query, axis=1).astype(np.float32)
+        distances = distances_kp1[:cache_K]                   # (K,) Euclidean distances
+
+        gap = float(distances_kp1[cache_K] - distances_kp1[cache_K - 1])
+        vectors = full_base_vectors[ids]                      # (K, D)
+
+        save_dict[f'indices_{local_i}'] = ids
+        save_dict[f'vectors_{local_i}'] = vectors
+        save_dict[f'distances_{local_i}'] = distances
+        save_dict[f'gap_{local_i}'] = np.float32(gap)
+
+    np.savez_compressed(gt_file, **save_dict)
+    print(f"  Saved full-base cache GT: {gt_file.name}")
+
+#-------------------------------------------------------------------------------
+
 def prepare_sift_benchmark(
     num_base_vectors: int = 1_000_000,
     num_cache_queries: int = 9000,
@@ -200,6 +377,7 @@ def prepare_sift_benchmark(
     force: bool = False,
     num_workers: int = None,
     test_start: int = None,
+    full_base: bool = False,
 ):
     """
     Prepare SIFT benchmark with specified parameters.
@@ -216,11 +394,16 @@ def prepare_sift_benchmark(
         seed: random seed for reproducibility
         force: overwrite existing benchmark if True
         num_workers: parallel workers for ground truth computation
+        full_base: if True, also build a lean cache_gt_K{K}.npz from SIFT's
+                    precomputed groundtruth (Euclidean, validated against the
+                    true full 1M base), mirroring ESCI's optional full-catalog
+                    GT capability. Off by default -- research benchmarks use
+                    the 50K-sample population GT only.
     """
 
     # load full SIFT dataset
     print("Loading SIFT dataset...")
-    base, _, query, _ = load_sift_dataset("datasets/sift")
+    base, _, query, groundtruth = load_sift_dataset("datasets/sift")
 
     # validate parameters
     if num_base_vectors > len(base):
@@ -313,6 +496,21 @@ def prepare_sift_benchmark(
         output_dir=output_dir,
         num_workers=num_workers
     )
+
+    if full_base:
+        print("\n[GT] Building full-base cache ground truth (Euclidean metric)...")
+        full_base_cache_K = min(cache_K, 99)
+        cache_indices, _ = sift_query_split_indices(
+            len(query), num_cache_queries, num_test_queries, seed, test_start,
+        )
+        build_cache_gt_full(
+            cache_query_indices=cache_indices,
+            groundtruth=groundtruth,
+            full_base_vectors=base,
+            query_vectors=query,
+            cache_K=full_base_cache_K,
+            output_dir=output_dir,
+        )
 
     print(f"\n{'='*80}")
     print("Benchmark prepared.")
@@ -457,16 +655,26 @@ def extend_benchmark_with_population_data(
         np.save(r_Q_file, r_Q)
         print(f"  Saved: shape={r_Q.shape}, range=[{r_Q.min():.4f}, {r_Q.max():.4f}]")
 
-    # test_gt_population_K{K}.npz
+    # test_gt_population_K{K}.npz -- if a partial (interrupted) file exists,
+    # finish it via the single-K resumable path; otherwise it's covered by
+    # the multi-K pass below (which includes K in its K_list). Run before
+    # test_r_t.npy extraction, which requires this file to exist.
     test_gt_file = benchmark_dir / f"test_gt_population_K{K}.npz"
     if test_gt_file.exists():
         _, completed = _check_partial_gt(test_gt_file, num_test)
-        if len(completed) == num_test:
-            print(f"test_gt_population_K{K}.npz already complete, skipping.")
-        else:
+        if len(completed) < num_test:
             precompute_test_ground_truth(base, test_q, K, benchmark_dir, num_workers)
-    else:
-        precompute_test_ground_truth(base, test_q, K, benchmark_dir, num_workers)
+
+    # per-K cache GT files for K-microbenchmark (K=[1,5,10,20]): one shared
+    # brute-force pass at max(K_VALUES), sliced per K, instead of one pass
+    # per K (top-1 subset top-5 subset ... subset top-20 are nested).
+    precompute_multi_k_ground_truth(base, cache_q, K_VALUES, benchmark_dir, "cache", num_workers)
+
+    # per-K test GT files for K-override runs, plus the main cache_K test
+    # file (already handled above if partially complete) -- one shared pass
+    # at max(K_VALUES + [K]). Must run before test_r_t.npy extraction below.
+    test_k_list = sorted(set(K_VALUES) | {K})
+    precompute_multi_k_ground_truth(base, test_q, test_k_list, benchmark_dir, "test", num_workers)
 
     # test_r_t.npy
     r_t_file = benchmark_dir / "test_r_t.npy"
@@ -477,22 +685,6 @@ def extend_benchmark_with_population_data(
         r_t = extract_test_r_t(benchmark_dir, K, num_test)
         np.save(r_t_file, r_t)
         print(f"  Saved: shape={r_t.shape}, range=[{r_t.min():.4f}, {r_t.max():.4f}]")
-
-    # per-K GT files for K-microbenchmark (K=[1,5,10,20])
-    for k in K_VALUES:
-        k_gt_file = benchmark_dir / f"cache_gt_population_K{k}.npz"
-        if k_gt_file.exists():
-            print(f"cache_gt_population_K{k}.npz already exists, skipping.")
-        else:
-            precompute_cache_ground_truth(base, cache_q, k, benchmark_dir, num_workers)
-
-    # per-K test GT files for K-override runs
-    for k in K_VALUES:
-        test_k_gt = benchmark_dir / f"test_gt_population_K{k}.npz"
-        if test_k_gt.exists():
-            print(f"test_gt_population_K{k}.npz already exists, skipping.")
-        else:
-            precompute_test_ground_truth(base, test_q, k, benchmark_dir, num_workers)
 
     # patch config.json
     if not config.get("has_population_data"):
@@ -540,6 +732,9 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--force', action='store_true', help='Overwrite existing benchmark')
     parser.add_argument('--workers', type=int, default=None, help='Parallel workers for GT computation')
+    parser.add_argument('--full-base', action='store_true',
+                        help='Also build cache_gt_K{K}.npz from precomputed groundtruth '
+                             '(Euclidean, validated against the true full 1M base)')
 
     args = parser.parse_args()
 
@@ -578,6 +773,7 @@ if __name__ == "__main__":
         params['seed'] = args.seed
         params['force'] = args.force
         params['num_workers'] = args.workers
+        params['full_base'] = args.full_base
         prepare_sift_benchmark(**params)
     elif not args.extend_population:
         params = {
@@ -590,6 +786,7 @@ if __name__ == "__main__":
             'force': args.force,
             'num_workers': args.workers,
             'test_start': args.test_start,
+            'full_base': args.full_base,
         }
         prepare_sift_benchmark(**params)
 

@@ -13,7 +13,8 @@ from simulations.synthetic.analyze_synthetic import analyze
 
 #-------------------------------------------------------------------------------
 
-ALGOS = ["lemma1", "lemma1_no_union", "lemma2", "lemma2_no_union", "combined", "brute"]
+# lemma1/lemma2/combined (union-based) are deprecated -- see simulations/core/simulate.py.
+ALGOS = ["lemma1_no_union", "lemma2_no_union", "brute"]
 METRICS = ["euclidean", "angular"]
 
 #-------------------------------------------------------------------------------
@@ -84,7 +85,7 @@ MINI_CONFIGS = [
 
 #-------------------------------------------------------------------------------
 
-def main():
+def test_e2e_mini():
     tmpdir = Path(tempfile.mkdtemp(prefix="thesis_minitest_"))
     datasets_dir = tmpdir / "datasets"
     raw_dir = tmpdir / "raw"
@@ -157,7 +158,7 @@ def main():
         out_base = analyze(str(raw_dir), out_name="minitest")
 
         print("\nVerifying analysis outputs...")
-        expected_subdirs = ["global", "set1", "set2", "set3", "set4", "set5", "set6"]
+        expected_subdirs = ["global", "set1", "set2", "set3", "set4", "set6"]
         for sub in expected_subdirs:
             sub_path = out_base / sub
             assert sub_path.exists(), f"Missing subdir: {sub}"
@@ -182,4 +183,4 @@ def main():
 #-------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    main()
+    test_e2e_mini()

@@ -4,7 +4,7 @@
 import sys, re, json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
@@ -46,9 +46,6 @@ ALGO_LABELS = {
     'combined': 'Combined',
     'brute': 'Brute Force',
 }
-
-# we exclude union algorithms from all plots except Set 5
-NO_UNION_ALGOS: Set[str] = {'lemma1_no_union', 'lemma2_no_union'}
 
 PERT_ORDER = ['small', 'medium', 'large']
 
@@ -225,21 +222,17 @@ def load_per_query_df(raw_dir: str, summaries: List[Dict]) -> pd.DataFrame:
 
 # style/ordering helpers
 
-def ordered_algos(algos, include_no_union: bool = False,
-                  include_brute: bool = True) -> List[str]:
+def ordered_algos(algos, include_brute: bool = True) -> List[str]:
     """Return algorithms sorted by canonical ALGO_ORDER, optionally filtering variants.
 
     Args:
         algos: iterable of algorithm code names
-        include_no_union: if False, removes *_no_union variants
         include_brute: if False, removes 'brute'
 
     Returns:
         ordered list; any unknown algos appended alphabetically at the end
     """
     algos = set(algos)
-    if not include_no_union:
-        algos -= NO_UNION_ALGOS
     if not include_brute:
         algos -= {'brute'}
     return [a for a in ALGO_ORDER if a in algos] + sorted(algos - set(ALGO_ORDER))
@@ -269,7 +262,7 @@ def algo_palette(algos) -> Dict[str, tuple]:
     Returns:
         dict mapping algo code name -> RGB tuple, ordered by ALGO_ORDER
     """
-    ordered = ordered_algos(algos, include_no_union=True, include_brute=True)
+    ordered = ordered_algos(algos, include_brute=True)
     colors = sns.color_palette('tab10', len(ordered))
     return {a: c for a, c in zip(ordered, colors)}
 
@@ -382,7 +375,7 @@ def plot_global_accuracy_heatmap(df: pd.DataFrame, outdir: Path):
         outdir: output directory
     """
     sub = df[df['algorithm'] != 'brute']
-    algos = ordered_algos(sub['algorithm'].unique(), include_no_union=True)
+    algos = ordered_algos(sub['algorithm'].unique())
     metrics = ordered_metrics(sub['metric'].unique())
 
     # only count datasets with cache hits; accuracy is undefined for pure misses
@@ -425,8 +418,7 @@ def plot_global_hit_rate_heatmap(df: pd.DataFrame, outdir: Path):
         df: summary DataFrame from build_summary_df
         outdir: output directory
     """
-    sub = df[(df['algorithm'] != 'brute')
-             & (~df['algorithm'].isin(NO_UNION_ALGOS))]
+    sub = df[df['algorithm'] != 'brute']
     algos = ordered_algos(sub['algorithm'].unique())
     metrics = ordered_metrics(sub['metric'].unique())
 
@@ -459,10 +451,14 @@ def plot_per_set_hit_rate_heatmaps(df: pd.DataFrame, outdir: Path):
         df: summary DataFrame from build_summary_df
         outdir: output directory
     """
-    sub = df[(df['algorithm'] != 'brute') & (~df['algorithm'].isin(NO_UNION_ALGOS))]
+    sub = df[df['algorithm'] != 'brute']
     algos = ordered_algos(sub['algorithm'].unique())
     metrics = ordered_metrics(sub['metric'].unique())
     prefixes = sorted(sub['set_prefix'].unique())
+
+    if not prefixes:
+        print("plot_per_set_hit_rate_heatmaps: no data, skipping")
+        return
 
     n_cols = 3
     n_rows = (len(prefixes) + n_cols - 1) // n_cols
@@ -520,69 +516,17 @@ def plot_per_set_hit_rate_heatmaps(df: pd.DataFrame, outdir: Path):
 
 #-------------------------------------------------------------------------------
 
-def plot_lemma_breakdown_global(df: pd.DataFrame, outdir: Path):
-    """Plot stacked bar chart of CIG vs HGG contribution share within Combined algorithm hits.
-
-    Args:
-        df: summary DataFrame from build_summary_df
-        outdir: output directory
-    """
-    comb = df[(df['algorithm'] == 'combined') & (df['cache_hits'] > 0)].copy()
-    if comb.empty:
-        print("No combined hits for lemma breakdown, skipping.")
-        return
-
-    comb['l1_share'] = comb['lemma1_hits'] / comb['cache_hits']
-    comb['l2_share'] = comb['lemma2_hits'] / comb['cache_hits']
-
-    metrics = ordered_metrics(comb['metric'].unique())
-    prefixes = sorted(comb['set_prefix'].unique())
-    n_met = len(metrics)
-    pal = sns.color_palette('tab10', 2)
-
-    fig, axes = plt.subplots(1, n_met, figsize=(5 * n_met + 2, 5), sharey=True)
-    if n_met == 1:
-        axes = [axes]
-
-    for ax, metric in zip(axes, metrics):
-        sub = comb[comb['metric'] == metric]
-        agg = sub.groupby('set_prefix')[['l1_share', 'l2_share']].mean()
-        agg = agg.reindex([p for p in prefixes if p in agg.index])
-        x = np.arange(len(agg))
-        ax.bar(x, agg['l1_share'], label='CIG',  color=pal[0])
-        ax.bar(x, agg['l2_share'], bottom=agg['l1_share'], label='HGG', color=pal[1])
-        for xi, (_, row_data) in enumerate(agg.iterrows()):
-            val = row_data['l1_share']
-            if not np.isnan(val) and val > 0.04:
-                ax.text(xi, val / 2, f'{val:.0%}', ha='center', va='center',
-                        fontsize=8, color='white', fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels(agg.index, rotation=20, ha='right')
-        ax.set_title(cap_metric(metric))
-        pct_fmt(ax)
-
-    axes[0].set_ylabel('Share of Combined Hits')
-    handles = [plt.Rectangle((0, 0), 1, 1, color=pal[0]),
-               plt.Rectangle((0, 0), 1, 1, color=pal[1])]
-    axes[-1].legend(handles, ['CIG', 'HGG'],
-                    bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
-    fig.suptitle('CIG vs HGG Contribution Within Combined Algorithm', y=1.02)
-    plt.tight_layout()
-    save_fig(fig, outdir, 'lemma_breakdown_global.png')
-
-#-------------------------------------------------------------------------------
-
 def plot_avg_time(df: pd.DataFrame, outdir: Path):
     """Plot average query time per algorithm (absolute, microseconds), log y-scale.
 
-    Excludes no_union variants and brute force (brute force timing is not tracked
-    because it omits real memory access costs).
+    Excludes brute force (brute force timing is not tracked because it omits
+    real memory access costs).
 
     Args:
         df: summary DataFrame from build_summary_df
         outdir: output directory
     """
-    sub = df[(df['algorithm'] != 'brute') & (~df['algorithm'].isin(NO_UNION_ALGOS))].copy()
+    sub = df[df['algorithm'] != 'brute'].copy()
     if sub.empty:
         print("No timing data for non-brute algorithms, skipping.")
         return
@@ -638,10 +582,7 @@ def plot_set1(df: pd.DataFrame, outdir: Path):
         print("No set1 data.")
         return
 
-    algos = ordered_algos(
-        (a for a in sub['algorithm'].unique() if a != 'brute'),
-        include_no_union=False,
-    )
+    algos = ordered_algos(a for a in sub['algorithm'].unique() if a != 'brute')
     metrics = ordered_metrics(sub['metric'].unique())
     pal = algo_palette(algos)
 
@@ -650,18 +591,24 @@ def plot_set1(df: pd.DataFrame, outdir: Path):
         axes = [axes]
 
     for ax, metric in zip(axes, metrics):
-        m_sub = sub[(sub['metric'] == metric) & (sub['algorithm'] != 'brute')
-                    & (~sub['algorithm'].isin(NO_UNION_ALGOS))]
+        m_sub = sub[(sub['metric'] == metric) & (sub['algorithm'] != 'brute')]
         per_seed = m_sub.groupby(['config_key', 'algorithm'])['avg_distance_calcs'].mean().reset_index()
         stats = per_seed.groupby('algorithm')['avg_distance_calcs'].agg(['mean']).reindex(algos)
 
+        any_positive = False
         for i, algo in enumerate(algos):
             if algo not in stats.index:
                 continue
             mean = stats.loc[algo, 'mean']
             ax.bar(i, mean, 0.6, color=pal[algo], label=lbl(algo))
+            if mean > 0:
+                any_positive = True
 
-        ax.set_yscale('log')
+        # distance-call counting was removed from CacheSimulator --
+        # avg_distance_calcs is now always 0,
+        # which can't be log-scaled. Fall back to linear scale when so.
+        if any_positive:
+            ax.set_yscale('log')
         ax.set_xticks(range(len(algos)))
         ax.set_xticklabels(lbls(algos), rotation=30, ha='right')
         ax.set_title(cap_metric(metric))
@@ -681,9 +628,7 @@ def plot_set1_hit_rate_heatmap(df: pd.DataFrame, outdir: Path):
         df: summary DataFrame from build_summary_df
         outdir: output directory
     """
-    sub = df[(df['set_prefix'] == 'set1')
-             & (df['algorithm'] != 'brute')
-             & (~df['algorithm'].isin(NO_UNION_ALGOS))]
+    sub = df[(df['set_prefix'] == 'set1') & (df['algorithm'] != 'brute')]
     if sub.empty:
         print("No set1 data for heatmap.")
         return
@@ -727,10 +672,7 @@ def plot_set2(df: pd.DataFrame, pq: pd.DataFrame, outdir: Path):
         return
 
     levels_present = [l for l in PERT_ORDER if l in sub['pert_variant'].dropna().unique()]
-    algos = ordered_algos(
-        (a for a in sub['algorithm'].unique() if a != 'brute'),
-        include_no_union=False,
-    )
+    algos = ordered_algos(a for a in sub['algorithm'].unique() if a != 'brute')
     metrics = ordered_metrics(sub['metric'].unique())
 
     # consolidated hit-rate heatmap: all perturbation levels side-by-side
@@ -743,8 +685,7 @@ def plot_set2(df: pd.DataFrame, pq: pd.DataFrame, outdir: Path):
     )
 
     for ax_i, (ax, level) in enumerate(zip(ax_grid2[0], levels_present)):
-        lvl_sub = sub[(sub['pert_variant'] == level) & (sub['algorithm'] != 'brute')
-                      & (~sub['algorithm'].isin(NO_UNION_ALGOS))]
+        lvl_sub = sub[(sub['pert_variant'] == level) & (sub['algorithm'] != 'brute')]
         mat = np.full((len(algos), len(metrics)), np.nan)
         for i, algo in enumerate(algos):
             for j, metric in enumerate(metrics):
@@ -764,46 +705,7 @@ def plot_set2(df: pd.DataFrame, pq: pd.DataFrame, outdir: Path):
     fig.suptitle('Set 2 - Hit Rate by Algorithm and Metric', y=1.02)
     save_fig(fig, outdir, 'set2_hit_rate_heatmap_all.png')
 
-    # lemma breakdown: perturbation angle on x-axis from per-query data
-    if not pq.empty and 'hit_source' in pq.columns:
-        pq2_hit = pq[(pq['set_prefix'] == 'set2') & (pq['cache_hit'] == 1)
-                     & (pq['algorithm'] == 'combined')].dropna(subset=['angle_deg'])
-        if not pq2_hit.empty:
-            panel_metrics = [m for m in ['angular', 'euclidean'] if m in metrics]
-            if not panel_metrics:
-                panel_metrics = metrics[:2]
-            pal2 = sns.color_palette('tab10', 2)
-            n_panels = len(panel_metrics)
-            fig, panel_axes = plt.subplots(
-                1, n_panels, figsize=(8 * n_panels, 5), sharey=True, squeeze=False
-            )
-            for col_i, panel_metric in enumerate(panel_metrics):
-                ax = panel_axes[0][col_i]
-                pq2m = pq2_hit[pq2_hit['metric'] == panel_metric].copy()
-                bins = np.linspace(pq2m['angle_deg'].min(), pq2m['angle_deg'].max(), 50) \
-                       if not pq2m.empty else np.linspace(0, 180, 50)
-                legend_handles = []
-                for src, col, label_str in [('lemma1', pal2[0], 'CIG'), ('lemma2', pal2[1], 'HGG')]:
-                    sub_src = pq2m[pq2m['hit_source'] == src]['angle_deg'] if not pq2m.empty else pd.Series([], dtype=float)
-                    if len(sub_src):
-                        ax.hist(sub_src, bins=bins, density=True, alpha=0.55,
-                                color=col, label=label_str, edgecolor='none')
-                    legend_handles.append(plt.Rectangle((0, 0), 1, 1, color=col, alpha=0.55, label=label_str))
-                ax.set_xlabel('Base Perturbation Angle (degrees)')
-                if col_i == 0:
-                    ax.set_ylabel('Density of Cache Hits')
-                ax.set_title(cap_metric(panel_metric))
-                ax.yaxis.set_major_locator(mticker.MaxNLocator(nbins=4))
-                if col_i == n_panels - 1:
-                    ax.legend(handles=legend_handles, bbox_to_anchor=(1.02, 1),
-                              loc='upper left', borderaxespad=0)
-                ax.xaxis.set_major_locator(mticker.MultipleLocator(1))
-                ax.xaxis.set_minor_locator(mticker.MultipleLocator(0.25))
-            fig.suptitle('Set 2 - Algorithmic Hit Source by Base Perturbation Angle', y=1.02)
-            plt.tight_layout()
-            save_fig(fig, outdir, 'set2_lemma_breakdown.png')
-
-    # consolidated angle histograms: rows=metrics, cols=[CIG, HGG, Combined]
+    # consolidated angle histograms: rows=metrics, cols=algorithms
     if pq.empty or pq['angle_deg'].isna().all():
         print("No per-query angle data for set2 histograms, skipping.")
         return
@@ -812,8 +714,7 @@ def plot_set2(df: pd.DataFrame, pq: pd.DataFrame, outdir: Path):
     if pq2.empty:
         return
 
-    hist_algos = [a for a in ['lemma1', 'lemma2', 'combined']
-                  if a in pq2['algorithm'].unique()]
+    hist_algos = [a for a in algos if a in pq2['algorithm'].unique()]
     n_rows_h = len(metrics)
     n_cols_h = len(hist_algos)
     bins = np.linspace(0, 180, 181 // 5 + 1)  # 5-deg bins from 0 to 180
@@ -903,39 +804,7 @@ def plot_set3(df: pd.DataFrame, outdir: Path):
 
     metrics = ordered_metrics(sub['metric'].unique())
     all_algos = set(sub['algorithm'].unique())
-    non_brute_algos = ordered_algos(
-        (a for a in all_algos if a != 'brute'),
-        include_no_union=False,
-    )
-
-    # combined-only KxN heatmaps
-    for metric in metrics:
-        m_sub = sub[(sub['metric'] == metric) & (sub['algorithm'] == 'combined')]
-        agg = m_sub.groupby(['K', 'N'])['hit_rate'].mean().reset_index()
-        K_vals = sorted(agg['K'].unique())
-        N_vals = sorted(agg['N'].unique())
-        if not K_vals or not N_vals:
-            continue
-
-        mat = np.full((len(K_vals), len(N_vals)), np.nan)
-        for _, row in agg.iterrows():
-            i = K_vals.index(row['K'])
-            j = N_vals.index(row['N'])
-            mat[i, j] = row['hit_rate']
-
-        fig_w3a = max(8, len(N_vals) * 1.3)
-        fig_h3a = max(6, len(K_vals) * 0.9)
-        fig, ax_grid3a = _left_cbar_fig(1, 1, 'YlOrRd', 0, 1, 'Hit Rate', fig_w3a, fig_h3a)
-        ax = ax_grid3a[0][0]
-        sns.heatmap(mat, annot=True, fmt='.1%', cmap='YlOrRd', vmin=0, vmax=1,
-                    xticklabels=[int(n) for n in N_vals],
-                    yticklabels=[int(k) for k in K_vals], ax=ax,
-                    cbar=False)
-        ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
-        ax.set_xlabel('N')
-        ax.set_ylabel('K')
-        ax.set_title(f'Set 3 - Hit Rate vs K and N (Combined, {cap_metric(metric)})', pad=12)
-        save_fig(fig, outdir, f'set3_kn_heatmap_combined_{metric}.png')
+    non_brute_algos = ordered_algos(a for a in all_algos if a != 'brute')
 
     # hit-rate matrix by K/N ratio vs algorithm
     def _fmt_ratio(r):
@@ -990,18 +859,13 @@ def plot_set4(df: pd.DataFrame, pq: pd.DataFrame, outdir: Path):
         return
 
     levels_present = [l for l in VARIABILITY_ORDER if l in sub['n_variability'].dropna().unique()]
-    algos = ordered_algos(
-        (a for a in sub['algorithm'].unique() if a != 'brute'),
-        include_no_union=False,
-    )
+    algos = ordered_algos(a for a in sub['algorithm'].unique() if a != 'brute')
     metrics = ordered_metrics(sub['metric'].unique())
     pal = algo_palette(algos)
 
     def _bar_per_level(bar_axes, value_col, normalize_by_brute=False):
         for ax, metric in zip(bar_axes, metrics):
-            m_sub = sub[(sub['metric'] == metric)
-                          & (sub['algorithm'] != 'brute')
-                          & (~sub['algorithm'].isin(NO_UNION_ALGOS))]
+            m_sub = sub[(sub['metric'] == metric) & (sub['algorithm'] != 'brute')]
             brute_c = sub[(sub['metric'] == metric)
                           & (sub['algorithm'] == 'brute')]['avg_distance_calcs'].mean()
             n_grps = len(algos)
@@ -1055,12 +919,11 @@ def plot_set4(df: pd.DataFrame, pq: pd.DataFrame, outdir: Path):
     if len(metrics) == 1:
         axes = [axes]
     for ax, metric in zip(axes, metrics):
-        m_sub = sub[(sub['metric'] == metric)
-                    & (sub['algorithm'] != 'brute')
-                    & (~sub['algorithm'].isin(NO_UNION_ALGOS))]
+        m_sub = sub[(sub['metric'] == metric) & (sub['algorithm'] != 'brute')]
         n_grps = len(algos)
         width = 0.8 / n_grps
         x = np.arange(len(levels_present))
+        any_positive = False
         for i, algo in enumerate(algos):
             a_sub = m_sub[m_sub['algorithm'] == algo]
             per_seed = a_sub.groupby(['n_variability', 'config_key'])['avg_distance_calcs'].mean().reset_index()
@@ -1073,7 +936,13 @@ def plot_set4(df: pd.DataFrame, pq: pd.DataFrame, outdir: Path):
                     ys.append(np.nan)
             ax.bar(x + (i - n_grps / 2 + 0.5) * width, ys, width,
                    label=lbl(algo), color=pal[algo])
-        ax.set_yscale('log')
+            if np.any(np.asarray(ys, dtype=float) > 0):
+                any_positive = True
+        # distance-call counting was removed from CacheSimulator --
+        # avg_distance_calcs is now always 0,
+        # which can't be log-scaled. Fall back to linear scale when so.
+        if any_positive:
+            ax.set_yscale('log')
         ax.set_xticks(x)
         ax.set_xticklabels([l.title() for l in levels_present])
         ax.set_xlabel('N Variability Level')
@@ -1114,7 +983,7 @@ def plot_set4(df: pd.DataFrame, pq: pd.DataFrame, outdir: Path):
                               .mean()
                               .reset_index()
                               .sort_values('n_value'))
-                ls = '--' if algo == 'lemma1' else '-'
+                ls = '--' if 'lemma1' in algo else '-'
                 ax.plot(agg['n_value'], agg['cache_hit'],
                         marker='o', markersize=3, linestyle=ls,
                         label=lbl(algo), color=pal.get(algo))
@@ -1139,114 +1008,6 @@ def plot_set4(df: pd.DataFrame, pq: pd.DataFrame, outdir: Path):
     fig.suptitle('Set 4 - Hit Rate vs Sampled N Value by Variability Level', y=1.02)
     plt.tight_layout()
     save_fig(fig, outdir, 'set4_hit_rate_vs_n_value.png')
-
-#-------------------------------------------------------------------------------
-# Set 5: Union effectiveness
-#-------------------------------------------------------------------------------
-
-def plot_set5(df: pd.DataFrame, outdir: Path):
-    """Plot Set 5 (union effectiveness): hit rate of union vs no-union variants by cluster count.
-
-    Args:
-        df: summary DataFrame from build_summary_df
-        outdir: output directory
-    """
-    sub = df[df['set_prefix'] == 'set5']
-    if sub.empty:
-        print("No set5 data.")
-        return
-
-    metrics = ordered_metrics(sub['metric'].unique())
-    all_algos = set(sub['algorithm'].unique())
-
-    # only include algorithm pairs where at least one variant is present in data
-    union_pairs = []
-    for base in ['lemma1', 'lemma2', 'combined']:
-        nu = f'{base}_no_union'
-        if base in all_algos or nu in all_algos:
-            union_pairs.append((base, nu))
-    if not union_pairs:
-        print("No union/no-union pairs in set5 data.")
-        return
-
-    X_vals = sorted(sub['num_clusters'].dropna().unique().astype(int))
-    if not X_vals:
-        print("No num_clusters values in set5.")
-        return
-
-    n_rows = len(union_pairs)
-    single_color = sns.color_palette('tab10')[0]
-
-    # --- union vs no-union: one image per metric, 3x2 grid ---
-    for metric in metrics:
-        fig, axes = plt.subplots(n_rows, 2,
-                                 figsize=(5 * 2 + 2, 4 * n_rows),
-                                 sharey=True, sharex=True,
-                                 squeeze=False)
-        for row, (union_algo, no_union_algo) in enumerate(union_pairs):
-            for col, algo in enumerate([union_algo, no_union_algo]):
-                ax = axes[row][col]
-                m_sub = sub[sub['metric'] == metric]
-                a_sub = m_sub[m_sub['algorithm'] == algo]
-                if not a_sub.empty:
-                    per_seed = a_sub.groupby(['num_clusters', 'dataset'])['hit_rate'].mean().reset_index()
-                    lvl_agg = per_seed.groupby('num_clusters')['hit_rate'].agg(['mean'])
-                    ys = [float(lvl_agg.loc[x, 'mean']) if x in lvl_agg.index else np.nan for x in X_vals]
-                    ax.plot(X_vals, ys, marker='o', color=single_color)
-                pct_fmt(ax)
-                ax.set_ylim(0, 1.05)
-                if row == 0:
-                    ax.set_title('Union' if col == 0 else 'No Union')
-                if col == 0:
-                    ax.set_ylabel(f'{lbl(union_algo)}\nHit Rate')
-        for ax in axes[-1]:
-            ax.set_xlabel('Number of Cluster Centers (X)')
-        fig.suptitle(f'Set 5 - Union vs No-Union Hit Rate by Cluster Count ({cap_metric(metric)})', y=1.02)
-        plt.tight_layout()
-        save_fig(fig, outdir, f'set5_union_vs_no_union_{metric}.png')
-
-    # --- K/N ratio plot (per X value): one image per metric, 3x2 grid ---
-    # K is fixed at 50; N varies so K/N = 50/N
-    kn_sub = sub.dropna(subset=['K', 'N', 'num_clusters'])
-    if kn_sub.empty or kn_sub['N'].nunique() < 2:
-        return
-
-    kn_sub = kn_sub.copy()
-    kn_sub['kn_ratio'] = kn_sub['K'] / kn_sub['N']
-    x_values = sorted(kn_sub['num_clusters'].dropna().unique().astype(int))
-    x_colors = sns.color_palette('viridis', len(x_values))
-
-    for metric in metrics:
-        fig2, axes2 = plt.subplots(n_rows, 2,
-                                   figsize=(5 * 2 + 2, 4 * n_rows),
-                                   sharey=True, sharex=True,
-                                   squeeze=False)
-        for row, (union_algo, no_union_algo) in enumerate(union_pairs):
-            for col, algo in enumerate([union_algo, no_union_algo]):
-                ax = axes2[row][col]
-                m_sub = kn_sub[kn_sub['metric'] == metric]
-                a_sub = m_sub[m_sub['algorithm'] == algo]
-                for xi, X in enumerate(x_values):
-                    x_data = a_sub[a_sub['num_clusters'] == X]
-                    if x_data.empty:
-                        continue
-                    per_seed = x_data.groupby(['kn_ratio', 'dataset'])['hit_rate'].mean().reset_index()
-                    agg = per_seed.groupby('kn_ratio')['hit_rate'].mean().reset_index()
-                    ax.plot(agg['kn_ratio'], agg['hit_rate'],
-                            marker='o', color=x_colors[xi], label=f'X={X}')
-                pct_fmt(ax)
-                ax.set_ylim(0, 1.05)
-                if row == 0:
-                    ax.set_title('Union' if col == 0 else 'No Union')
-                if col == 0:
-                    ax.set_ylabel(f'{lbl(union_algo)}\nHit Rate')
-                ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left',
-                          borderaxespad=0, fontsize=7)
-        for ax in axes2[-1]:
-            ax.set_xlabel('K/N Ratio')
-        fig2.suptitle(f'Set 5 - Hit Rate vs K/N Ratio by Cluster Count ({cap_metric(metric)})', y=1.02)
-        plt.tight_layout()
-        save_fig(fig2, outdir, f'set5_hit_rate_vs_kn_ratio_{metric}.png')
 
 #-------------------------------------------------------------------------------
 # Set 6: Cache size variation
@@ -1331,14 +1092,11 @@ def plot_set6_coverage_and_hit_rate(
 ):
     """Primary Set 6 plot: actual coverage overlaid with hit rate per algorithm.
 
-    Layout: 3 rows (CIG, HGG, Combined) x 2 columns (Euclidean, Angular).
-    Each panel shows the coverage line (same in all panels) and the hit rate
-    line for that algorithm/metric combination.
+    Layout: one row per algorithm x one column per metric (Euclidean,
+    Angular). Each panel shows the coverage line (same in all panels) and
+    the hit rate line for that algorithm/metric combination.
     """
-    algos = ordered_algos(
-        (a for a in sub['algorithm'].unique() if a != 'brute'),
-        include_no_union=False,
-    )
+    algos = ordered_algos(a for a in sub['algorithm'].unique() if a != 'brute')
     metrics = ordered_metrics(sub['metric'].unique())
     pal = algo_palette(algos)
     cache_sizes = sorted(cov_df['cache_size'].unique().astype(int))
@@ -1485,10 +1243,7 @@ def plot_set6(df: pd.DataFrame, outdir: Path, datasets_dir: Optional[Path] = Non
         print("No set6 data.")
         return
 
-    algos = ordered_algos(
-        (a for a in sub['algorithm'].unique() if a != 'brute'),
-        include_no_union=False,
-    )
+    algos = ordered_algos(a for a in sub['algorithm'].unique() if a != 'brute')
     metrics = ordered_metrics(sub['metric'].unique())
     pal = algo_palette(algos)
     cache_sizes = sorted(sub['num_cache_queries'].dropna().unique().astype(int))
@@ -1497,10 +1252,7 @@ def plot_set6(df: pd.DataFrame, outdir: Path, datasets_dir: Optional[Path] = Non
         return
 
     # distance calcs vs cache size (log scale)
-    all_algos_dc = ordered_algos(
-        (a for a in sub['algorithm'].unique() if a != 'brute'),
-        include_no_union=False,
-    )
+    all_algos_dc = algos
     pal_all = algo_palette(all_algos_dc)
 
     fig, axes = plt.subplots(1, len(metrics), figsize=(5 * len(metrics) + 2, 5), sharey=True)
@@ -1509,16 +1261,23 @@ def plot_set6(df: pd.DataFrame, outdir: Path, datasets_dir: Optional[Path] = Non
 
     for ax, metric in zip(axes, metrics):
         m_sub = sub[sub['metric'] == metric]
+        any_positive = False
         for algo in all_algos_dc:
             a_sub = m_sub[m_sub['algorithm'] == algo]
             if a_sub.empty:
                 continue
             ys, errs = _agg_by_cache_size(a_sub, 'avg_distance_calcs', cache_sizes)
-            ls = '--' if algo == 'lemma1' else '-'
+            ls = '--' if 'lemma1' in algo else '-'
             ax.plot(cache_sizes, ys, marker='o', label=lbl(algo),
                     color=pal_all.get(algo), linestyle=ls)
+            if np.any(np.asarray(ys) > 0):
+                any_positive = True
 
-        ax.set_yscale('log')
+        # distance-call counting was removed from CacheSimulator --
+        # avg_distance_calcs is now always 0,
+        # which can't be log-scaled. Fall back to linear scale when so.
+        if any_positive:
+            ax.set_yscale('log')
         _set_cache_size_xaxis(ax, cache_sizes)
         ax.set_xlabel('Cache Size')
         ax.set_ylabel('Mean Distance Calculations per Query')
@@ -1531,9 +1290,8 @@ def plot_set6(df: pd.DataFrame, outdir: Path, datasets_dir: Optional[Path] = Non
 
     # hit-rate heatmap: algorithm vs cache size, one per metric
     for metric in metrics:
-        m_sub = sub[(sub['metric'] == metric) & (sub['algorithm'] != 'brute')
-                      & (~sub['algorithm'].isin(NO_UNION_ALGOS))]
-        algos_m = ordered_algos(m_sub['algorithm'].unique(), include_no_union=False)
+        m_sub = sub[(sub['metric'] == metric) & (sub['algorithm'] != 'brute')]
+        algos_m = ordered_algos(m_sub['algorithm'].unique())
         mat = np.full((len(algos_m), len(cache_sizes)), np.nan)
         for i, algo in enumerate(algos_m):
             a_sub_m = m_sub[m_sub['algorithm'] == algo].copy()
@@ -1595,7 +1353,6 @@ def analyze(raw_dir: str = 'simulations/synthetic/raw', out_name: str = None):
         'set2': base / 'set2',
         'set3': base / 'set3',
         'set4': base / 'set4',
-        'set5': base / 'set5',
         'set6': base / 'set6',
     }
     for d in dirs.values():
@@ -1620,7 +1377,6 @@ def analyze(raw_dir: str = 'simulations/synthetic/raw', out_name: str = None):
     plot_global_accuracy_heatmap(df, dirs['global'])
     plot_global_hit_rate_heatmap(df, dirs['global'])
     plot_per_set_hit_rate_heatmaps(df, dirs['global'])
-    plot_lemma_breakdown_global(df, dirs['global'])
     plot_avg_time(df, dirs['global'])
 
     print("\n[Set 1: Baseline]")
@@ -1635,9 +1391,6 @@ def analyze(raw_dir: str = 'simulations/synthetic/raw', out_name: str = None):
 
     print("\n[Set 4: Variable N]")
     plot_set4(df, pq, dirs['set4'])
-
-    print("\n[Set 5: Union effectiveness]")
-    plot_set5(df, dirs['set5'])
 
     datasets_base = Path(__file__).parent.parent.parent / 'datasets' / 'synthetic' / 'data'
 

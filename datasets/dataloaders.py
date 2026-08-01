@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 
+import sys
+import logging
 import numpy as np
 from pathlib import Path
 from typing import Tuple, Optional
 import struct
 import json
 from typing import Dict
+
+from tqdm import tqdm
+
+from utils.base import KVCache
+
+logger = logging.getLogger(__name__)
 
 #-------------------------------------------------------------------------------
 
@@ -99,6 +107,41 @@ def load_sift_dataset(
 
 #-------------------------------------------------------------------------------
 
+def sift_query_split_indices(
+    n_queries: int,
+    num_cache_queries: int,
+    num_test_queries: int,
+    seed: int,
+    test_start: int = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the (cache_indices, test_indices) permutation used to split SIFT's
+    standard query set. Factored out of create_sift_benchmark_split so other
+    callers (e.g. slicing precomputed sift_groundtruth.ivecs for the same
+    cache queries) can reproduce the identical split without duplicating the
+    permutation logic.
+    """
+    if test_start is None:
+        test_start = num_cache_queries
+
+    if test_start + num_test_queries > n_queries:
+        raise ValueError(
+            f"test_start={test_start} + num_test={num_test_queries} exceeds "
+            f"available queries ({n_queries})"
+        )
+    if num_cache_queries > test_start:
+        raise ValueError(
+            f"num_cache_queries={num_cache_queries} would overlap with "
+            f"test queries starting at test_start={test_start}"
+        )
+
+    np.random.seed(seed)
+    indices = np.random.permutation(n_queries)
+    cache_indices = indices[:num_cache_queries]
+    test_indices = indices[test_start:test_start + num_test_queries]
+    return cache_indices, test_indices
+
+
 def create_sift_benchmark_split(
     base_vectors: np.ndarray,
     query_vectors: np.ndarray,
@@ -128,35 +171,18 @@ def create_sift_benchmark_split(
     Returns:
         Tuple of (base_vectors, cache_queries, test_queries)
     """
-    if test_start is None:
-        test_start = num_cache_queries
-
-    if test_start + num_test_queries > len(query_vectors):
-        raise ValueError(
-            f"test_start={test_start} + num_test={num_test_queries} exceeds "
-            f"available queries ({len(query_vectors)})"
-        )
-    if num_cache_queries > test_start:
-        raise ValueError(
-            f"num_cache_queries={num_cache_queries} would overlap with "
-            f"test queries starting at test_start={test_start}"
-        )
-
-    np.random.seed(seed)
-
-    # randomly split the query set
-    indices = np.random.permutation(len(query_vectors))
-    cache_indices = indices[:num_cache_queries]
-    test_indices = indices[test_start:test_start + num_test_queries]
+    cache_indices, test_indices = sift_query_split_indices(
+        len(query_vectors), num_cache_queries, num_test_queries, seed, test_start,
+    )
 
     cache_queries = query_vectors[cache_indices]
     test_queries = query_vectors[test_indices]
-    
+
     print(f"\nBenchmark split created:")
     print(f"  Main memory: {base_vectors.shape}")
     print(f"  Cache queries: {cache_queries.shape} (K={cache_K})")
     print(f"  Test queries: {test_queries.shape} (N={test_N})")
-    
+
     return base_vectors, cache_queries, test_queries
 
 #-------------------------------------------------------------------------------
@@ -318,5 +344,133 @@ def load_esci_benchmark(benchmark_dir: str) -> Tuple[np.ndarray, np.ndarray, np.
     print(f"  Loaded {test_queries.shape[0]} test queries")
 
     return base_vectors, cache_queries, test_queries, config
+
+#-------------------------------------------------------------------------------
+
+def load_cache_ground_truth_population(benchmark_dir: Path, K: int) -> Dict:
+    """
+    Load precomputed cache query ground truth in the "population" schema
+    (indices/r_Q/half_gap), computed against a sampled base. Used by both
+    SIFT and ESCI's population pipeline, and by SIFT's base hit-policy
+    pipeline (run_sift.py).
+
+    Returns:
+        dict mapping query_id -> (indices, r_Q, half_gap)
+    """
+    gt_file = benchmark_dir / f"cache_gt_population_K{K}.npz"
+    if not gt_file.exists():
+        raise FileNotFoundError(
+            f"Cache ground truth not found: {gt_file}\n"
+            f"Run prepare_benchmark.py first to compute ground truth."
+        )
+
+    data = np.load(gt_file)
+    ground_truth = {}
+    i = 0
+    while f'indices_{i}' in data:
+        ground_truth[i] = (
+            data[f'indices_{i}'],
+            float(data[f'r_Q_{i}']),
+            float(data[f'half_gap_{i}']),
+        )
+        i += 1
+
+    logger.info(f"Loaded cache ground truth (population): {len(ground_truth)} entries from {gt_file.name}")
+    return ground_truth
+
+#-------------------------------------------------------------------------------
+
+def load_cache_ground_truth_full(benchmark_dir: Path, K: int) -> Dict:
+    """
+    Load precomputed cache query ground truth in the "full" schema
+    (indices/vectors/distances/gap), computed against the true full base
+    (ESCI's 1.82M catalog, or SIFT's 1M base via the optional --full-base
+    prepare flag). Used by ESCI's base hit-policy pipeline (run_esci.py).
+
+    Returns:
+        dict mapping query_id -> (indices, vectors, distances, gap)
+    """
+    gt_file = benchmark_dir / f"cache_gt_K{K}.npz"
+    if not gt_file.exists():
+        raise FileNotFoundError(
+            f"Cache ground truth not found: {gt_file}\n"
+            f"Run prepare_benchmark.py with the full-base GT option first."
+        )
+
+    data = np.load(gt_file)
+    ground_truth = {}
+    i = 0
+    while f'indices_{i}' in data:
+        ground_truth[i] = (
+            data[f'indices_{i}'],
+            data[f'vectors_{i}'],
+            data[f'distances_{i}'],
+            float(data[f'gap_{i}']),
+        )
+        i += 1
+
+    logger.info(f"Loaded cache ground truth (full): {len(ground_truth)} entries from {gt_file.name}")
+    return ground_truth
+
+#-------------------------------------------------------------------------------
+
+def populate_cache_from_precomputed_population(
+    simulator,
+    cache_queries: np.ndarray,
+    cache_ground_truth: Dict,
+    base_vectors: np.ndarray,
+):
+    """
+    Populate a CacheSimulator's KVCache from population-schema ground truth
+    (query_id -> (indices, r_Q, half_gap)); vectors are looked up from
+    base_vectors since the population schema doesn't embed them.
+    """
+    if simulator.cache is None:
+        simulator.cache = KVCache(metric=simulator.metric)
+
+    logger.info("Populating cache from precomputed results...")
+
+    for i, query in enumerate(tqdm(cache_queries, desc="Populating cache", file=sys.stderr)):
+        top_k_indices, r_Q, half_gap = cache_ground_truth[i]
+        top_k_vecs = [base_vectors[idx] for idx in top_k_indices]
+        simulator.cache.add_entry(
+            query,
+            top_k_vecs,
+            r_Q,
+            half_gap,
+            [int(idx) for idx in top_k_indices],
+        )
+
+    logger.info(f"Cache populated with {simulator.cache.size()} entries")
+
+#-------------------------------------------------------------------------------
+
+def populate_cache_from_precomputed_full(
+    simulator,
+    cache_queries: np.ndarray,
+    cache_ground_truth: Dict,
+):
+    """
+    Populate a CacheSimulator's KVCache from full-schema ground truth
+    (query_id -> (indices, vectors, distances, gap)); vectors are embedded
+    in the ground truth so no base_vectors array is needed.
+    """
+    if simulator.cache is None:
+        simulator.cache = KVCache(metric=simulator.metric)
+
+    logger.info("Populating cache from precomputed results...")
+
+    for i, query in enumerate(tqdm(cache_queries, desc="Populating cache", file=sys.stderr)):
+        indices, vectors, distances, gap = cache_ground_truth[i]
+        top_k_vecs = list(vectors)
+        simulator.cache.add_entry(
+            query,
+            top_k_vecs,
+            float(distances[-1]),
+            gap / 2.0,
+            [int(idx) for idx in indices],
+        )
+
+    logger.info(f"Cache populated with {simulator.cache.size()} entries")
 
 #-------------------------------------------------------------------------------

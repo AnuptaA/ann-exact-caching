@@ -65,8 +65,13 @@ def generate_perturbed_vector(
         lambda_val = 1
     elif perturbation_level == "small":
         lambda_val = 2
-    else:
+    elif perturbation_level in (0, 1, 2):
         lambda_val = perturbation_level
+    else:
+        raise ValueError(
+            f"Invalid perturbation_level: {perturbation_level!r}. "
+            "Must be one of 'large'/'medium'/'small' or 0/1/2."
+        )
     
     # generate angular perturbation
     theta = sample_perturbation_angle(lambda_val)

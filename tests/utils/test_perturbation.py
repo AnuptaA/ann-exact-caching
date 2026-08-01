@@ -197,6 +197,43 @@ def test_return_angle():
 
 #-------------------------------------------------------------------------------
 
+def test_distance_from_angle_matches_direct_distance_metrics():
+    """euclidean_distance_from_angle/cosine_distance_from_angle (trig formulas
+    on a known angle) must agree with utils.base.distance_metrics' direct
+    vector-based computation on an actually-generated pair of vectors at that
+    angle -- two independent implementations of the same identity."""
+    print("\nTest 8: distance-from-angle matches direct distance_metrics")
+
+    from utils.base.distance_metrics import euclidean_distance, cosine_distance
+
+    np.random.seed(99)
+    v = np.random.randn(32)
+
+    for level in (0, 1, 2):
+        v_prime, angle_deg = generate_perturbed_vector(v, perturbation_level=level, return_angle=True)
+        theta = np.radians(angle_deg)
+
+        v_hat = v / np.linalg.norm(v)
+        vp_hat = v_prime / np.linalg.norm(v_prime)
+
+        expected_euclidean = euclidean_distance_from_angle(theta)
+        actual_euclidean = euclidean_distance(v_hat, vp_hat)
+        assert abs(expected_euclidean - actual_euclidean) < 1e-4, (
+            f"level {level}: euclidean_distance_from_angle={expected_euclidean:.6f} "
+            f"vs direct euclidean_distance={actual_euclidean:.6f}"
+        )
+
+        expected_cosine = cosine_distance_from_angle(theta)
+        actual_cosine = cosine_distance(v_hat, vp_hat)
+        assert abs(expected_cosine - actual_cosine) < 1e-4, (
+            f"level {level}: cosine_distance_from_angle={expected_cosine:.6f} "
+            f"vs direct cosine_distance={actual_cosine:.6f}"
+        )
+
+    print("distance-from-angle formulas agree with direct distance_metrics computation.")
+
+#-------------------------------------------------------------------------------
+
 if __name__ == "__main__":
     print("="*80)
     print("Testing Perturbation Utilities")
@@ -209,7 +246,8 @@ if __name__ == "__main__":
     test_verify_perturbation()
     test_reproducibility()
     test_return_angle()
-    
+    test_distance_from_angle_matches_direct_distance_metrics()
+
     print("\n" + "="*80)
     print("All tests passed.")
     print("="*80)
