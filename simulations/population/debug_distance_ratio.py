@@ -14,6 +14,8 @@ ratio = query-query distance / r_t. ratio << 1 means nearby queries are
 much closer to each other than to their own true neighbors -- the regime
 where one cached candidate's ball can plausibly cover a nearby query
 without much overshoot.
+
+One-off, see query_clustering_ratio.py.
 """
 
 import sys
