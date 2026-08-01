@@ -104,7 +104,7 @@ def test_save_load_benchmark():
         "seed": 42
     }
 
-    tmp_dir = "tests/dataloader_tests/tmp_benchmark"
+    tmp_dir = "tests/dataloaders/tmp_benchmark"
 
     save_sift_benchmark(tmp_dir, base, cache_q, test_q, config)
 

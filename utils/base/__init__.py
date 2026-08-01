@@ -18,6 +18,13 @@ from .lemmas import (
     lemma1_no_union,
     lemma2_no_union
 )
+from .lemmas_sigma import (
+    lemma1_sigma,
+    lemma1_no_union_sigma,
+    lemma2_no_union_sigma,
+    fit_r_t_hat,
+    overlap_threshold_hit_policy
+)
 from .perturbation import (
     generate_perturbed_vector,
     sample_perturbation_angle,
@@ -45,6 +52,11 @@ __all__ = [
     'binary_search_last_index',
     'lemma1_no_union',
     'lemma2_no_union',
+    'lemma1_sigma',
+    'lemma1_no_union_sigma',
+    'lemma2_no_union_sigma',
+    'fit_r_t_hat',
+    'overlap_threshold_hit_policy',
     'generate_perturbed_vector',
     'sample_perturbation_angle',
     'euclidean_distance_from_angle',

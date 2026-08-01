@@ -234,6 +234,8 @@ simulations/characterization/
 simulations/results/
 simulations/debug/
 simulations/population_proposal_sigma/
+simulations/**/reports/
+simulations/**/profiles/
 
 # Local editor settings
 .claude/settings.local.json

@@ -140,7 +140,7 @@ def test_save_and_load():
     """Test save/load round-trip: arrays and config metadata survive serialization."""
     print("\nTest 4: Save and load round-trip")
 
-    test_dir = "./tests/generation_tests/tmp"
+    test_dir = "./tests/generation/tmp"
 
     config = DatasetConfig(
         name="test_save",

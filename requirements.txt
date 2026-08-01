@@ -1,10 +1,9 @@
-requests
 pandas
 numpy
+scipy
 matplotlib
 scikit-learn
 statsmodels
 tqdm
 seaborn
-umap-learn
 pytest
