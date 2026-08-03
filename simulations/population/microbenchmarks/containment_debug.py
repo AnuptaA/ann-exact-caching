@@ -49,42 +49,6 @@ def _parse_benchmark_info(label: str) -> dict:
 #-------------------------------------------------------------------------------
 # Compute functions
 
-def sanity_check(cache_norm: np.ndarray, test_dists: np.ndarray, label: str) -> list:
-    """Verify basic distance invariants. Returns list of result strings (ASCII only).
-
-    Checks:
-      1. Cache queries are unit-normalized (self-similarity == 1.0).
-      2. All test-to-cache distances are non-negative.
-      3. Minimum test-to-cache distance -- near zero means a near-duplicate
-         test/train pair, which would inflate K=0 hit rates.
-    """
-    lines = []
-    lines.append(f"Benchmark: {label}")
-    lines.append(f"  cache_norm shape : {cache_norm.shape}")
-    lines.append(f"  test_dists shape : {test_dists.shape}")
-    lines.append(f"  test_dists range : [{test_dists.min():.8f}, {test_dists.max():.8f}]")
-
-    self_sims = np.diag(cache_norm @ cache_norm.T)
-    max_dev = float(np.abs(self_sims - 1.0).max())
-    tag = "PASS" if max_dev < 1e-5 else "WARN"
-    lines.append(
-        f"  {tag}  cache self-similarity: max |sim - 1.0| = {max_dev:.2e}"
-        f"  (expected < 1e-5; self-distance = arccos(1.0)/pi = 0.0)"
-    )
-
-    neg = int((test_dists < 0).sum())
-    if neg == 0:
-        lines.append("  PASS  all test-to-cache distances >= 0")
-    else:
-        lines.append(f"  FAIL  {neg} negative test-to-cache distances detected")
-
-    min_dist = float(test_dists.min())
-    tag = "WARN" if min_dist < 1e-4 else "PASS"
-    note = "  <-- possible near-duplicate (may inflate K=0 hit rate)" if min_dist < 1e-4 else ""
-    lines.append(f"  {tag}  min test-to-cache distance = {min_dist:.8f}{note}")
-
-    return lines
-
 def _scale_summary(
     ball_costs: np.ndarray,
     nn_indices: np.ndarray,
@@ -143,7 +107,6 @@ def _scale_summary(
     return lines
 
 def write_section_outputs(
-    sanity_lines: list,
     ball_costs: np.ndarray,
     nn_indices: np.ndarray,
     cb_dists: np.ndarray,
@@ -155,7 +118,6 @@ def write_section_outputs(
     """Write per-section directories for the improved procedure under benchmark_dir.
 
     Creates:
-      section1_sanity/summary.txt
       section2_scale_kc{k}/summary.txt + scale_ratios_improved.csv  (per K_cache)
       section3_candidates_n1_kc{k}/summary.txt + candidates.csv     (per K_cache)
       section4_candidates_n10_kc{k}/summary.txt + candidates.csv    (per K_cache)
@@ -163,11 +125,6 @@ def write_section_outputs(
     K_CACHE_VALUES = [1, 5, 10, 20]
     IMP_N_VALUES = [1, 5, 10]
     benchmark_dir.mkdir(parents=True, exist_ok=True)
-
-    _write_txt(
-        benchmark_dir / 'section1_sanity' / 'summary.txt',
-        ['===== SECTION 1: SANITY CHECKS (improved) =====', ''] + sanity_lines,
-    )
 
     d_base_sorted = np.sort(cb_dists, axis=1)
     k_sorted = sorted(r_t_by_k.keys())

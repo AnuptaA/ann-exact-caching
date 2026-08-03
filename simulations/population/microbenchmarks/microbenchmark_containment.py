@@ -347,9 +347,7 @@ def run_debug(
         all_ball_costs[bm] = ball_costs
         all_nn_indices[bm] = nn_indices
         all_debug_dicts[bm] = dbg
-        sanity = containment_debug.sanity_check(dbg['cache_norm'], dbg['test_dists'], bm)
         containment_debug.write_section_outputs(
-            sanity_lines=sanity,
             ball_costs=dbg['ball_costs'],
             nn_indices=dbg['nn_indices'],
             cb_dists=dbg['cb_dists'],
