@@ -159,8 +159,8 @@ def run_benchmark(
     benchmark_base_dir: str = None,
 ):
     """
-    Run cache simulations on a single benchmark (angular metric only).
-    No brute force, no correctness validation -- only hit rate, distance calcs, timing.
+    Run cache simulations on a single benchmark, angular metric only.
+    No brute force or correctness validation, just hit rate, distance calcs, timing.
 
     Args:
         dataset: 'sift' or 'esci'

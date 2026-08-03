@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """Run ball-like population proposals for a benchmark dataset.
-
-(point-like proposal was removed -- it was exactly ball with K=0, see
-utils/base/population.py's propose_candidates_ball docstring and
-docs/POPULATION_DESIGN.md.)
 """
 
 import sys
@@ -89,9 +85,6 @@ def _run_ball(
     load_benchmark_fn,
     sigma_values: list = None,
 ) -> None:
-    # K_cache = K_test = K, always -- including K=0 (containment mode),
-    # where ball correctly reduces to point (see propose_candidates_ball's
-    # docstring): no separate k_cache/k_test distinction, no clamp needed.
     K = k_test
     benchmark_dir = benchmark_base_dir / benchmark_name
     budgets = _budget_values(benchmark_dir)

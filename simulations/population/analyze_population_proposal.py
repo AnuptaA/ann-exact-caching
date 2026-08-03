@@ -1,28 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """Analyze proposal-based population pipeline results.
-
-Reads raw outputs from run_population.py and produces, per dataset:
-
-  ball/
-    memory_vs_hitrate.png               (sigma x K_test grid)
-    memory_vs_candidates_cached.png     (sigma x K_test grid)
-    recall_vs_sigma_k{kt}.png           (one per K_test, one subplot per budget)
-
-  debug/ (if debug_dir provided)
-    {dataset}_ball_debug.json
-
-point-like proposal was removed (Phase 3 Round 12) -- it was exactly ball
-with K=0, see utils/base/population.py and docs/POPULATION_DESIGN.md --
-run_population.py only ever produces `ball/` output, and K_cache always
-equals K_test (no separate K_cache dimension).
-
-n_max is fixed at 20 in every real run (never actually swept -- --n-max
-takes a single value per CLI invocation), so it is not a grid dimension
-here; it's noted in each plot's title instead. Phase 3 Round 12 replaced the
-previous n x K_test grid with sigma x K_test (rows=sigma, columns=K_test),
-and replaced the old per-sigma-directory separate plot files with one
-combined file per metric per dataset -- no more sigma_*/ output nesting.
 """
 
 import re
@@ -122,13 +100,7 @@ def _shared_legend(fig, axes_2d, n_rows, n_cols, **kwargs) -> None:
 def _shared_legend_train_test(fig, axes_2d, n_rows, n_cols, cache_sizes: list) -> None:
     """Two-column legend for train/test comparison plots: column 1 is every
     cache size's train entry, column 2 is every cache size's test entry,
-    one row per cache size (256, 512, 1024, 2048 top to bottom). matplotlib's
-    ncol=2 legend fills column-major (top-to-bottom down column 1 first,
-    then column 2), so the handle/label list must list every train label
-    (in cache-size order) before any test label to land train in column 1
-    and test in column 2 -- passing ncol=2 alone does not group by column
-    on its own, and interleaving train/test per cache size (the reverse
-    grouping) mixes both into each column instead."""
+    one row per cache size (256, 512, 1024, 2048 top to bottom)."""
     for r in range(n_rows):
         for c in range(n_cols):
             handles, labels = axes_2d[r][c].get_legend_handles_labels()
@@ -196,23 +168,7 @@ def _read_summary_hit_rate(summary_path: Path) -> tuple:
 
 
 def _load_run_data(param_run_dir: Path, sigma: float = None) -> dict:
-    """Load greedy_cost results from one param directory.
-
-    sigma: if given, read the sigma-swept summary at B{budget}/sigma_{sigma:.2f}/
-        instead of the default (sigma=1.0, unnested) location. The selection
-        trajectory is sigma-independent and always read from the unnested path.
-
-    Reads both non_oracle (test) and oracle (train) summaries -- oracle
-    output has always been written by population_runner.py but was never
-    read here before (Phase 3 Round 14); same schema, same file layout,
-    just under oracle/{strategy}/ instead of non_oracle/{strategy}/.
-
-    Returns:
-        {benchmark: {budget_str: {
-            'test_hit_rate', 'train_hit_rate', 'mean_recall', 'vectors_cached',
-            'num_entries', 'train_coverage', 'test_coverage', 'trajectory'
-        }}}
-    """
+    """Load greedy_cost results from one param directory."""
     data: dict = {}
     for bm_dir in sorted(param_run_dir.iterdir()):
         if not bm_dir.is_dir():
@@ -259,12 +215,7 @@ def _load_run_data(param_run_dir: Path, sigma: float = None) -> dict:
 
 
 def _base_size(param_run_dir: Path) -> dict:
-    """Return {cache_size_int: n_base} where n_base = benchmark base vector count.
-
-    Budget fractions always include 1.0, so max_budget_dir = benchmark_n_base.
-    This is the count of vectors in base_vectors.npy for the benchmark, NOT the
-    full dataset size stored in summary.json's num_base_vectors field.
-    """
+    """Return {cache_size_int: n_base} where n_base = benchmark base vector count."""
     sizes: dict = {}
     for bm_dir in sorted(param_run_dir.iterdir()):
         if not bm_dir.is_dir():
@@ -301,15 +252,7 @@ def _plot_grid(
     ylim=None,
     int_y: bool = False,
 ) -> None:
-    """Generic sigma x K_test grid plot (K_cache always equals K_test in the
-    real pipeline, so there is no separate K_cache dimension to plot; n_max
-    is fixed in every real run, so it's noted in the title, not gridded).
-
-    When ylim isn't given, a shared y-axis is computed from the global max
-    y-value across every cell instead of letting each subplot auto-scale to
-    its own local max -- otherwise cells with very different magnitudes
-    (e.g. candidate counts across cache sizes) become visually misleading
-    to compare."""
+    """Generic sigma x K_test grid plot."""
     _, size_color = _size_color_map(all_data)
 
     if ylim is None:
@@ -395,9 +338,7 @@ def _plot_grid_train_test(
 ) -> None:
     """sigma x K_test grid, train and test series overlaid per cache size
     on the same axes -- train: triangle marker, dashed line; test: square
-    marker, solid line; same color per cache size for both series. Avoids
-    the plot-per-quantity-per-side proliferation the single-series
-    _plot_grid would otherwise require (one file for train, one for test)."""
+    marker, solid line; same color per cache size for both series."""
     cache_sizes, size_color = _size_color_map(all_data)
     n_rows, n_cols = len(sigma_vals), len(kt_vals)
     fig, axes = _make_subplots(n_rows, n_cols)
@@ -519,10 +460,6 @@ def _plot_recall_vs_sigma(all_data: dict, base_sizes: dict, sigma_vals: list,
                             color=size_color[cs], label=f'Cache {cs}')
                     panel_ys.extend(ys)
             ax.set_xlim(min(sigma_vals) - 0.02, 1.02)
-            # Adaptive y-axis, not a fixed (0, 1.05) range: the real sigma
-            # effect on recall is small (often < 1 percentage point), and a
-            # fixed 0-100% axis flattens it to invisibility. Zoom to the
-            # panel's own data range with a small margin instead.
             if panel_ys:
                 y_min, y_max = min(panel_ys), max(panel_ys)
                 if y_max - y_min < 1e-6:
@@ -650,9 +587,7 @@ def _write_debug(
                 },
             }
             max_budget_hits.append(max_hit)
-            # unrounded, for the exact-1.0 sanity check below (round(x,6)
-            # above could theoretically mask a value that's close to but
-            # not exactly 1.0 -- this uses the raw float)
+            # unrounded, for the exact-1.0 sanity check below
             max_budget_hit_records.append((param_key, bm, max_hit))
 
         max_tc_vals = [
@@ -690,10 +625,7 @@ def _write_debug(
     worst_combo = min(combo_stats, key=lambda x: x[1], default=(None, 0, 0))
     frac_combos_nz = sum(1 for _, _, mh in combo_stats if mh > 1e-4) / max(len(combo_stats), 1)
 
-    # Sanity check (Phase 3 Round 14): literal 1.0 hit rate at max budget
-    # would be surprising -- the CIG condition isn't automatically satisfied
-    # just because the base is fully covered, so this flags any combo that
-    # lands there for a closer look, using the exact (unrounded) value.
+    # Literal 1.0 hit rate at max budget is weird so this flags any such instance
     exact_ones = [
         {'param': pk, 'benchmark': bm, 'test_hit_rate': hr}
         for pk, bm, hr in max_budget_hit_records
@@ -737,8 +669,7 @@ def analyze_dataset(
 ) -> None:
     """sigma_values: swept sigma values (e.g. [0.7, 0.8, 0.9, 1.0]) if the raw
     output has a sigma_* nesting level, else None/empty for the flat (single
-    default sigma=1.0, unnested) layout. All sigma values are combined into
-    one set of plots per dataset (rows=sigma), not one plot set per sigma."""
+    default sigma=1.0, unnested) layout."""
     print(f"\n=== {dataset_label} ===")
     base_sizes_cache: dict = {}
 
@@ -796,9 +727,7 @@ def _latest_with(base: Path, method: str) -> Path | None:
 
 
 def _sigma_values_in(method_dir: Path | None) -> list:
-    """Sigma values swept for this method, found by peeking into one representative
-    B{budget}/ dir (sigma nests as B{budget}/sigma_{val}/, see population_runner.py).
-    Returns [] for a flat (single default sigma=1.0, unnested) layout."""
+    """Find sigma values swept for this method."""
     if not method_dir or not method_dir.exists():
         return []
     for param_dir in sorted(method_dir.iterdir()):
@@ -859,7 +788,6 @@ def main() -> None:
                          sigma_values=sigma_values)
 
     print(f"\nDone. run_ts={run_ts}")
-
 
 if __name__ == '__main__':
     main()

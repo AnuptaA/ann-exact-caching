@@ -116,10 +116,7 @@ def sift_query_split_indices(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute the (cache_indices, test_indices) permutation used to split SIFT's
-    standard query set. Factored out of create_sift_benchmark_split so other
-    callers (e.g. slicing precomputed sift_groundtruth.ivecs for the same
-    cache queries) can reproduce the identical split without duplicating the
-    permutation logic.
+    standard query set.
     """
     if test_start is None:
         test_start = num_cache_queries
@@ -297,9 +294,6 @@ def save_esci_benchmark(
     """
     Save ESCI benchmark split to disk.
 
-    Unlike SIFT, ESCI does not save base_vectors -- the full 1.82M product catalog
-    is the fixed base and is not embedded in the benchmark directory.
-
     Args:
         output_dir: Directory to save benchmark
         cache_queries: Cache population query vectors
@@ -349,10 +343,7 @@ def load_esci_benchmark(benchmark_dir: str) -> Tuple[np.ndarray, np.ndarray, np.
 
 def load_cache_ground_truth_population(benchmark_dir: Path, K: int) -> Dict:
     """
-    Load precomputed cache query ground truth in the "population" schema
-    (indices/r_Q/half_gap), computed against a sampled base. Used by both
-    SIFT and ESCI's population pipeline, and by SIFT's base hit-policy
-    pipeline (run_sift.py).
+    Load precomputed cache query ground truth computed against a sampled base.
 
     Returns:
         dict mapping query_id -> (indices, r_Q, half_gap)
@@ -382,10 +373,7 @@ def load_cache_ground_truth_population(benchmark_dir: Path, K: int) -> Dict:
 
 def load_cache_ground_truth_full(benchmark_dir: Path, K: int) -> Dict:
     """
-    Load precomputed cache query ground truth in the "full" schema
-    (indices/vectors/distances/gap), computed against the true full base
-    (ESCI's 1.82M catalog, or SIFT's 1M base via the optional --full-base
-    prepare flag). Used by ESCI's base hit-policy pipeline (run_esci.py).
+    Load precomputed cache query ground truth computed against the true full base
 
     Returns:
         dict mapping query_id -> (indices, vectors, distances, gap)

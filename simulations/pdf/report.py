@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """Shared PDF-report building blocks used by every compile/collect script in
-this repo. Each script owns its own section tree (what to walk, in what
-order, with what titles); this module owns the page primitives
-(cover/divider/header/image), the two small conventions ("latest timestamped
-run dir", "ordered image list with extras"), and a generic recursive
-section-tree renderer so scripts don't hand-roll the same divider/header/image
-loop.
+this repo.
 """
 
 import re
@@ -127,8 +122,7 @@ def latest_run_dir(base: Path, pattern: str = r'\d{8}_\d{6}') -> Path:
 
 def images_in(section_dir: Path, ordered_names: list = None) -> list:
     """PNGs in section_dir: explicit ordered_names first (if present and existing),
-    followed by any remaining *.png files in sorted order. With ordered_names=None,
-    this is just a plain sorted glob."""
+    followed by any remaining *.png files in sorted order."""
     section_dir = Path(section_dir)
     if not section_dir.exists():
         return []
@@ -139,22 +133,6 @@ def images_in(section_dir: Path, ordered_names: list = None) -> list:
     return files + extra
 
 #-------------------------------------------------------------------------------
-# generic section-tree renderer
-#
-# A "section" is a dict describing one node in the report's table of contents:
-#
-#   {'kind': 'divider', 'title': str, 'children': [section, ...]}
-#       Emits a divider page, then recurses into children.
-#
-#   {'kind': 'header', 'title': str, 'images': list[Path] | Callable[[], list[Path]],
-#    'caption_fn': Callable[[Path], str] | None, 'also_divider': bool}
-#       Emits a header page (optionally preceded by a divider page with the
-#       same title, for scripts that want a stronger break between sections)
-#       followed by one image page per image. Skipped (with a log line) if
-#       the image list is empty.
-#       'images' may be a static list or a zero-arg callable for lazy/dynamic
-#       discovery (e.g. globbing a directory that may not exist yet).
-
 
 def divider(title: str, children: list) -> dict:
     return {'kind': 'divider', 'title': title, 'children': children}
@@ -167,7 +145,6 @@ def header(title: str, images, caption_fn=None, also_divider: bool = False, run_
         'kind': 'header', 'title': title, 'images': images,
         'caption_fn': caption_fn, 'also_divider': also_divider, 'run_name': run_name,
     }
-
 
 def render_sections(report: PdfReportBuilder, sections: list, run_name: str, indent: str = '  ') -> None:
     """Recursively render a section tree built from divider()/header() nodes."""
@@ -187,10 +164,7 @@ def render_sections(report: PdfReportBuilder, sections: list, run_name: str, ind
             node_run_name = node['run_name'] if node['run_name'] is not None else run_name
             if node['also_divider']:
                 report.divider_page(node['title'], node_run_name)
-            # A falsy title (None/'') skips the header page entirely -- for
-            # callers where the enclosing divider page already says
-            # everything worth saying, and an extra title-only page would
-            # just be a redundant slide (see compile_proposal.py).
+            # A falsy title (None/'') skips the header page entirely
             if node['title']:
                 report.header_page(node['title'], node_run_name)
             caption_fn = node['caption_fn']

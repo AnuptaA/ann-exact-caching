@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """Does geometric overlap between a cached candidate's K-sphere and a test
-query's K-sphere predict the oracle (ground-truth) hit outcome? Two
-overlap metrics are computed and compared: an angular (spherical-cap)
-fraction and a solid Euclidean ball fraction.
+query's K-sphere predict the oracle hit outcome? Two overlap metrics are computed
+and compared: an angular (spherical-cap) fraction and a solid Euclidean ball fraction.
 
-Distances are in this codebase's normalized angular units (angle/pi, in
-[0,1] -- see debug_common.pairwise_dist), converted to radians internally
-where the math needs a true geodesic angle.
+Distances are in normalized angular units and converted where necessary
 """
 
 import sys
@@ -86,8 +83,7 @@ def sample_cap_points(
     out = np.empty((M, n_samples, d), dtype=np.float32)
 
     # Cap: bound peak per-chunk float64 intermediate size
-    # (~a few hundred MB) regardless of the chunk_size argument, so a
-    # large n_samples can never blow up memory even with a careless call.
+    # (~a few hundred MB) regardless of the chunk_size argument
     _MAX_CHUNK_ELEMENTS = 20_000_000
     max_chunk_by_samples = max(1, _MAX_CHUNK_ELEMENTS // max(1, n_samples * d))
     chunk_size = max(1, min(chunk_size, max_chunk_by_samples))
@@ -137,21 +133,15 @@ def single_cap_volume_fraction(r: np.ndarray, d: int) -> np.ndarray:
 
 def _require_float64(**kwargs) -> None:
     """Reject non-float64 numeric input (e.g. np.float32). This module's
-    extreme-magnitude computations (results as small as ~1e-59 at real
-    embedding dimensions) lose enough precision at float32 to produce
-    spurious wrong results, so callers must pass float64 explicitly
-    rather than relying on silent coercion."""
+    computations lose enough precision at float32 to produce spurious wrong
+    results, so callers must pass float64 explicitly."""
     for name, value in kwargs.items():
         if isinstance(value, float):
             continue
         if isinstance(value, np.floating) and np.dtype(type(value)) == np.float64:
             continue
         raise TypeError(
-            f"{name}={value!r} (dtype {type(value).__name__}) is not float64 -- "
-            f"this module's extreme-magnitude computations require float64 "
-            f"precision; float32 inputs can produce spurious underflow that "
-            f"silently gives wrong results. Cast explicitly with float(...) "
-            f"before calling."
+            f"{name}={value!r} (dtype {type(value).__name__}) is not float64"
         )
 
 
@@ -161,18 +151,8 @@ def conditional_cap_fraction(theta: float, D: float, r_c: float, d: int) -> floa
     pole Q) lying within candidate Q's r_c-cap. theta, D, r_c are true
     radians (converted from normalized units by the caller).
 
-    With T at the north pole, x = cos(theta)*e1 + sin(theta)*y satisfies
-    Q's cap condition x.Q >= cos(r_c) iff
-    y_1 >= [cos(r_c) - cos(theta)cos(D)] / [sin(theta)sin(D)], a single-
-    cap condition on S^{d-2}, hence single_cap_volume_fraction one
-    dimension down. Caller must handle theta=0 and D=0 separately
-    (division by zero here).
-
-    Inlines single_cap_volume_fraction's formula as scalar math (no
-    array wrapping) -- this is the hot path inside
-    exact_intersection_fraction's quadrature integrand, called dozens of
-    times per call; numerically identical to
-    single_cap_volume_fraction(np.array([r_cross]), d-1)[0]."""
+    Caller must handle theta=0 and D=0 separately (division by zero here).
+    """
     c = (math.cos(r_c) - math.cos(theta) * math.cos(D)) / (math.sin(theta) * math.sin(D))
     c = min(1.0, max(-1.0, c))
     theta_cross = math.acos(c)  # == (arccos(c)/pi) * pi, skips the redundant round trip
@@ -185,38 +165,21 @@ def conditional_cap_fraction(theta: float, D: float, r_c: float, d: int) -> floa
 def exact_intersection_fraction(
     D: float, r_c: float, r_t: float, d: int, verify: bool = False,
 ) -> float:
-    """Exact intersection_fraction(c, t) -- the fraction of test query t's
-    r_t-cap volume lying within candidate c's r_c-cap -- via 1D numerical
-    quadrature over co-latitude from t's pole, using conditional_cap_fraction
-    (the single-cap closed form one dimension down) as the integrand.
-    D, r_c, r_t are in this module's normalized units (angle/pi); d is the
-    ambient embedding dimension (R^d, i.e. the sphere is S^{d-1}).
+    """Exact intersection_fraction(c, t): the fraction of test query t's
+    r_t-cap volume lying within candidate c's r_c-cap.
 
-    Fast paths (exact, no quadrature): no overlap (D>=r_c+r_t) -> 0.0;
-    t's cap fully inside c's cap (D+r_t<=r_c) -> 1.0; concentric poles
-    (D=0, division by zero in conditional_cap_fraction otherwise) ->
-    1.0 if r_c>=r_t else the ratio of single-cap volumes (intersection
-    is exactly the smaller cap).
-
-    Raises TypeError if any input is not float64 -- see _require_float64.
+    Raises TypeError if any input is not float64
 
     Raises ValueError if both num and den underflow to exactly 0.0
-    (instead of returning NaN from 0/0) -- happens for small r_t
-    (roughly <=0.03-0.05) at high d (>=~384); not hit by real SIFT/ESCI
-    data.
-
-    verify=True runs an independent recomputation (split integration
-    range) and warns if it disagrees with the primary result by more
-    than 1e-6 -- see inline comment below for why this check, not quad's
-    own error estimate, is used. Adds 4 extra quad() calls (3x the cost),
-    so it's off by default; production callers should leave it False.
+    (instead of returning NaN from 0/0), happens for small r_t
+    (roughly <=0.03-0.05) at high d (>=~384)
     """
     from scipy.integrate import quad
 
     _require_float64(D=D, r_c=r_c, r_t=r_t)
     D_a, rc_a, rt_a = D * np.pi, r_c * np.pi, r_t * np.pi
 
-    # Full-containment checked first: at r_t=0, "no overlap" and "fully
+    # full-containment checked first: at r_t=0, "no overlap" and "fully
     # contained" both reduce to D==r_c, and containment is closed (<=).
     if D_a + rt_a <= rc_a:
         return 1.0
@@ -249,14 +212,6 @@ def exact_intersection_fraction(
     ratio = num / den
 
     if verify:
-        # quad's own error estimates don't discriminate risky results from
-        # fine ones here: raw num/den are tiny unnormalized integrals at
-        # high d (e.g. ~1e-51 median for real SIFT pairs) regardless of
-        # whether the final ratio is accurate, so their relative error
-        # looks alarming (~100%) on essentially every real pair. Instead,
-        # recompute by splitting the integration range (different
-        # quadrature node placement, a genuinely independent path) and
-        # warn only if the two disagree.
         mid = (eps + rt_a) / 2.0
         num_lo, _ = quad(integrand_num, eps, mid, limit=200)
         num_hi, _ = quad(integrand_num, mid, rt_a, limit=200)
@@ -268,19 +223,14 @@ def exact_intersection_fraction(
             if abs(ratio - ratio_split) > 1e-6:
                 import warnings
                 warnings.warn(
-                    f"exact_intersection_fraction: independent recomputation (split "
-                    f"integration range) disagrees with the primary result by "
-                    f"{abs(ratio - ratio_split):.2e} (D={D}, r_c={r_c}, r_t={r_t}, "
-                    f"d={d}) -- primary={ratio}, split={ratio_split}. This may "
-                    f"indicate a genuinely poorly-conditioned quadrature for this "
-                    f"input, not just the usual tiny-magnitude tail behavior.",
+                    f"exact_intersection_fraction: split vs. single ratio mismatch: "
+                    f"primary={ratio}, split={ratio_split}",
                     stacklevel=2,
                 )
     return ratio
 
 #-------------------------------------------------------------------------------
-# Second predictor: solid Euclidean ball intersection, an alternative to
-# the angular/spherical-cap fraction above -- see compare_angular_vs_solid_ball.
+# Second predictor: solid Euclidean ball intersection
 #-------------------------------------------------------------------------------
 
 
@@ -292,19 +242,7 @@ def chord_distance_from_angular(r: np.ndarray) -> np.ndarray:
 
 def solid_ball_intersection_fraction(dist: float, R1: float, R2: float, n: int) -> float:
     """Fraction of solid ball 2's (radius R2) volume lying within solid
-    ball 1 (radius R1), in ordinary Euclidean R^n -- literal n-balls, not
-    caps on a sphere. dist = Euclidean distance between centers.
-
-    The two balls' boundaries cross at a hyperplane perpendicular to the
-    line joining the centers, at signed distance d1 from center 1
-    (d2 = dist - d1 from center 2). Each ball contributes the cap of
-    itself beyond that hyperplane to the intersection; J(R, d_i) is that
-    cap's volume fraction (regularized incomplete beta function).
-
-    Uses the ratio (R1/R2)^n rather than each ball's absolute volume,
-    which involves Gamma(n/2+1) and overflows float64 at real embedding
-    dimensions (the Gamma/pi factors cancel in the ratio). See
-    solid_ball_intersection_fraction_literal for the direct-volume version.
+    ball 1 (radius R1), in ordinary Euclidean R^n.
 
     Raises TypeError if any input is not float64.
     """
@@ -333,12 +271,7 @@ def solid_ball_intersection_fraction(dist: float, R1: float, R2: float, n: int) 
 
 
 def solid_ball_intersection_fraction_literal(dist: float, R1: float, R2: float, n: int) -> float:
-    """Same result as solid_ball_intersection_fraction, computed directly:
-    V_n(R) = pi^(n/2)/Gamma(n/2+1) * R^n (log-space via gammaln, since
-    raw Gamma(n/2+1) overflows float64 at real n), then
-    V_int = V_n(R1)*J(R1,d1) + V_n(R2)*J(R2,d2), fraction = V_int/V_n(R2).
-    Reference implementation, cross-checked against the faster ratio-
-    based version -- compare_angular_vs_solid_ball uses that one."""
+    """Same result as solid_ball_intersection_fraction, computed directly."""
     from scipy.special import gammaln, betainc
 
     _require_float64(dist=dist, R1=R1, R2=R2)
@@ -371,12 +304,7 @@ def solid_ball_intersection_fraction_literal(dist: float, R1: float, R2: float, 
 
 def _prepare_combo_context(dataset: str, benchmark_name: str, K: int) -> dict:
     """Budget-independent setup shared across a whole budget sweep for one
-    (benchmark, K): load the benchmark once and propose the full candidate
-    pool once. Callers that sweep multiple budgets against the same
-    (benchmark, K) should build this once and pass it to
-    compare_angular_vs_solid_ball for every budget, instead of letting it
-    rebuild (and re-propose) internally each time -- propose_full_pool is
-    budget-independent (see its own docstring) so re-running it per budget
+    (benchmark, K). propose_full_pool is budget-independent so re-running it per budget
     is pure waste."""
     base, cache_q, test_q, bdir = dc.load_benchmark(dataset, benchmark_name)
     n_cache, n_test = len(cache_q), len(test_q)
@@ -400,25 +328,7 @@ def compare_angular_vs_solid_ball(
 ) -> dict:
     """For test queries, compute both the angular and solid-ball
     intersection fraction against selected candidates, alongside the
-    exact oracle_hit label. n_test_queries/max_candidates_per_query
-    default to None (use every test query / every selected candidate --
-    the true, unclipped output of propose+select); pass an int to
-    subsample either, e.g. for a cheap validation run.
-
-    Returns flattened per-(candidate, query) pair arrays (for
-    reliability-curve and direct-scatter plots) -- including `recall`,
-    the fraction of the query's true top-K neighbors present in that one
-    candidate's cache (K=1 makes this identical to `oracle_hit` as a
-    0/1 value, no new information; meaningful as a continuous signal
-    for K>1) -- and, per test query, the best (max) angular and
-    solid-ball fractions independently (the two can pick different
-    "best" candidates) plus union_covered (matches
-    debug_vector_coverage.py's coverage definition).
-
-    context: optional, from _prepare_combo_context(dataset, benchmark_name, K)
-    -- pass this when sweeping multiple budgets for the same (benchmark, K)
-    to avoid re-proposing the (budget-independent) candidate pool on every
-    call. Built internally (single-budget cost) when omitted."""
+    exact oracle_hit label. n_test_queries/max_candidates_per_query."""
     if context is None:
         context = _prepare_combo_context(dataset, benchmark_name, K)
     test_q, n_cache, n_test = context['test_q'], context['n_cache'], context['n_test']
@@ -435,11 +345,7 @@ def compare_angular_vs_solid_ball(
     if not selected:
         return None
 
-    # float64: source query/candidate vectors are float32, and a batched
-    # matmul (BLAS gemm) sums in a different order than a scalar 1D dot
-    # product -- at float32 that order difference is large enough to
-    # shift exact_intersection_fraction's output (numerically sensitive
-    # at small fractions). float64 removes the discrepancy.
+    # use float64 to guard against precision loss and resulting errors
     test_q_hat = test_q.astype(np.float64)
     test_q_hat /= np.linalg.norm(test_q_hat, axis=1, keepdims=True)
     cand_centers = np.array([c.query for c in selected], dtype=np.float64)
@@ -453,14 +359,8 @@ def compare_angular_vs_solid_ball(
     n_cand_sample = n_selected if max_candidates_per_query is None else min(max_candidates_per_query, n_selected)
     cand_idx_sample = rng.choice(n_selected, size=n_cand_sample, replace=False)
 
-    # Batch the per-pair geometry (dot products, angular distance, chord
-    # distances) as real array ops instead of one numpy call per pair --
-    # exact_intersection_fraction still runs one pair at a time below
-    # (quad() doesn't vectorize), but everything around it now does.
-    # dist_direct via sqrt(2-2*dot) (exact for unit vectors) instead of
-    # norm-of-difference: avoids ever materializing a
-    # (n_cand_sample, n_test_queries, d) tensor, which would risk OOM at
-    # real scale (d=384: multiple GB).
+    # batch the per-pair computations for speed, but still return per-pair
+    # results for calibration plots
     sample_cand_hat = cand_centers_hat[cand_idx_sample]
     sample_test_hat = test_q_hat[test_idx_sample]
     sample_rc = cand_rc[cand_idx_sample]
@@ -557,8 +457,7 @@ def bin_calibration(
 
 
 def auc_score(intersection_fraction: np.ndarray, oracle_hit: np.ndarray) -> float:
-    """Manual rank-based AUC (Mann-Whitney U statistic), no sklearn
-    dependency (none is used anywhere else in this codebase). AUC =
+    """Manual rank-based AUC (Mann-Whitney U statistic). AUC =
     P(a randomly chosen hit's score > a randomly chosen miss's score),
     with ties contributing 0.5."""
     oracle_hit = oracle_hit.astype(bool)
@@ -573,9 +472,7 @@ def auc_score(intersection_fraction: np.ndarray, oracle_hit: np.ndarray) -> floa
 
 
 def _rankdata_avg(x: np.ndarray) -> np.ndarray:
-    """Average ranks (1-indexed), ties get the mean rank -- standard
-    Mann-Whitney U tie handling, implemented without scipy.stats.rankdata
-    dependency risk (kept as plain numpy for transparency)."""
+    """Average ranks (1-indexed), ties get the mean rank."""
     order = np.argsort(x, kind='mergesort')
     ranks = np.empty(len(x), dtype=np.float64)
     sorted_x = x[order]
@@ -593,15 +490,7 @@ def _rankdata_avg(x: np.ndarray) -> np.ndarray:
 
 def fit_binomial_glm(x: np.ndarray, successes: np.ndarray, n_trials) -> dict:
     """Logistic-link binomial GLM: P(success) = sigmoid(b0 + b1*x), fit
-    via statsmodels. n_trials=1 (scalar) with successes in {0,1} is
-    ordinary binary logistic regression (the oracle_hit case); n_trials=K
-    (per-row array) with successes = round(recall*K) is the grouped/
-    proportion generalization (the recall case) -- same model family.
-
-    Returns the fitted intercept/slope, the slope's p-value (Wald test,
-    H0: slope=0), and McFadden's pseudo-R^2 (1 - llf/llf_null) as an
-    effect-size measure -- prefer this over the p-value for judging
-    practical relevance at large N (see module docs)."""
+    via statsmodels."""
     n_trials = np.broadcast_to(n_trials, x.shape).astype(float)
     endog = np.column_stack([successes, n_trials - successes])
     exog = sm.add_constant(x)
@@ -617,9 +506,7 @@ def fit_binomial_glm(x: np.ndarray, successes: np.ndarray, n_trials) -> dict:
 
 def mannwhitney_test(x: np.ndarray, oracle_hit: np.ndarray) -> dict:
     """Mann-Whitney U test: is x's distribution different between the
-    hit and miss groups? auc = U / (n_pos*n_neg), the same quantity
-    auc_score computes -- included here for a direct cross-check,
-    alongside the significance test auc_score doesn't provide."""
+    hit and miss groups?."""
     oracle_hit = oracle_hit.astype(bool)
     hit_x, miss_x = x[oracle_hit], x[~oracle_hit]
     if len(hit_x) == 0 or len(miss_x) == 0:
@@ -630,10 +517,7 @@ def mannwhitney_test(x: np.ndarray, oracle_hit: np.ndarray) -> dict:
 
 def point_biserial_test(x: np.ndarray, oracle_hit: np.ndarray) -> dict:
     """Point-biserial correlation (= Pearson r between continuous x and
-    binary y) with its significance test. Measures linear relationship
-    specifically -- expect this to read lower than AUC on data with a
-    sigmoid-shaped (nonlinear) relationship, which is not a
-    contradiction, just a different question asked of the same data."""
+    binary y) with its significance test."""
     oracle_hit = oracle_hit.astype(bool)
     corr, pvalue = stats.pointbiserialr(oracle_hit, x)
     return {'correlation': float(corr), 'pvalue': float(pvalue)}
@@ -645,18 +529,8 @@ def point_biserial_test(x: np.ndarray, oracle_hit: np.ndarray) -> dict:
 
 
 def _actual_budgets(data_by_bm_k: dict, k_values: list, exclude_full: bool = False) -> list:
-    """Sorted union of budget fractions actually present in the data, not
-    assumed from a caller-passed/module-default list -- avoids plotting
-    budgets that were never swept (see phantom-budget bug writeup).
-
-    exclude_full: drop budget=1.0 (100%). An effectively unconstrained
-    budget lets greedy-cost admit redundant, heavily-overlapping
-    candidates, so intersection trends toward 1 almost everywhere and
-    skews any statistic pooled across budgets -- callers computing a
-    pooled/aggregate view across budgets should set this True (the
-    standing default for pooled analysis, not a one-off); per-budget
-    outputs (one file per budget) can leave it False to still see 100%
-    as its own individual data point."""
+    """Sorted union of budget fractions actually present in the data to avoid budgets
+    that were never swept. Probably should be deprecated in favor of better code."""
     budgets = set()
     for bm_data in data_by_bm_k.values():
         for K in k_values:
@@ -675,9 +549,7 @@ def run_dual_predictor_sweep(
 ) -> dict:
     """Runs compare_angular_vs_solid_ball across the full (benchmark, K,
     budget) grid, returning data_by_bm_k[benchmark][K][budget] = result
-    dict or None. n_test_queries/max_candidates_per_query default to
-    None (uncapped -- every test query, every selected candidate, at
-    every budget including 100%)."""
+    dict or None."""
     k_values = k_values if k_values is not None else K_VALUES
     budget_fractions = budget_fractions if budget_fractions is not None else BUDGET_FRACTIONS
     cfg = dc.DATASET_CONFIG[dataset]
@@ -711,12 +583,6 @@ def run_dual_predictor_sweep(
     return data_by_bm_k
 
 #-------------------------------------------------------------------------------
-# Raw sweep persistence: compare_angular_vs_solid_ball's per-pair/per-query
-# arrays only ever lived in memory for one main() invocation before this --
-# summary.json kept just the aggregate AUCs. Two plot-only fixes in a row
-# each needed a full ~45-80 min re-sweep just to redraw with the same
-# underlying data, which this exists to stop happening again.
-#-------------------------------------------------------------------------------
 
 _SCALAR_RESULT_KEYS = ('d', 'K', 'n_pairs', 'n_test_queries', 'n_selected', 'n_cand_sample')
 
@@ -726,11 +592,7 @@ def _combo_result_path(run_dir: Path, dataset: str, benchmark_name: str, K: int,
 
 
 def save_sweep(dataset: str, data_by_bm_k: dict, run_dir: Path) -> None:
-    """Writes one .npz per (benchmark, K, budget) cell -- everything
-    compare_angular_vs_solid_ball returned for that cell, so a later
-    process can redraw any plot without recomputing propose+select+score.
-    Cells that were None (benchmark not prepared, or nothing selected)
-    are skipped, same as the plotting code already tolerates."""
+    """Writes one .npz per (benchmark, K, budget) cell for persistence."""
     for benchmark_name, per_k in data_by_bm_k.items():
         for K, per_budget in per_k.items():
             for frac, result in per_budget.items():
@@ -743,10 +605,7 @@ def save_sweep(dataset: str, data_by_bm_k: dict, run_dir: Path) -> None:
 
 def load_combo_result(path: Path) -> Optional[dict]:
     """Reads one cell's .npz back into the same dict shape
-    compare_angular_vs_solid_ball returns -- scalar metadata fields
-    come back from np.load as 0-d arrays, converted back to plain
-    Python ints here. Returns None if the file doesn't exist (a cell
-    that was never computed or genuinely had no result)."""
+    compare_angular_vs_solid_ball returns."""
     if not path.exists():
         return None
     with np.load(path) as data:
@@ -762,10 +621,7 @@ def load_sweep(
     benchmarks: list = None,
 ) -> dict:
     """Reconstructs data_by_bm_k from a prior run_dual_predictor_sweep's
-    persisted .npz files -- same nested shape (data_by_bm_k[benchmark][K][budget]),
-    same None-for-missing-cell contract, so every downstream plotting
-    function works identically whether the data was just swept or
-    reloaded from disk."""
+    persisted .npz files."""
     cfg = dc.DATASET_CONFIG[dataset]
     benchmarks = benchmarks or cfg['benchmarks']
     data_by_bm_k = {}
@@ -788,10 +644,7 @@ def _draw_dual_reliability(
     budget_fractions: list, title_suffix: str, out_path: Path,
 ) -> None:
     """Shared body for plot_dataset_dual_reliability: draws one
-    benchmark x K grid for whatever budget_fractions list it's given
-    (the full non-100% set for the pooled view, or a single budget for
-    the per-budget views) -- same plotting logic either way, only the
-    pooling window and output path/title change."""
+    benchmark x K grid for whatever budget_fractions list it's given."""
     n_rows, n_cols = len(benchmarks), len(k_values)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.8 * n_cols, 4.2 * n_rows), squeeze=False)
     series = [('angular_fraction', 'angular', 'tab:green', 'o', '-'),
@@ -862,11 +715,7 @@ def plot_dataset_dual_reliability(
     dataset: str, data_by_bm_k: dict, k_values: list = None, budget_fractions: list = None,
     per_budget: bool = True,
 ) -> None:
-    """Per cell, one line per method (angular, solid-ball). Writes the
-    pooled-across-budgets view (legend simplified to plain method names
-    -- AUC/pseudo-R2 stay in summary.json, not cluttering the plot) plus,
-    when per_budget=True, one additional file per individual budget
-    (including 100% -- these are individual, not pooled, views)."""
+    """Plots the dual reliability of the dataset."""
     k_values = k_values if k_values is not None else K_VALUES
     benchmarks = [bm for bm in data_by_bm_k if any(data_by_bm_k[bm].get(k) for k in k_values)]
     if not benchmarks:
@@ -892,26 +741,7 @@ def _draw_recall_reliability(
     dataset: str, data_by_bm_k: dict, benchmarks: list, k_values: list,
     budget_fractions: list, title_suffix: str, out_path: Path,
 ) -> None:
-    """Shared body for plot_dataset_recall_reliability -- see
-    _draw_dual_reliability's docstring for the pooled-vs-per-budget
-    split rationale. No logistic-regression fit here (recall isn't a
-    0/1 probability the way oracle_hit is -- kept to the model-free
-    binned curve).
-
-    No oracle/union-recall overlay here (tried, then removed): this
-    plot's x-axis is a per-PAIR quantity (a specific candidate's
-    intersection fraction with the query), but union_recall is a
-    per-QUERY quantity (the same value for every candidate of that
-    query, independent of any single candidate's score) -- it has no
-    natural x-position on this axis. Any single reference value drawn
-    against it ends up comparing different sampling units (e.g. a flat
-    population-mean line can be legitimately exceeded by a per-pair bin
-    that's conditioned on an easier subset of queries, even though the
-    true per-pair invariant recall_pair(c,t) <= union_recall(t) always
-    holds -- verified against real data, 0 violations). Where
-    union/oracle recall *does* share an x-axis with a comparable curve
-    is budget_fraction (see analyze_overlap_threshold.py's
-    hit_rate_vs_budget oracle line), not intersection fraction."""
+    """Plots the recall comparison between angular and solid-ball methods."""
     n_rows, n_cols = len(benchmarks), len(k_values)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.8 * n_cols, 4.2 * n_rows), squeeze=False)
     series = [('angular_fraction', 'angular', 'tab:green', 'o', '-'),
@@ -975,12 +805,7 @@ def plot_dataset_recall_reliability(
     dataset: str, data_by_bm_k: dict, k_values: list = None, budget_fractions: list = None,
     per_budget: bool = True,
 ) -> None:
-    """Continuous-recall counterpart to plot_dataset_dual_reliability:
-    y = mean fraction of the query's true top-K found in the candidate
-    (the 'recall' field), not binary oracle_hit. K=1 is skipped -- at
-    K=1, recall is identical to oracle_hit (0 or 1), no new information
-    over the binary plot. Writes the pooled view plus, when
-    per_budget=True, one file per individual budget (including 100%)."""
+    """Continuous-recall counterpart to plot_dataset_dual_reliability."""
     k_values = [k for k in (k_values if k_values is not None else K_VALUES) if k > 1]
     if not k_values:
         return
@@ -1012,12 +837,11 @@ _BREAK_MARK = 0.02
 
 
 def _find_axis_break(x: np.ndarray) -> tuple:
-    """Largest gap in x's sorted unique values, as (left_edge, right_edge)
-    -- the widest x-range with no data points at all, used to split a
-    panel into two zoomed sub-axes instead of stretching a near-binary
-    distribution across a mostly-empty linear axis. Falls back to a fixed
-    0.1/0.9 split if there's no data, only one distinct value, or no gap
-    wide enough / away enough from the edges to be worth breaking on."""
+    """Largest gap in x's sorted unique values, as (left_edge, right_edge), 
+    the widest x-range with no data points at all, used to split a
+    panel into two zoomed sub-axes. Falls back to a fixed 0.1/0.9 split
+    if there's no data, only one distinct value, or no gap wide enough to be
+    worth breaking on."""
     if len(x) == 0:
         return _BREAK_FALLBACK
     xs = np.unique(x)
@@ -1046,11 +870,7 @@ def plot_dataset_dual_best_candidate_scatter(
     dataset: str, data_by_bm_k: dict, budget_fraction: float, k_values: list = None,
 ) -> None:
     """Angular and solid-ball best-candidate fractions overlaid in the
-    same panel per K, distinguished by color. x is plotted at its true
-    value, never jittered. best_fraction is typically near-binary
-    (clustered near 0 and 1 with little in between), so each K panel is
-    a broken axis: two zoomed sub-axes split at the widest empty gap in
-    that panel's own data, not a fixed threshold."""
+    same panel per K, distinguished by color."""
     k_values = k_values if k_values is not None else K_VALUES
     benchmarks = [bm for bm in data_by_bm_k if any(data_by_bm_k[bm].get(k) for k in k_values)]
     if not benchmarks:
@@ -1135,10 +955,6 @@ def plot_dataset_dual_best_candidate_scatter(
     print(f"    wrote {out_path}")
 
 #-------------------------------------------------------------------------------
-# Confusion matrices: same data as plot_dataset_dual_best_candidate_scatter
-# (best-candidate intersection fraction vs. union_covered), thresholded into
-# a binary predicted hit/miss.
-#-------------------------------------------------------------------------------
 
 CONFUSION_THRESHOLD = 0.8
 
@@ -1149,12 +965,7 @@ def _draw_confusion_matrices(
     threshold: float = CONFUSION_THRESHOLD,
 ) -> None:
     """Standard 2x2 confusion matrix per (benchmark, K, method): predicted
-    hit = best_{method}_fraction >= threshold, actual = union_covered
-    (same ground truth plot_dataset_dual_best_candidate_scatter already
-    plots on its y-axis -- no new metric). One benchmark x K grid per
-    call (pooled-across-budgets or a single budget), two heatmaps per
-    cell (angular left, solid-ball right), matching the scatter plot's
-    own dual-panel convention."""
+    hit = best_{method}_fraction >= threshold, actual = union_covered."""
     series = [('best_angular_fraction', 'angular'), ('best_solid_ball_fraction', 'solid-ball')]
     n_rows, n_cols = len(benchmarks), len(k_values)
     fig, axes = plt.subplots(
@@ -1220,8 +1031,7 @@ def plot_dataset_confusion_matrices(
 ) -> None:
     """Writes one confusion-matrix grid per individual budget (including
     100%, matching plot_dataset_dual_best_candidate_scatter's per-budget
-    convention) plus one pooled version (excluding 100%, the standing
-    default for pooled analysis)."""
+    convention) plus one pooled version (excluding 100%)."""
     k_values = k_values if k_values is not None else K_VALUES
     benchmarks = [bm for bm in data_by_bm_k if any(data_by_bm_k[bm].get(k) for k in k_values)]
     if not benchmarks:
@@ -1240,7 +1050,6 @@ def plot_dataset_confusion_matrices(
         dataset, data_by_bm_k, benchmarks, k_values, pooled_budgets,
         'Pooled Budgets', outdir / 'confusion_matrix_pooled.png', threshold=threshold,
     )
-
 
 def plot_dataset_angular_vs_solid_ball_scatter(
     dataset: str, data_by_bm_k: dict, k_values: list = None, budget_fractions: list = None,
@@ -1401,8 +1210,7 @@ def _parse_args():
 def _compute_cell_stats(per_budget: dict, K: int) -> dict:
     """Pooled statistics (Mann-Whitney, point-biserial, logistic/binomial
     GLM) for one (benchmark, K) cell, for the angular predictor, pooled
-    across all budgets present except budget=100% (see _actual_budgets'
-    exclude_full docstring -- standing default, not a one-off)."""
+    across all budgets present except budget=100%."""
     pooled_frac, pooled_hit, pooled_recall = [], [], []
     for frac, d in per_budget.items():
         if frac == 1.0 or d is None:

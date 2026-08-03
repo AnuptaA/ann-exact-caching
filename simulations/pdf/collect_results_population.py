@@ -2,11 +2,6 @@
 #-------------------------------------------------------------------------------
 """
 Compile all population benchmark outputs into a single timestamped PDF.
-
-Walks the latest processed containment-microbenchmark output for each
-dataset (SIFT, ESCI). alpha-microbenchmarks/k-microbenchmarks (from the now-
-deprecated microbenchmark_candidates.py/microbenchmark_k.py -- see
-docs/POPULATION_DESIGN.md) are no longer included.
 """
 
 import sys

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """Compile all analysis PNGs from a processed run into a single PDF, for a
-single-dataset workload (sift, esci, synthetic). Flat section list: one
-header page per subdir, no nesting."""
+single-dataset workload (sift, esci, synthetic). One header page per subdir."""
 
 import sys
 import argparse

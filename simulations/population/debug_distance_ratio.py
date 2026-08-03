@@ -1,23 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Query-query vs. query-data distance ratio: direct empirical test of the
-hypothesized key certifiability factor (CIG inequality: D(t,Q) + r_t <= r_c
--- a candidate centered at query Q can only certify test query t cheaply if
-t is much closer to Q than Q's own neighbors are).
-
-Standalone, read-only analysis script (no select_candidates sweeps, no
-benchmark preparation) -- pure pairwise-distance computation on already-
-prepared benchmark data. For each cache query Q: query-query distance is
-the median distance to its 5 nearest other cache queries; query-data
-distance is Q's own r_t (K-th nearest base point, already stored on disk).
-ratio = query-query distance / r_t. ratio << 1 means nearby queries are
-much closer to each other than to their own true neighbors -- the regime
-where one cached candidate's ball can plausibly cover a nearby query
-without much overshoot.
-
-One-off, see query_clustering_ratio.py.
-"""
-
+"""Query-query vs. query-data distance ratio."""
 import sys
 from pathlib import Path
 
@@ -38,7 +21,6 @@ N_NEAREST = 5
 OUT_DIR = Path('simulations/debug/population_distance_ratio')
 
 #-------------------------------------------------------------------------------
-
 
 def compute_ratio(dataset: str, benchmark_name: str, K: int) -> np.ndarray:
     """Per-cache-query ratio = (median distance to N_NEAREST nearest other

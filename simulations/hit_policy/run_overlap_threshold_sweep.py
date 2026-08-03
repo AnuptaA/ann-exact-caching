@@ -1,25 +1,10 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Batch runner for the overlap_threshold_hit_policy prototype (see
-utils/base/lemmas_sigma.py): sweeps dataset x benchmark x K x budget
-x r_t_hat percentile across the full matrix and writes one CSV row per
-(config, percentile, threshold).
+"""Batch runner for the overlap_threshold_hit_policy prototype,
+sweeps dataset x benchmark x K x budget x r_t_hat percentile.
 
-Score computation (the expensive per-query, per-entry scan) happens
-ONCE per (benchmark, K, budget, percentile) -- not once per threshold.
-overlap_threshold_hit_policy is called per query with
-threshold=min(THRESHOLDS) (the lowest threshold in the grid, not -1.0/
-always-hit -- see _score_and_recall_per_query's docstring for why this
-is exact, not an approximation), which returns metadata['best_score']
-and the resulting top-N vectors for every query that clears even the
-most lenient threshold we'll ever check. Recall against ground truth is
-computed once per query from that result. The threshold grid is then a
-free post-processing step: hit_rate(t) = mean(best_score > t),
-mean_recall(t) = mean(recall for queries with best_score > t). This
-avoids re-scanning every cache entry once per threshold value, which
-would multiply the dominant cost of the sweep by the grid size for no
-reason -- threshold only gates which queries count as hits, it doesn't
-change which candidate is best or that candidate's would-be recall.
+hit_rate(t) = mean(best_score > t),
+mean_recall(t) = mean(recall for queries with best_score > t).
 """
 
 import sys
@@ -56,31 +41,9 @@ def _score_and_recall_per_query(
     kv_cache: KVCache, base: np.ndarray, base_hat: np.ndarray, test_q: np.ndarray, K: int,
     r_t_hat: float, test_gt_indices: list,
 ) -> list:
-    """Runs overlap_threshold_hit_policy once per test query and returns
-    [(best_score, recall), ...], one pair per query -- the shared
-    computation the threshold grid below is derived from without
-    re-scanning.
-
-    Calls the policy with threshold=min(THRESHOLDS) rather than -1.0
-    (always-hit, an earlier version of this function). Profiling found
-    the policy's "build the hit result" branch (_batch_distances +
-    gathering/sorting the entry's candidate vectors) dominates its cost
-    (~93% of one budget's runtime, worst case measured) -- and it's pure
-    waste for any query whose best_score doesn't clear even the lowest
-    threshold in THRESHOLDS, since _aggregate_at_thresholds below only
-    ever reads a query's recall when best_score > threshold, and no
-    threshold in the grid is lower than min(THRESHOLDS). Skipping that
-    branch for those queries (score=miss, recall left at the 0.0
-    certified_indices already produces) is mathematically exact -- it
-    changes zero output values, only which queries pay for a result
-    that would've been discarded regardless. Matters most for ESCI,
-    where hit rates are low enough that most queries fall in this
-    always-discarded bucket. base_hat (normalized base vectors) is
-    passed in rather than computed here -- it doesn't depend on
-    percentile, budget, or K, only on the dataset's base array, so the
-    caller computes it once per (benchmark, K) instead of once per
-    percentile call (4x per budget otherwise, ~22ms wasted each time on
-    a 50K-row base)."""
+    """Runs overlap_threshold_hit_policy once per test query, returning
+    [(best_score, recall), ...]. Uses threshold=min(THRESHOLDS) to skip
+    processing queries whose score can't clear lowest threshold. """
     cache_entries = kv_cache.get_all_entries()
     r_c_array = kv_cache.get_entry_radii()
     min_threshold = min(THRESHOLDS)
@@ -97,9 +60,7 @@ def _score_and_recall_per_query(
         true_gt = set(test_gt_indices[i])
         certified = set(metadata['certified_indices'])
         recall = len(certified & true_gt) / K
-        # best_score is None when cache_entries is empty (e.g. a tiny
-        # budget on a small benchmark selects zero candidates) -- treat
-        # as a definite miss at every threshold, not a crash.
+        # best_score is None when cache_entries is empty
         best_score = metadata['best_score'] if metadata['best_score'] is not None else -1.0
         records.append((best_score, recall))
     return records
@@ -119,19 +80,7 @@ def _aggregate_at_thresholds(records: list, thresholds: list) -> list:
 
 def run_bm_k(dataset: str, benchmark_name: str, K: int, budget_fractions: list) -> tuple:
     """Runs every budget in budget_fractions for one (dataset, benchmark,
-    K), across all PERCENTILES and THRESHOLDS. load_benchmark/
-    propose_full_pool/load_gt_r_t/load_gt_indices are budget-independent
-    and run ONCE here, not once per budget -- an earlier version of this
-    function (run_combo, one call per budget) redid all of that on every
-    one of the 14 swept budgets, ~14x more than necessary (the same
-    inefficiency found and fixed in compute_oracle_hit_rate.py's
-    oracle_hit_rates_for_bm_k -- this mirrors that fix). Only
-    select_candidates + KVCache build + scoring are genuinely
-    budget-dependent and still run per budget -- wrapped per-budget in
-    try/except so one bad budget (e.g. a tiny budget selecting zero
-    candidates) doesn't lose every other budget's already-computed rows
-    for this (benchmark, K), matching the per-combo failure isolation
-    the old one-call-per-budget design had for free.
+    K), across all radii percentiles and overlap thresholds.
 
     Returns (rows, failed_budgets) where failed_budgets is a list of
     (budget_fraction, error_message) pairs."""
@@ -178,12 +127,8 @@ def run_bm_k(dataset: str, benchmark_name: str, K: int, budget_fractions: list) 
 
 
 def run_combo(dataset: str, benchmark_name: str, K: int, budget_fraction: float) -> list:
-    """Single-budget convenience wrapper around run_bm_k, kept for
-    callers (tests, ad hoc single-combo checks) that only want one
-    budget -- main()'s real sweep calls run_bm_k directly to get the
-    propose-once benefit across all swept budgets. Raises if that one
-    budget failed (matching the old run_combo's behavior -- no
-    per-budget isolation needed when there's only one budget)."""
+    """Single-budget convenience wrapper around run_bm_k for calling on a single
+    budget. Raises if that one budget failed."""
     rows, failed_budgets = run_bm_k(dataset, benchmark_name, K, [budget_fraction])
     if failed_budgets:
         raise RuntimeError(failed_budgets[0][1])

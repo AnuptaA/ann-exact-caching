@@ -17,15 +17,9 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from utils.base import (
     MainMemory,
     KVCache,
-    # lemma2_half_gap,       # deprecated (union-based HGG); kept in utils/base/lemmas.py, unused
-    # combined_algorithm,    # deprecated (HGG+CIG union); kept in utils/base/lemmas.py, unused
     DistanceMetric,
     get_distance_function
 )
-# lemma1_no_union/lemma2_no_union are always routed through their sigma-capable
-# variants below (sigma=1.0 reproduces exact behavior) -- see lemma1_no_union_sigma
-# and lemma2_no_union_sigma.
-# from utils.base.lemmas_sigma import lemma1_sigma  # deprecated (union-based CIG); unused
 from utils.base.lemmas_sigma import (
     lemma1_no_union_sigma, lemma2_no_union_sigma, overlap_threshold_hit_policy,
 )
@@ -47,12 +41,12 @@ class QueryResult:
     cache_hit: bool
     correct: bool
     distance_calculations: Optional[int] # calls to distance function during cache lookup only
-    time_us: Optional[float] # microseconds for algorithm execution only
+    time_us: Optional[float]
     hit_source: Optional[str] = None
     vectors_from_cache: int = 0
     error: Optional[str] = None
     result_indices: Optional[List[int]] = None  # indices of result vectors for validation
-    certified_indices: Optional[List[int]] = None  # full certified set (lemma1_sigma only)
+    certified_indices: Optional[List[int]] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -148,12 +142,9 @@ class CacheSimulator:
             N: Number of vectors to retrieve per query
             metric: Distance metric
             r_t_hat: Workload-calibrated top-K radius estimate, required
-                only by algorithm="overlap_threshold" (see
-                utils.base.lemmas_sigma.fit_r_t_hat/overlap_threshold_hit_policy).
-                Unused by every other algorithm.
+                only by algorithm="overlap_threshold"
             overlap_threshold: Intersection-fraction threshold for
-                algorithm="overlap_threshold". Unused by every other
-                algorithm.
+                algorithm="overlap_threshold"
         """
         self.base_vectors = base_vectors
         self.cache_queries = cache_queries
@@ -172,10 +163,7 @@ class CacheSimulator:
 
         self.distance_func = get_distance_function(metric)
 
-        # shared, pre-normalized base matrix -- used by the hit-check
-        # algorithms for distance computation (base_hat) and for looking up
-        # actual (original-scale) result vectors by index (base_vectors)
-        # instead of every cache entry retaining its own private copy.
+        # shared pre-normalized base matrix to eliminate duplication
         base_norms = np.linalg.norm(base_vectors, axis=1, keepdims=True)
         base_norms[base_norms == 0.0] = 1.0
         self.base_hat = (base_vectors / base_norms).astype(np.float32)
@@ -196,9 +184,7 @@ class CacheSimulator:
                 self.metric,
                 return_indices=True
             )
-            # index-only entry: distance computation and result-vector lookup
-            # both go through the shared base_hat/base_vectors matrices
-            # (self.base_hat/self.base_vectors) rather than a private copy.
+            # eliminate duplication by storing only the indices
             self.cache.add_entry(query, [], float(top_k_dists[-1]), gap / 2.0, top_k_indices)
 
             if idx < 3:
@@ -257,17 +243,7 @@ class CacheSimulator:
             )
             metadata["result_indices"] = brute_indices
             is_hit = False
-        # elif algorithm == "lemma1":
-        #     # deprecated: union-based CIG. lemma1_sigma(sigma=1.0) is
-        #     # mathematically identical to lemma1_circular_inclusion.
-        #     result, is_hit, metadata = lemma1_sigma(
-        #         query, self.cache.get_all_entries(), N, sigma, self.metric,
-        #         distance_tracker=self.distance_tracker
-        #     )
         elif algorithm == "lemma1_no_union":
-            # lemma1_no_union_sigma(sigma=1.0) is mathematically identical to
-            # lemma1_no_union but additionally tracks certified_indices,
-            # needed for mean_recall.
             d_Q_batch = self.cache.get_d_Q_batch(query)
             entry_radii = self.cache.get_entry_radii()
             result, is_hit, metadata = lemma1_no_union_sigma(
@@ -275,14 +251,7 @@ class CacheSimulator:
                 precomputed_d_Q=d_Q_batch, entry_radii=entry_radii,
                 base_hat=self.base_hat, base_vectors=self.base_vectors,
             )
-        # elif algorithm == "lemma2":
-        #     # deprecated: union-based HGG.
-        #     result, is_hit, metadata = lemma2_half_gap(
-        #         query, self.cache.get_all_entries(), N, self.metric,
-        #     )
         elif algorithm == "lemma2_no_union":
-            # lemma2_no_union_sigma(sigma=1.0) is mathematically identical to
-            # lemma2_no_union but additionally tracks certified_indices.
             d_Q_batch = self.cache.get_d_Q_batch(query)
             result, is_hit, metadata = lemma2_no_union_sigma(
                 query, self.cache.get_all_entries(), N, sigma, self.metric,
@@ -290,8 +259,6 @@ class CacheSimulator:
                 base_hat=self.base_hat, base_vectors=self.base_vectors,
             )
         elif algorithm == "overlap_threshold":
-            # Prototype (uncertified, probabilistic) policy -- see
-            # utils/base/lemmas_sigma.py's overlap_threshold_hit_policy.
             d_Q_batch = self.cache.get_d_Q_batch(query)
             entry_radii = self.cache.get_entry_radii()
             result, is_hit, metadata = overlap_threshold_hit_policy(
@@ -300,12 +267,6 @@ class CacheSimulator:
                 base_hat=self.base_hat, base_vectors=self.base_vectors,
                 r_t_hat=self.r_t_hat, threshold=self.overlap_threshold,
             )
-        # elif algorithm == "combined":
-        #     # deprecated: HGG-then-CIG per entry, union across entries.
-        #     result, is_hit, metadata = combined_algorithm(
-        #         query, self.cache.get_all_entries(), N, self.metric,
-        #         distance_tracker=self.distance_tracker
-        #     )
         else:
             raise ValueError(f"Unknown algorithm: {algorithm}")
 

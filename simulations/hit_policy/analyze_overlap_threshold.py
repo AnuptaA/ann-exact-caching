@@ -1,22 +1,9 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Plots for run_overlap_threshold_sweep.py's output CSV: descriptive
-(one row per config already), not the pair-level inferential stats used
-for the intersection-fraction calibration study (debug_intersection_calibration.py).
-
+""" Plot for experimental overlap hit policy
 Grid layout mirrors debug_intersection_calibration.py's convention:
-benchmark (cache size) as grid rows, K as grid columns, one figure per
-dataset -- budget_fraction isn't even on the same absolute scale across
-datasets (each has its own n_base), and different cache sizes admit
-different candidate pools at the same budget_fraction, so pooling
-across either would average together numbers that aren't comparable.
-Only percentile stays pooled as colored lines within each subplot --
-that pooling is the actual comparison being made.
-
-hit_rate_vs_budget/recall_vs_budget are written once per swept
-threshold value (same convention as e.g. the intersection-fraction
-study's per-budget scatter plots) rather than picking one
-"representative" threshold -- the sweep computed all of them."""
+benchmark as grid rows, K as grid columns, one figure per
+dataset."""
 
 import sys
 import argparse
@@ -33,28 +20,19 @@ import matplotlib.pyplot as plt
 PERCENTILE_COLORS = {25.0: 'tab:red', 50.0: 'tab:blue', 95.0: 'tab:orange', 99.0: 'tab:green'}
 ORACLE_COLOR = 'black'
 
-
 def _short_label(benchmark_name: str) -> str:
-    """Cache-size token, e.g. 'c256k100' -- benchmark names aren't
-    positionally consistent across datasets (SIFT has an extra 'b50k'
-    base-size token ESCI doesn't: sift_b50k_c256k100_... vs
-    esci_c256k100_...), so split('_')[1] silently grabs the wrong token
-    for SIFT. Match the cNNNkNNN pattern directly instead."""
+    """Short label for grid cell titles and y-axis labels for nice display"""
     m = re.search(r'c\d+k\d+', benchmark_name)
     return m.group(0) if m else benchmark_name
 
 
 def _cache_size(benchmark_name: str) -> int:
-    """Numeric cache-query count for sorting rows in ascending cache-size
-    order -- plain sorted() on benchmark names is lexicographic, so
-    c1024/c2048 would sort before c256/c512."""
     m = re.search(r'c(\d+)k\d+', benchmark_name)
     return int(m.group(1)) if m else 0
 
 
 def _sorted_benchmarks(benchmark_names) -> list:
     return sorted(set(benchmark_names), key=_cache_size)
-
 
 def _grid(benchmarks: list, k_values: list, sharey: bool = True):
     n_rows, n_cols = len(benchmarks), len(k_values)
@@ -63,7 +41,6 @@ def _grid(benchmarks: list, k_values: list, sharey: bool = True):
         sharex=True, sharey=sharey, squeeze=False,
     )
     return fig, axes
-
 
 def plot_hit_rate_vs_budget(df: pd.DataFrame, out_dir: Path, oracle_df: pd.DataFrame = None) -> None:
     for threshold in sorted(df['threshold'].unique()):
@@ -107,10 +84,6 @@ def plot_hit_rate_vs_budget(df: pd.DataFrame, out_dir: Path, oracle_df: pd.DataF
 
 
 def plot_recall_vs_budget(df: pd.DataFrame, out_dir: Path) -> None:
-    """Scatter, not connected line+marker or bars -- budget_fraction
-    points are unevenly spaced (0.05, 0.10, 0.15, 0.30, ...) so
-    connecting them implies a continuity that isn't there (a bar-chart
-    version was tried and reverted -- harder to read than scatter)."""
     base = df[df['K'] > 1]
     if base.empty:
         return
@@ -146,11 +119,6 @@ def plot_recall_vs_budget(df: pd.DataFrame, out_dir: Path) -> None:
 
 
 def plot_recall_vs_hit_rate_tradeoff(df: pd.DataFrame, out_dir: Path) -> None:
-    """One file per budget (pooling across budgets here was misleading
-    -- different budgets have very different hit-rate/recall scales),
-    scatter only (no connecting lines between thresholds -- threshold
-    is the swept parameter, not a continuous path), both axes fixed to
-    (0, 1) rather than autoscaled/zoomed."""
     base = df[df['K'] > 1]
     if base.empty:
         return

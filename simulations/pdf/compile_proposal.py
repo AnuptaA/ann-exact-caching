@@ -15,15 +15,6 @@ from simulations.pdf.report import PdfReportBuilder, latest_run_dir, divider, he
 ROOT = Path(__file__).parent.parent.parent
 SIM_DIR = ROOT / 'simulations'
 
-# Debug-script output (debug_ball_geometry.py, debug_trajectory.py): fixed,
-# non-timestamped, per-dataset paths -- each script overwrites its own
-# directory on every run, one grid file per metric per dataset (cache size
-# gridded within each file), so there's no latest-run lookup and no
-# per-benchmark nesting here, just fixed per-dataset file paths. Each is
-# optional: a script that hasn't been (re)run yet simply contributes no
-# images, not an error. (debug_sigma_sensitivity.py isn't wired in yet --
-# still uses the older per-benchmark layout, pending the same grid
-# redesign in a future round.)
 BALL_GEOMETRY_DIR = SIM_DIR / 'debug' / 'population_geometry'
 TRAJECTORY_DIR = SIM_DIR / 'debug' / 'population_trajectory'
 DISTANCE_CONCENTRATION_DIR = SIM_DIR / 'debug' / 'population_distance_concentration'
@@ -70,12 +61,6 @@ def _debug_images(dataset: str) -> list:
 
 
 def _dataset_section(processed_dir: Path, dataset_label: str) -> dict:
-    # No per-method header page -- ball is the only proposal procedure, so
-    # a "Ball-like Proposal" title page would be redundant with the dataset
-    # divider page immediately before it. Debug diagnostics are appended
-    # into the same flat image list as the main analysis plots (one grid
-    # file per metric per dataset now, no per-benchmark nesting), so no
-    # extra header/divider pages are needed for them.
     dataset_key = dataset_label.lower()
     return divider(f'{dataset_label} Dataset', [
         header(
@@ -91,9 +76,6 @@ def _dataset_section(processed_dir: Path, dataset_label: str) -> dict:
     ])
 
 def _cross_dataset_section() -> dict:
-    """debug_distance_concentration.py's output -- unlike every other debug
-    image, this one directly compares SIFT and ESCI in a single figure, so
-    it's rendered once at the very end of the PDF, not per-dataset."""
     return divider('Cross-Dataset Comparison', [
         header(
             None,

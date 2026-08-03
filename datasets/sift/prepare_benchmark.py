@@ -50,7 +50,7 @@ RESEARCH_BENCHMARKS = [
          cache_K=100, test_N=20, seed=43, test_start=2048),
     dict(num_base_vectors=50_000, num_cache_queries=2048, num_test_queries=512,
          cache_K=100, test_N=20, seed=44, test_start=2048),
-    # Set 3: cache density investigation (4096/8192, single seed) -- share
+    # Set 3: cache density investigation (4096/8192, single seed), share
     # test_start=8192 between the two so they use the identical held-out
     # test set for a controlled comparison; can't reuse Set 1/2's
     # test_start=2048 since cache_queries would then overlap the test range.
@@ -93,14 +93,8 @@ def _compute_single_query_gt(args):
 def _compute_single_query_gt_multi_k(args):
     """helper for parallel multi-K ground truth computation.
 
-    Duplicates MainMemory.top_k_search's fast-path formula directly
-    (same normalization, dot product, argpartition call), parameterized by
-    k_max = max(K_list) instead of a single k, so it produces bit-identical
-    results to calling top_k_search once per K (verified in
-    tests/datasets/test_multi_k_gt.py) -- but computes the full base
-    distance vector only once per query instead of once per K, since
-    top-1 subset top-5 subset ... subset top-k_max are nested and every
-    smaller K's result is just a slice of the shared top-(k_max+1) pass.
+    Optimally duplicates MainMemory.top_k_search's O(n_base * D) matmul
+    pass for the max K, then slices the results
 
     Returns (query_id, {k: (indices, r_Q, half_gap) for k in K_list}).
     """
@@ -254,10 +248,7 @@ def precompute_multi_k_ground_truth(
 ) -> None:
     """
     Precompute {file_prefix}_gt_population_K{k}.npz for every k in K_list in
-    one brute-force pass per query instead of one pass per K -- top-1 subset
-    top-5 subset ... subset top-max(K_list) are nested, so a single pass at
-    the max K, sliced per K, produces every smaller K's file exactly (see
-    _compute_single_query_gt_multi_k). Skips any K whose file already
+    one brute-force pass per query. Skips any K whose file already
     exists; skips the whole pass if every K is already complete.
     """
     pending_k = sorted({
@@ -319,12 +310,7 @@ def build_cache_gt_full(
     """
     Build and save cache query ground truth from SIFT's precomputed top-100
     groundtruth (sift_groundtruth.ivecs), which is computed with EUCLIDEAN
-    distance against the TRUE full 1M base -- not the angular metric or the
-    sampled base used elsewhere in this pipeline.
-
-    Mirrors ESCI's build_cache_gt lean schema (same indices/vectors/distances/gap
-    file layout), giving SIFT the same optional full-catalog validation
-    capability ESCI already has. Off by default; opt in via --full-base.
+    distance against the true full 1M base.
 
     Args:
         cache_query_indices: indices into the full 10K query set for cache queries
@@ -655,24 +641,20 @@ def extend_benchmark_with_population_data(
         np.save(r_Q_file, r_Q)
         print(f"  Saved: shape={r_Q.shape}, range=[{r_Q.min():.4f}, {r_Q.max():.4f}]")
 
-    # test_gt_population_K{K}.npz -- if a partial (interrupted) file exists,
+    # test_gt_population_K{K}.npz, if a partial (interrupted) file exists,
     # finish it via the single-K resumable path; otherwise it's covered by
-    # the multi-K pass below (which includes K in its K_list). Run before
-    # test_r_t.npy extraction, which requires this file to exist.
+    # the multi-K pass below which includes K in its K_list.
     test_gt_file = benchmark_dir / f"test_gt_population_K{K}.npz"
     if test_gt_file.exists():
         _, completed = _check_partial_gt(test_gt_file, num_test)
         if len(completed) < num_test:
             precompute_test_ground_truth(base, test_q, K, benchmark_dir, num_workers)
 
-    # per-K cache GT files for K-microbenchmark (K=[1,5,10,20]): one shared
-    # brute-force pass at max(K_VALUES), sliced per K, instead of one pass
-    # per K (top-1 subset top-5 subset ... subset top-20 are nested).
+    # per-K cache GT files for K-microbenchmark (K=[1,5,10,20])
     precompute_multi_k_ground_truth(base, cache_q, K_VALUES, benchmark_dir, "cache", num_workers)
 
     # per-K test GT files for K-override runs, plus the main cache_K test
-    # file (already handled above if partially complete) -- one shared pass
-    # at max(K_VALUES + [K]). Must run before test_r_t.npy extraction below.
+    # file (already handled above if partially complete)
     test_k_list = sorted(set(K_VALUES) | {K})
     precompute_multi_k_ground_truth(base, test_q, test_k_list, benchmark_dir, "test", num_workers)
 

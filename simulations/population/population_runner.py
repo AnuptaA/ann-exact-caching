@@ -27,8 +27,7 @@ logger = logging.getLogger(__name__)
 def _timed_stage(on_stage: Optional[Callable[[str, float, float], None]], name: str,
                   fn: Callable, *args, **kwargs):
     """Run fn under time.perf_counter()/tracemalloc and report to on_stage(name,
-    elapsed_seconds, peak_mb) if given; otherwise just run fn with no overhead
-    beyond the timing itself."""
+    elapsed_seconds, peak_mb) if given."""
     if on_stage is None:
         return fn(*args, **kwargs)
     tracemalloc.start()
@@ -80,9 +79,7 @@ def _run_simulation(
     r_t_hat: Optional[float] = None,
     overlap_threshold: float = 0.9,
 ) -> list:
-    """r_t_hat/overlap_threshold: only used by algorithm="overlap_threshold"
-    (see utils.base.lemmas_sigma.overlap_threshold_hit_policy); every other
-    algorithm ignores them."""
+    """r_t_hat/overlap_threshold"""
     simulator = CacheSimulator(
         base_vectors=base_vectors,
         cache_queries=test_queries[:1],
@@ -121,9 +118,7 @@ def _run_simulation(
                     lemma1_hits += 1
                 elif result.hit_source == 'lemma2':
                     lemma2_hits += 1
-                # K=0 (containment mode): there's no K-sized target to recall
-                # a fraction of, but containment alone is the full task at
-                # K=0, so a hit counts as recall=1.0 (not skipped/undefined).
+                # K=0 (containment mode); a hit counts as recall=1.0.
                 if K == 0:
                     recall_sum += 1.0
                     n_hits_with_recall += 1
@@ -245,17 +240,6 @@ def _write_selection_log(
     log = []
     cached_before = np.zeros(len(selected[0].R_c), dtype=bool) if selected else None
 
-    # min_dist_to_prev is computed via one vectorized batch (this step's
-    # query against the matrix of all previously-selected queries) instead
-    # of a Python-level angular_distance() call per (step, prior-step) pair.
-    # Same O(n^2) total distance evaluations, but via BLAS matmuls instead
-    # of up to ~n^2/2 individual Python-level calls -- at budget_fraction=1.0
-    # on real data (~13,855 selected entries), the latter took ~900s of
-    # untimed wall-clock (not visible in any profiled stage), dwarfing every
-    # other stage combined. Numerically equivalent to angular_distance
-    # (same dot-product/norm/arccos formula, including its zero-norm
-    # fallback to distance 1.0); only used for a rounded (6-decimal),
-    # informational log field, not selection/simulation output.
     if selected:
         queries_matrix = np.array([c.query for c in selected])
         query_norms = np.linalg.norm(queries_matrix, axis=1)
@@ -313,29 +297,18 @@ def run_population_benchmark(
 ) -> None:
     """Run the full population pipeline for a single benchmark.
 
-    propose_fn is called with:
-        (obs_queries, obs_r_Q, obs_tv, obs_ti, obs_hg,
-         train_queries, train_r_t, test_queries, test_r_t,
-         base_vectors, metric)
-    and must return List[CandidateEntry].
-
     k_test_override=0 handles the containment-only case: cache is populated at
     K=1 but test_r_t is zeroed out so the hit condition is pure containment.
-    For k_test_override >= 1 or None, override_K is used as before.
 
-    sigma_values: recall thresholds to simulate at (only algorithm='lemma1_no_union'
-        or 'lemma2_no_union' support sigma != 1.0). Candidate proposal and selection
+    sigma_values: recall thresholds to simulate at. Candidate proposal and selection
         run once per (budget, strategy) regardless of sigma_values; only the
-        simulation step repeats per sigma. Defaults to [1.0] (exact, non-relaxed
-        behavior), in which case output paths are unchanged from the single-sigma
-        layout.
+        simulation step repeats per sigma. Defaults to [1.0] (exact), in which
+        case output paths are unchanged from the single-sigma layout.
         For any other sigma_values, oracle/non_oracle output nests one level
         deeper under 'sigma_{value:.2f}/'.
 
     on_stage: optional callback(stage_name, elapsed_seconds, peak_mb), called
-        after each major stage (benchmark load, GT array load, candidate
-        proposal, and per-budget select/build-cache/oracle-simulate/
-        non_oracle-simulate) for profiling. No effect on behavior when None.
+        after each major stage for profiling. No effect on behavior when None.
     """
     sigma_values = sigma_values if sigma_values else [1.0]
     single_default_sigma = sigma_values == [1.0]
@@ -363,16 +336,6 @@ def run_population_benchmark(
 
         # Determine K for cache GT files and test radii
         if k_test_override == 0:
-            # Containment-only: cache entries still populated at K=1 (real
-            # top-1 vectors/half-gaps needed for entry construction), but
-            # obs_r_Q -- also passed as train_r_t at the propose_fn call
-            # site below -- is zeroed, symmetric with test_r_t. This makes
-            # the coverage formula pure distance containment at K=0,
-            # matching propose_candidates_ball's K=0 margin (also 0) and
-            # simulate-time's K=0 hit condition (see lemmas_sigma.py).
-            # obs_r_Q has no other functional use: to_cache_entry() builds
-            # the real CacheEntry from r_c, never observed_r_Q, which is
-            # otherwise only an informational debug-log field.
             cache_load_K = 1
             obs_r_Q = np.zeros(n_cache, dtype=np.float32)
             test_r_t = np.zeros(n_test, dtype=np.float32)
@@ -478,11 +441,6 @@ def run_population_benchmark(
             kv_cache = _timed_stage(on_stage, f"build_kv_cache(B={budget_B})", _build_kv_cache)
             assert kv_cache.size() == len(selected), "KVCache size mismatch"
 
-            # K=0 (containment mode) flows through unchanged: the CIG
-            # algorithm's existing O1 gate + len(passing) >= threshold check
-            # already reduces to "hit iff contained" at threshold=0, with no
-            # special-casing needed (see the comment at that check in
-            # lemmas_sigma.py). No clamp to K >= 1 required.
             sim_K = K
 
             for sigma in sigma_values:

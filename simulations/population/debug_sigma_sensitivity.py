@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Sigma-sensitivity diagnostic (Phase 3 Round 14, plan Step D).
+"""Sigma-sensitivity diagnostic
 
-Distinct from debug_ball_geometry.py (Step B): B asks how big candidate
-spheres are (a proposal-time geometry question). This asks, for queries that
-get certified, how many base vectors actually land in the certifying entry's
-result set -- a simulate-time certification-count question, unrelated to
-radii or coverage. Explains whether sigma has room to matter given how
-certification counts are distributed relative to the ceil(sigma*K)
+This asks, for queries that get certified, how many base vectors actually 
+land in the certifying entry's result set. Explains whether sigma has room 
+to matter given how certification counts are distributed relative to the ceil(sigma*K)
 thresholds.
-
-Entirely separate from population_runner.py -- shares setup with
-debug_trajectory.py via debug_common.py.
 """
 
 import sys
@@ -43,19 +37,9 @@ def certified_counts(
     base: np.ndarray, base_hat: np.ndarray, metric: str,
 ) -> np.ndarray:
     """Best (max) certified-vector count across all reachable entries, for
-    every query -- the quantity that would ultimately be compared against
+    every query, the quantity that would ultimately be compared against
     ceil(sigma*K) for any sigma value, since certification count doesn't
     depend on sigma, only the threshold comparison at simulate time does.
-
-    Replicates lemma1_no_union_sigma's O1/O2 gate math (see
-    monotonic_hit_rate_pass in debug_trajectory.py for the same pattern and
-    its floating-point-boundary caveat for self-referential candidates),
-    but precomputes the query-to-base distance matrix ONCE for all queries
-    up front (O(n_queries * n_base)) instead of once per (query, entry)
-    pair -- calling lemma1_no_union_sigma directly per entry would redo
-    that O(n_base) work on every single entry it reaches, which is what
-    made an earlier version of this function pay full-base-distance cost
-    proportional to n_queries * n_entries_checked instead of n_queries.
     """
     n_queries = len(queries)
     query_hat = _normalize(queries.copy().astype(np.float64))
