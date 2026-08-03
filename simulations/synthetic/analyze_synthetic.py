@@ -18,6 +18,11 @@ import matplotlib.ticker as mticker
 from matplotlib.gridspec import GridSpec
 import seaborn as sns
 
+from simulations.core.analysis_helpers import (
+    ALGO_ORDER, ALGO_LABELS, lbl, lbls, cap_metric, cap_metrics,
+    save_fig, pct_fmt, load_summaries,
+)
+
 sns.set_style("whitegrid")
 plt.rcParams.update({
     'figure.dpi':    150,
@@ -30,22 +35,6 @@ plt.rcParams.update({
 })
 
 #-------------------------------------------------------------------------------
-
-ALGO_ORDER = [
-    'lemma1', 'lemma1_no_union',
-    'lemma2', 'lemma2_no_union',
-    'combined',
-    'brute',
-]
-
-ALGO_LABELS = {
-    'lemma1': 'CIG',
-    'lemma1_no_union': 'CIG (no union)',
-    'lemma2': 'HGG',
-    'lemma2_no_union': 'HGG (no union)',
-    'combined': 'Combined',
-    'brute': 'Brute Force',
-}
 
 PERT_ORDER = ['small', 'medium', 'large']
 
@@ -85,23 +74,6 @@ def n_variability(name: str) -> Optional[str]:
 #-------------------------------------------------------------------------------
 
 # data loading
-
-def load_summaries(raw_dir: str) -> List[Dict]:
-    """Load all summary.json files from a raw results directory.
-
-    Args:
-        raw_dir: path to directory containing per-dataset subdirs, each with a summary.json
-
-    Returns:
-        list of summary dicts, each with keys 'dataset', 'config', 'results', 'validations'
-    """
-    raw_path = Path(raw_dir)
-    summaries = []
-    for p in sorted(raw_path.glob('*/summary.json')):
-        with open(p) as f:
-            summaries.append(json.load(f))
-    print(f"Loaded {len(summaries)} dataset summaries")
-    return summaries
 
 #-------------------------------------------------------------------------------
 
@@ -265,53 +237,6 @@ def algo_palette(algos) -> Dict[str, tuple]:
     ordered = ordered_algos(algos, include_brute=True)
     colors = sns.color_palette('tab10', len(ordered))
     return {a: c for a, c in zip(ordered, colors)}
-
-def lbl(algo: str) -> str:
-    """Return the human-readable label for an algorithm code name."""
-    return ALGO_LABELS.get(algo, algo)
-
-def lbls(algos) -> List[str]:
-    """Return human-readable labels for a sequence of algorithm code names.
-
-    Args:
-        algos: iterable of algorithm code names
-
-    Returns:
-        list of display strings in the same order
-    """
-    return [lbl(a) for a in algos]
-
-def cap_metric(m: str) -> str:
-    return m.title()
-
-def cap_metrics(metrics) -> List[str]:
-    return [cap_metric(m) for m in metrics]
-
-def save_fig(fig: plt.Figure, path: Path, name: str):
-    """Save a figure to disk at 200 dpi and close it.
-
-    Args:
-        fig: matplotlib Figure to save
-        path: output directory (created if missing)
-        name: filename including extension
-    """
-    path.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path / name, dpi=200, bbox_inches='tight')
-    plt.close(fig)
-    print(f"{name}")
-
-def pct_fmt(ax, axis='y'):
-    """Apply percentage tick label formatting to an axis.
-
-    Args:
-        ax: matplotlib Axes
-        axis: 'y' or 'x' (default 'y')
-    """
-    formatter = mticker.FuncFormatter(lambda v, _: f'{v:.0%}')
-    if axis == 'y':
-        ax.yaxis.set_major_formatter(formatter)
-    else:
-        ax.xaxis.set_major_formatter(formatter)
 
 def _add_footnote(fig: plt.Figure, text: str):
     """Add a small gray footnote at the bottom-left of the figure.
@@ -1359,7 +1284,7 @@ def analyze(raw_dir: str = 'simulations/synthetic/raw', out_name: str = None):
         d.mkdir(parents=True, exist_ok=True)
 
     print(f"\nLoading summaries from {raw_dir}...")
-    summaries = load_summaries(raw_dir)
+    summaries = load_summaries(raw_dir, kind='dataset summaries')
     if not summaries:
         print("No results found.")
         return

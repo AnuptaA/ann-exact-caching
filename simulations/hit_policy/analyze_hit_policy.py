@@ -18,6 +18,11 @@ import matplotlib.ticker as mticker
 from matplotlib.gridspec import GridSpec
 import seaborn as sns
 
+from simulations.core.analysis_helpers import (
+    ALGO_ORDER, ALGO_LABELS, lbl, lbls, cap_metric, cap_metrics,
+    save_fig, pct_fmt, load_summaries,
+)
+
 sns.set_style("whitegrid")
 plt.rcParams.update({
     'figure.dpi':      150,
@@ -30,30 +35,11 @@ plt.rcParams.update({
 })
 
 #-------------------------------------------------------------------------------
-# algorithm ordering/labels are a superset across both datasets -- 'brute' only
-# ever appears in SIFT data, ordered_algos() below filters to what's present.
-
-ALGO_ORDER = [
-    'lemma1', 'lemma1_no_union',
-    'lemma2', 'lemma2_no_union',
-    'combined',
-    'brute',
-]
-
-ALGO_LABELS = {
-    'lemma1':            'CIG',
-    'lemma1_no_union':   'CIG (no union)',
-    'lemma2':            'HGG',
-    'lemma2_no_union':   'HGG (no union)',
-    'combined':          'Combined',
-    'brute':             'Brute Force',
-}
 
 NO_UNION_ALGOS: Set[str] = {'lemma1_no_union', 'lemma2_no_union'}
 
 #-------------------------------------------------------------------------------
-# ESCI benchmark name parsing -- SIFT has no "sets" concept, so parse_name_fn
-# is None for SIFT and these helpers are simply unused for that dataset.
+# ESCI benchmark name parsing, unused for SIFT
 
 _BENCH_RE = re.compile(r'esci_c(\d+)k(\d+)_t(\d+)n(\d+)_s(\d+)')
 
@@ -95,31 +81,6 @@ def algo_palette(algos) -> Dict[str, tuple]:
     colors = sns.color_palette('tab10', len(ordered))
     return {a: c for a, c in zip(ordered, colors)}
 
-def lbl(algo: str) -> str:
-    return ALGO_LABELS.get(algo, algo)
-
-def lbls(algos) -> List[str]:
-    return [lbl(a) for a in algos]
-
-def cap_metric(m: str) -> str:
-    return m.title()
-
-def cap_metrics(metrics) -> List[str]:
-    return [cap_metric(m) for m in metrics]
-
-def save_fig(fig: plt.Figure, path: Path, name: str):
-    path.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path / name, dpi=200, bbox_inches='tight')
-    plt.close(fig)
-    print(f"  {name}")
-
-def pct_fmt(ax, axis='y'):
-    formatter = mticker.FuncFormatter(lambda v, _: f'{v:.0%}')
-    if axis == 'y':
-        ax.yaxis.set_major_formatter(formatter)
-    else:
-        ax.xaxis.set_major_formatter(formatter)
-
 def _set_cache_size_xaxis(ax, cache_sizes):
     """Log2 x-axis for cache size plots - ticks show actual cache size values."""
     ax.set_xscale('log', base=2)
@@ -155,20 +116,10 @@ def _left_cbar_fig(n_rows, n_cols, cmap, vmin, vmax, cbar_label,
 #-------------------------------------------------------------------------------
 # data loading
 
-def load_summaries(raw_dir: str) -> List[Dict]:
-    raw_path = Path(raw_dir)
-    summaries = []
-    for p in sorted(raw_path.glob('*/summary.json')):
-        with open(p) as f:
-            summaries.append(json.load(f))
-    print(f"Loaded {len(summaries)} benchmark summaries")
-    return summaries
-
 def build_summary_df(summaries: List[Dict], parse_name_fn=None) -> pd.DataFrame:
     """
     parse_name_fn: optional callable(name) -> dict with 'num_test'/'seed' keys,
     used to classify ESCI benchmarks into set2/set3 and to expose the seed.
-    None for SIFT, which has no "sets" concept.
     """
     rows = []
     for ds in summaries:
@@ -240,8 +191,7 @@ def _get_agg(a_sub: pd.DataFrame, value_col: str,
              group_vals: list, group_col: str):
     """Average value_col per benchmark (seed isolation), then mean +/- std across seeds.
 
-    Groups by 'dataset' (the full benchmark directory name) to isolate seeds --
-    each unique 'dataset' corresponds to exactly one seed's run, so this is
+    Groups by 'dataset' (the full benchmark directory name) to isolate seeds so this is
     equivalent to grouping by config_key for either dataset.
 
     Returns (ys, errs) aligned to group_vals; NaN for missing values, 0 for missing std.
@@ -817,7 +767,7 @@ def analyze(dataset: str, raw_dir: str, output_dir: str):
     print(f"Output dir: {output_path}")
     print()
 
-    summaries = load_summaries(str(raw_path))
+    summaries = load_summaries(str(raw_path), kind='benchmark summaries')
     if not summaries:
         print("No summaries found. Exiting.")
         return
