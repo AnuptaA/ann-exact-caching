@@ -19,7 +19,6 @@ from .lemmas import (
     lemma2_no_union
 )
 from .lemmas_sigma import (
-    lemma1_sigma,
     lemma1_no_union_sigma,
     lemma2_no_union_sigma,
     fit_r_t_hat,
@@ -52,7 +51,6 @@ __all__ = [
     'binary_search_last_index',
     'lemma1_no_union',
     'lemma2_no_union',
-    'lemma1_sigma',
     'lemma1_no_union_sigma',
     'lemma2_no_union_sigma',
     'fit_r_t_hat',

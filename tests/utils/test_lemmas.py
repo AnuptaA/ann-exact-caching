@@ -18,10 +18,10 @@ from utils.base import (
     lemma2_no_union
 )
 from utils.base.lemmas_sigma import (
-    lemma1_sigma, lemma1_no_union_sigma, lemma2_no_union_sigma,
+    lemma1_no_union_sigma, lemma2_no_union_sigma,
     fit_r_t_hat, overlap_threshold_hit_policy,
     _chord_distance_from_angular_scalar, _chord_distance_from_angular_array,
-    _solid_ball_intersection_fraction_scalar, _solid_ball_intersection_fraction_array,
+    _solid_ball_intersection_fraction_array,
 )
 
 #-------------------------------------------------------------------------------
@@ -333,228 +333,6 @@ def _angular_dist(a, b):
     cos = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
     return float(np.arccos(np.clip(cos, -1.0, 1.0))) / math.pi
 
-
-def test_sigma_one_matches_exact():
-    """sigma=1.0 should give the same hit/miss result as lemma1_circular_inclusion."""
-    print("Test: sigma=1.0 matches exact lemma")
-    rng = np.random.RandomState(0)
-    dim = 16
-    N = 5
-
-    cache = KVCache(metric='angular')
-    query, _, r_Q = _make_cache_entry_sigma(cache, N, dim, rng)
-
-    # Use the same query as test -- guaranteed hit.
-    entries = cache.get_all_entries()
-    _, is_hit_exact, _ = lemma1_circular_inclusion(query, entries, N, metric='angular')
-    _, is_hit_sigma, _ = lemma1_sigma(query, entries, N, sigma=1.0, metric='angular')
-    assert is_hit_exact == is_hit_sigma, (
-        f"sigma=1.0 hit={is_hit_sigma} but exact={is_hit_exact}"
-    )
-    print("  OK: sigma=1.0 agrees with exact lemma")
-
-
-def test_sigma_relaxed_hits_when_exact_misses():
-    """sigma=0.7 hits when 7/10 certified; sigma=1.0 misses.
-
-    Uses angular distance directly. We place cache query Q = e_0, test query
-    q = e_1. Vectors close to q have small D(q, v_i), vectors far from q
-    have D(q, v_i) near pi/2. We set r_Q so that D(q, v_i) + D(q, Q) < r_Q
-    for exactly 7 vectors.
-    """
-    print("Test: sigma=0.70 hits where sigma=1.0 misses")
-    dim = 64
-    N = 10
-
-    # Q and q are orthogonal: D(q, Q) = pi/2
-    Q = np.zeros(dim, dtype=np.float32)
-    Q[0] = 1.0
-    q = np.zeros(dim, dtype=np.float32)
-    q[1] = 1.0
-
-    d_qQ = _angular_dist(q, Q)  # = pi/2 ~ 1.5708
-
-    # 7 vectors very close to q: D(q, v_i) ~ eps_close
-    rng = np.random.RandomState(1)
-    close_vecs = []
-    for _ in range(7):
-        v = q.copy()
-        noise = rng.randn(dim).astype(np.float32) * 0.001
-        v = v + noise
-        v /= np.linalg.norm(v)
-        close_vecs.append(v)
-
-    far_vecs = []
-    for _ in range(3):
-        # Vectors near Q (far from q)
-        v = Q.copy()
-        noise = rng.randn(dim).astype(np.float32) * 0.001
-        v = v + noise
-        v /= np.linalg.norm(v)
-        far_vecs.append(v)
-
-    d_close_max = max(_angular_dist(q, v) for v in close_vecs)
-    d_far_min = min(_angular_dist(q, v) for v in far_vecs)
-
-    # CIG certifies v iff D(q, v) + D(q, Q) < r_Q
-    # We need r_Q > d_close_max + d_qQ  AND  r_Q <= d_far_min + d_qQ
-    thresh_lo = d_close_max + d_qQ
-    thresh_hi = d_far_min + d_qQ
-
-    if thresh_lo >= thresh_hi:
-        # Geometry too tight; fall back to a synthetic assertion.
-        print(f"  SKIP: geometry too tight (lo={thresh_lo:.4f}, hi={thresh_hi:.4f})")
-        return
-
-    r_Q = (thresh_lo + thresh_hi) / 2.0
-    all_vectors = close_vecs + far_vecs
-    indices = list(range(N))
-
-    cache = KVCache(metric='angular')
-    cache.add_entry(Q, all_vectors, r_Q, 0.0, indices)
-    entries = cache.get_all_entries()
-
-    _, is_hit_exact, _ = lemma1_circular_inclusion(q, entries, N, metric='angular')
-    _, is_hit_07, meta_07 = lemma1_sigma(q, entries, N, sigma=0.70, metric='angular')
-
-    n_certified = len(meta_07.get('certified_indices', []))
-    threshold_07 = math.ceil(0.70 * N)
-    print(f"  certified={n_certified}  threshold@0.7={threshold_07}  exact_hit={is_hit_exact}  sigma0.7_hit={is_hit_07}")
-    assert n_certified >= threshold_07, f"certified {n_certified} < threshold {threshold_07}"
-    assert is_hit_07, "sigma=0.7 should be a hit when >= ceil(0.7*N) certified"
-    assert not is_hit_exact, "sigma=1.0 should miss (only 7/10 certified)"
-    print("  OK")
-
-
-def test_sigma_certified_indices_always_present():
-    """certified_indices must appear in metadata on both hit and miss paths."""
-    print("Test: certified_indices always in metadata")
-    rng = np.random.RandomState(2)
-    dim = 8
-    N = 5
-
-    cache = KVCache(metric='angular')
-    query, _, _ = _make_cache_entry_sigma(cache, N, dim, rng)
-    entries = cache.get_all_entries()
-
-    # Hit path (query == cache query)
-    _, is_hit, meta = lemma1_sigma(query, entries, N, sigma=1.0, metric='angular')
-    assert 'certified_indices' in meta, "certified_indices missing on hit path"
-    assert isinstance(meta['certified_indices'], list)
-
-    # Miss path: use a random query far from cache
-    cache_miss = KVCache(metric='angular')
-    q0 = np.array([1.0] + [0.0] * (dim - 1), dtype=np.float32)
-    v0 = np.array([0.99, 0.01] + [0.0] * (dim - 2), dtype=np.float32)
-    v0 /= np.linalg.norm(v0)
-    cache_miss.add_entry(q0, [v0], r_Q=0.001, half_gap=0.0, top_k_indices=[0])
-    entries_miss = cache_miss.get_all_entries()
-
-    q_far = np.array([0.0, 1.0] + [0.0] * (dim - 2), dtype=np.float32)
-    _, is_hit_miss, meta_miss = lemma1_sigma(q_far, entries_miss, N=5, sigma=1.0, metric='angular')
-    assert not is_hit_miss, "expected a miss"
-    assert 'certified_indices' in meta_miss, "certified_indices missing on miss path"
-    print("  OK: certified_indices present on both paths")
-
-
-def test_sigma_metadata_fields():
-    """metadata must contain sigma, threshold, and algorithm='lemma1'."""
-    print("Test: sigma metadata fields")
-    rng = np.random.RandomState(3)
-    dim = 8
-    N = 4
-    sigma = 0.75
-
-    cache = KVCache(metric='angular')
-    query, _, _ = _make_cache_entry_sigma(cache, N, dim, rng)
-    entries = cache.get_all_entries()
-
-    _, _, meta = lemma1_sigma(query, entries, N, sigma=sigma, metric='angular')
-    assert meta['algorithm'] == 'lemma1', f"expected 'lemma1', got {meta['algorithm']}"
-    assert meta['sigma'] == sigma, f"sigma mismatch: {meta['sigma']}"
-    assert meta['threshold'] == math.ceil(sigma * N), f"threshold wrong: {meta['threshold']}"
-    print(f"  OK: algorithm={meta['algorithm']}, sigma={meta['sigma']}, threshold={meta['threshold']}")
-
-
-def test_sigma_certified_indices_subset_of_top_k_indices():
-    """certified_indices must only contain values from the entry's top_k_indices.
-
-    This verifies that the index space is consistent: certified_indices are local
-    base indices drawn from top_k_indices, not some other index scheme.
-    """
-    print("Test: certified_indices subset of top_k_indices")
-    rng = np.random.RandomState(4)
-    dim = 16
-    N = 6
-
-    # Assign arbitrary but known local base indices to the cached vectors.
-    base_indices = [100, 201, 302, 403, 504, 605]
-
-    query = rng.randn(dim).astype(np.float32)
-    query /= np.linalg.norm(query)
-    vectors = []
-    for _ in range(N):
-        v = query + rng.randn(dim).astype(np.float32) * 0.01
-        v /= np.linalg.norm(v)
-        vectors.append(v)
-
-    cache = KVCache(metric='angular')
-    cache.add_entry(query, vectors, r_Q=0.1, half_gap=0.0, top_k_indices=base_indices)
-    entries = cache.get_all_entries()
-
-    _, is_hit, meta = lemma1_sigma(query, entries, N, sigma=1.0, metric='angular')
-    assert is_hit, "expected a hit when query == cache query"
-
-    certified = meta.get('certified_indices', [])
-    assert len(certified) > 0, "certified_indices should be non-empty on hit"
-    for idx in certified:
-        assert idx in base_indices, (
-            f"certified index {idx} not in top_k_indices {base_indices}"
-        )
-    print(f"  OK: certified={certified}, all in {base_indices}")
-
-
-def test_sigma_certified_indices_match_true_gt_when_cig_holds():
-    """When CIG condition holds, certified_indices match the true K-NN indices.
-
-    Constructs a cache entry whose top_k_vectors ARE q's true K-NN (same query).
-    Confirms that certified_indices == top_k_indices (all K certified, all true NN).
-    """
-    print("Test: certified_indices match true GT when CIG holds")
-    rng = np.random.RandomState(5)
-    dim = 16
-    N = 5
-
-    # Use same vector as query and cache query so CIG trivially holds.
-    query = rng.randn(dim).astype(np.float32)
-    query /= np.linalg.norm(query)
-
-    # true K-NN indices (simulated as known local base indices)
-    true_indices = [10, 20, 30, 40, 50]
-    vectors = []
-    for _ in range(N):
-        v = query + rng.randn(dim).astype(np.float32) * 0.005
-        v /= np.linalg.norm(v)
-        vectors.append(v)
-
-    cache = KVCache(metric='angular')
-    cache.add_entry(query, vectors, r_Q=0.1, half_gap=0.0, top_k_indices=true_indices)
-    entries = cache.get_all_entries()
-
-    for sigma in [0.70, 0.80, 1.00]:
-        _, is_hit, meta = lemma1_sigma(query, entries, N, sigma=sigma, metric='angular')
-        assert is_hit, f"sigma={sigma}: expected hit"
-        certified = set(meta.get('certified_indices', []))
-        true_set = set(true_indices)
-        # All certified must be true K-NN indices.
-        assert certified <= true_set, (
-            f"sigma={sigma}: certified {certified} not subset of true GT {true_set}"
-        )
-        recall = len(certified & true_set) / N
-        assert recall >= sigma, (
-            f"sigma={sigma}: recall={recall:.2%} < sigma"
-        )
-        print(f"  sigma={sigma:.2f}: certified={sorted(certified)}  recall={recall:.2%}  OK")
 
 #-------------------------------------------------------------------------------
 # sigma-relaxed no-union variants (canonical algorithms going forward) --
@@ -1233,33 +1011,6 @@ def test_overlap_threshold_miss_below_threshold():
     print("  OK: far-apart query/entry misses")
 
 
-def test_solid_ball_intersection_fraction_array_matches_scalar():
-    """Parity test for the vectorized scoring path: the array-native
-    _solid_ball_intersection_fraction_array must be bit-identical to
-    calling the scalar version once per element, across random inputs
-    that exercise every branch (zero, one, ratio, degenerate, general)."""
-    print("Test: vectorized intersection fraction matches scalar elementwise")
-    rng = np.random.RandomState(3)
-    n = 12
-
-    dists = np.concatenate([
-        rng.uniform(0.0, 2.0, size=200),
-        np.zeros(10),                  # degenerate branch
-        np.full(10, 1e-13),            # degenerate branch (just under 1e-12)
-    ])
-    R1s = rng.uniform(0.01, 1.5, size=len(dists))
-    R2 = 0.7
-
-    expected = np.array([
-        _solid_ball_intersection_fraction_scalar(float(d), float(r1), R2, n)
-        for d, r1 in zip(dists, R1s)
-    ])
-    actual = _solid_ball_intersection_fraction_array(dists, R1s, R2, n)
-
-    np.testing.assert_array_equal(actual, expected)
-    print("  OK: vectorized and scalar intersection fraction agree exactly")
-
-
 def test_chord_distance_array_matches_scalar():
     rng = np.random.RandomState(4)
     r = rng.uniform(0.0, 1.0, size=50)
@@ -1299,7 +1050,9 @@ def test_overlap_threshold_vectorized_matches_unvectorized_scoring():
             D = float(np.arccos(np.clip(np.dot(q_hat, e_hat), -1.0, 1.0)) / np.pi)
             R1 = _chord_distance_from_angular_scalar(entry.r_Q)
             dist = _chord_distance_from_angular_scalar(D)
-            score = _solid_ball_intersection_fraction_scalar(dist, R1, R2, dim)
+            score = float(_solid_ball_intersection_fraction_array(
+                np.array([dist]), np.array([R1]), R2, dim,
+            )[0])
             if score > best_score_manual:
                 best_score_manual, best_idx_manual = score, i
 
@@ -1357,12 +1110,6 @@ if __name__ == "__main__":
     test_n_greater_than_k()
     test_lemma1_no_union()
     test_lemma2_no_union()
-    test_sigma_one_matches_exact()
-    test_sigma_relaxed_hits_when_exact_misses()
-    test_sigma_certified_indices_always_present()
-    test_sigma_metadata_fields()
-    test_sigma_certified_indices_subset_of_top_k_indices()
-    test_sigma_certified_indices_match_true_gt_when_cig_holds()
     test_lemma1_no_union_sigma_one_matches_exact()
     test_lemma1_no_union_sigma_relaxes_threshold()
     test_lemma2_no_union_sigma_one_matches_exact()
@@ -1378,7 +1125,6 @@ if __name__ == "__main__":
     test_overlap_threshold_hit_on_identical_query()
     test_overlap_threshold_result_sorted_by_true_distance()
     test_overlap_threshold_miss_below_threshold()
-    test_solid_ball_intersection_fraction_array_matches_scalar()
     test_chord_distance_array_matches_scalar()
     test_overlap_threshold_vectorized_matches_unvectorized_scoring()
     test_overlap_threshold_precomputed_r_c_matches_default()

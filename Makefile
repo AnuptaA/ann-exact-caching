@@ -27,7 +27,7 @@ RUN_LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 .PHONY: population-proposal-analyze population-proposal
 .PHONY: esci-population-ball-exact sift-population-ball-exact
 .PHONY: population-proposal-exact
-.PHONY: debug-ball-geometry debug-trajectory debug-sigma-sensitivity debug-distance-concentration debug-vector-coverage debug-population
+.PHONY: debug-ball-geometry debug-sigma-sensitivity debug-distance-concentration debug-population
 .PHONY: analyze-hit-policy
 .PHONY: collect-intersection-fraction collect-overlap-threshold
 .PHONY: dataset-characterize full-pipeline
@@ -49,9 +49,8 @@ help:
 	@echo "              population-proposal"
 	@echo "              population-proposal-exact  (sigma=1.0 only)"
 	@echo "              {esci,sift}-population-ball[-exact]"
-	@echo "              debug-population       (ball-geometry + trajectory + sigma-sensitivity + distance-concentration diagnostics)"
-	@echo "              debug-ball-geometry | debug-trajectory | debug-sigma-sensitivity | debug-distance-concentration"
-	@echo "              debug-vector-coverage  (standalone: coverage ceiling vs actual hit rate, sigma=1.0 only)"
+	@echo "              debug-population       (ball-geometry + sigma-sensitivity + distance-concentration diagnostics)"
+	@echo "              debug-ball-geometry | debug-sigma-sensitivity | debug-distance-concentration"
 	@echo "              collect-intersection-fraction | collect-overlap-threshold"
 	@echo "Characterize: dataset-characterize  (query-clustering ratio benchmark)"
 	@echo "              full-pipeline         (dataset-characterize then population)"
@@ -138,7 +137,7 @@ population-proposal-analyze: debug-distance-concentration
 	$(PYTHON) simulations/pdf/compile_proposal.py
 
 population-proposal: esci-population-ball sift-population-ball \
-                     debug-ball-geometry debug-trajectory \
+                     debug-ball-geometry \
                      population-proposal-analyze
 
 # ── Exact (sigma=1.0, no sweep) population runs ───────────────────────────────
@@ -152,7 +151,7 @@ sift-population-ball-exact: sift-population-prepare
 population-proposal-exact: esci-population-ball-exact sift-population-ball-exact \
                            population-proposal-analyze
 
-# ── Population debug diagnostics (Phase 3 Round 14) ───────────────────────────
+# ── Population debug diagnostics ──────────────────────────────────────────────
 # Standalone: call propose_candidates_ball/select_candidates directly against
 # already-prepared benchmark data, no changes to population_runner.py/
 # selection.py. See docs/POPULATION_DESIGN.md.
@@ -160,10 +159,6 @@ population-proposal-exact: esci-population-ball-exact sift-population-ball-exact
 debug-ball-geometry:
 	@mkdir -p $(LOGDIR)
 	set -o pipefail; $(PYTHON) simulations/population/debug_ball_geometry.py 2>&1 | tee $(LOGDIR)/debug-ball-geometry_$(RUN_LOG_TS).log
-
-debug-trajectory:
-	@mkdir -p $(LOGDIR)
-	set -o pipefail; $(PYTHON) simulations/population/debug_trajectory.py 2>&1 | tee $(LOGDIR)/debug-trajectory_$(RUN_LOG_TS).log
 
 debug-sigma-sensitivity:
 	@mkdir -p $(LOGDIR)
@@ -173,11 +168,7 @@ debug-distance-concentration:
 	@mkdir -p $(LOGDIR)
 	set -o pipefail; $(PYTHON) simulations/population/debug_distance_concentration.py 2>&1 | tee $(LOGDIR)/debug-distance-concentration_$(RUN_LOG_TS).log
 
-debug-vector-coverage:
-	@mkdir -p $(LOGDIR)
-	set -o pipefail; $(PYTHON) simulations/population/debug_vector_coverage.py 2>&1 | tee $(LOGDIR)/debug-vector-coverage_$(RUN_LOG_TS).log
-
-debug-population: debug-ball-geometry debug-trajectory debug-sigma-sensitivity debug-distance-concentration debug-vector-coverage
+debug-population: debug-ball-geometry debug-sigma-sensitivity debug-distance-concentration
 
 # ── Combined hit-policy analysis ──────────────────────────────────────────────
 
