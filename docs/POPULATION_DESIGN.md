@@ -1,51 +1,37 @@
-# Population Pipeline: Design, Theory, and Test Coverage
+# Population Pipeline: Design and Theory
 
-This is a deep-dive reference for the "population" side of the codebase --
-given a query budget, which candidate cache entries should be materialized to
-maximize certified hit coverage. It complements `docs/CODEBASE_OVERVIEW.md`
-(repo-wide map) and `docs/KNOWN_ISSUES.md` (open items) with detail specific
-to population: the theory behind each design choice, the implementation
-quirks that theory produces, and what's actually tested.
-
-Every claim below is either a direct quote/paraphrase of a comment or
-docstring already in the code, or is marked with an inline callout like the
-one below when it's *my* reading of why something is designed the way it is,
-rather than something the code states outright. Please read those callouts
-critically -- confirming or correcting them is the point of this document.
-
-> **My understanding (please confirm):** this is the format every inferred
-> claim uses in this doc.
+Deep-dive reference for the population side of the codebase: given a query
+budget, which candidate cache entries should be materialized to maximize
+certified hit coverage. Complements `docs/CODEBASE_OVERVIEW.md` (repo-wide
+map) and `docs/KNOWN_ISSUES.md` (open items).
 
 ## 1. Pipeline overview
 
 Four stages, always in this order, implemented once in
-`simulations/population/population_runner.py::run_population_benchmark` and
-shared by every entry point (`run_population.py`'s CLI sweep, the profiling
-scripts, and the e2e tests):
+`simulations/population/population_runner.py::run_population_benchmark`:
 
 ```
-propose_candidates_*  ->  select_candidates  ->  KVCache.add_entry (x N)  ->  CacheSimulator.run_query (oracle + non_oracle, per sigma)
-   (population.py)         (selection.py)         (kv_cache.py)                (simulate.py, via lemmas_sigma.py)
+propose_candidates_*  ->  select_candidates  ->  KVCache.add_entry (xN)  ->  CacheSimulator.run_query
+   (population.py)         (selection.py)         (kv_cache.py)              (simulate.py, via lemmas_sigma.py)
 ```
 
 1. **Propose**: given the cache/train queries and their true top-K ground
-   truth, produce a large pool of `CandidateEntry` objects -- each one a
-   candidate cache center (a query) plus a radius `r_c` and the *complete*
-   set `R_c` of base vectors within that radius.
+   truth, produce a pool of `CandidateEntry` objects, each a candidate cache
+   center (a query) plus a radius `r_c` and the complete set `R_c` of base
+   vectors within that radius.
 2. **Select**: given a memory budget `B` (in base-vector count) and a
    strategy, greedily choose a subset of candidates that fits `B` while
    maximizing certified query coverage.
-3. **Build**: materialize the selected candidates into a `KVCache` (one
-   `CacheEntry` per selected candidate).
+3. **Build**: materialize the selected candidates into a `KVCache`.
 4. **Simulate**: run `CacheSimulator.run_query` for every query in two modes
    (oracle against the cache's own queries, non_oracle against held-out test
-   queries), at every requested `sigma`, recording hit rate and recall.
+   queries), at every requested sigma, recording hit rate and recall.
 
 ## 2. Shared certification theory (CIG, HGG, sigma relaxation)
 
-This theory isn't population-specific -- it's shared with the hit-policy
-pipeline -- but population's proposal/selection stages are built entirely
-around producing candidates that satisfy it, so it has to be understood first.
+This theory is shared with the hit-policy pipeline, but population's
+proposal and selection stages are built entirely around producing candidates
+that satisfy it.
 
 ### CIG (Circular Inclusion Guarantee)
 
@@ -56,944 +42,534 @@ certified correct without touching the database if:
 D(q, v) <= r_Q - D(Q, q)
 ```
 
-**Why this is sound (triangle inequality):** for any vector `v`,
-`D(Q, v) <= D(Q, q) + D(q, v)`. If `D(q,v) <= r_Q - D(Q,q)`, then
-`D(Q,v) <= D(Q,q) + (r_Q - D(Q,q)) = r_Q`. Since `r_Q` is exactly the
-distance from `Q` to its K-th (farthest) cached neighbor, anything within
-`r_Q` of `Q` is guaranteed to already be in `R_Q` (or closer) -- so `v` is
-certified to be one of `q`'s true nearest neighbors without any distance
-computation against the rest of the database.
-
-Implementation (`utils/base/lemmas.py::lemma1_no_union`, algorithm 2, the
-canonical "no-union" CIG): an "O1 gate" first checks `d_Q <= r_Q` (if
-`d_Q > r_Q`, no vector can possibly satisfy the CIG inequality since
-distances are non-negative -- skip the entry entirely without touching its
-vectors), then a direct threshold mask:
-
-```python
-threshold_dist = r_Q - d_Q
-passing = np.where(distances_to_q <= threshold_dist)[0]
-if len(passing) >= N:
-    ...  # certified hit
-```
-
-### Binary search removal
-
-`utils/base/lemmas.py:75-95` still defines `binary_search_last_index`, but
-its own docstring says plainly: "Kept for backward compatibility / tests.
-The hot-path lemma functions use a direct threshold mask (`np.where`)
-instead of sorting + binary search."
-
-The old approach relied on distances being pre-sorted, so that
-`sorted_distances[mid] + d_q < r_Q` is monotonic and a binary search can find
-the cutoff index in `O(log n)`. The replacement,
-`passing = np.where(distances_to_q <= threshold_dist)[0]` (used identically
-at `lemmas.py:217, 292, 549`), instead vectorizes the membership test across
-*all* candidate distances in a single NumPy comparison.
-
-> **My understanding (please confirm):** this trade `O(log n)` binary search
-> for `O(n)` vectorized comparison because the hot path checks *every*
-> candidate vector in a cache entry against the threshold anyway (there's no
-> large pre-sorted structure to search *into* -- you'd have to sort first,
-> which is `O(n log n)`), and a NumPy vectorized pass over `n` elements is
-> faster in wall-clock than a Python-level binary search loop making `O(log
-> n)` individually-interpreted comparisons, since each Python-level
-> comparison pays interpreter overhead that a single vectorized comparison
-> amortizes away. Only the *count* of `passing` elements is needed to decide
-> if the threshold `N` is met; a second `np.argsort` still runs afterward,
-> but only over the (typically much smaller) `passing` subset, to pick the
-> closest `N` for the actual returned result -- so sorting cost moved from
-> "sort everything up front" to "sort only the certified subset, only when
-> there's a hit."
+By the triangle inequality, `D(Q, v) <= D(Q, q) + D(q, v)`. If the condition
+holds, `D(Q, v) <= r_Q`, and since `r_Q` is the distance from `Q` to its K-th
+(farthest) cached neighbor, anything within `r_Q` of `Q` is already in `R_Q`
+(or closer). Implementation
+(`utils/base/lemmas.py::lemma1_no_union`): an O1 gate checks `d_Q <= r_Q`
+first (distances are non-negative, so no vector can satisfy the inequality
+otherwise), then a direct threshold mask,
+`passing = np.where(distances_to_q <= r_Q - d_Q)[0]`, replaces the older
+sorted-plus-binary-search approach (`binary_search_last_index`, kept for
+backward compatibility but no longer on the hot path).
 
 ### HGG (Half-Gap Guarantee)
 
 If `D(Q, q) < half_gap` (half the gap between the K-th and (K+1)-th true
-neighbor of `Q`), the entry's *entire* cached top-K is guaranteed to equal
-`q`'s own top-K exactly -- zero per-vector distance computation, but
-all-or-nothing on the full `K` (`utils/base/lemmas.py::lemma2_no_union`,
-algorithm 4):
+neighbor of `Q`), the entry's entire cached top-K is guaranteed to equal
+`q`'s own top-K exactly (`utils/base/lemmas.py::lemma2_no_union`). Any base
+vector outside `Q`'s true top-K is at least `2*half_gap` farther from `Q`
+than the K-th vector; a query move of less than `half_gap` can't perturb
+distances enough to let an outside vector become closer to `q` than an
+inside one was to `Q`.
 
-```python
-if d_Q < half_gap and len(R_Q) >= N:
-    ...  # entire cached top-N returned, certified correct
-```
+### No-union vs. union variants
 
-> **My understanding (please confirm):** the margin absorbs the maximum
-> possible top-K reordering caused by moving the query point from `Q` to
-> `q`. Any base vector *outside* Q's true top-K is at least `2*half_gap`
-> farther from `Q` than the K-th vector (that's the definition of
-> `half_gap`: half the gap to the (K+1)-th neighbor). If `q` is within
-> `half_gap` of `Q`, the worst-case perturbation to any distance is
-> `+/- half_gap`, which isn't enough to let an outside vector become closer
-> to `q` than an inside one was to `Q` -- so the ordering of the top-K is
-> provably preserved between `Q` and `q`.
+Both guarantees above are single-cache-entry ("no-union") checks: one entry
+alone must supply the full `N` results. Union variants
+(`lemma1_circular_inclusion`, `lemma2_half_gap`, `combined_algorithm`)
+accumulate results across multiple entries and remain importable, but
+`CacheSimulator.run_query` only dispatches `"brute"`, `"lemma1_no_union"`,
+`"lemma2_no_union"`, and `"overlap_threshold"`; any other algorithm string
+raises `ValueError`.
 
-### No-union vs. deprecated union variants
+### Sigma-relaxed no-union variants
 
-Both CIG and HGG above are **single-cache-entry ("no-union")** guarantees:
-one entry alone must supply the full `N` results. Union variants exist in
-`lemmas.py` (`lemma1_circular_inclusion` -- "algorithm 1: CIG with union",
-`lemma2_half_gap` -- "algorithm 3: HGG with union", `combined_algorithm` --
-"algorithm 5: combined with union") and accumulate results across *multiple*
-cache entries until `len(R_q) >= N`. They're not deleted, but
-`simulations/core/simulate.py` deprecates them one layer up: their imports
-and dispatch `elif` branches are commented out, e.g.:
+`utils/base/lemmas_sigma.py` relaxes the certification threshold from the
+full `N` to `ceil(sigma * N)`. `sigma=1.0` is behaviorally identical to the
+plain no-union functions. `CacheSimulator.run_query` always routes
+`"lemma1_no_union"` / `"lemma2_no_union"` through the sigma-aware versions,
+never the plain `lemmas.py` functions, so a sigma sweep needs no branching
+in the simulate call itself: it's the same code path at every sigma value.
 
-```python
-# elif algorithm == "lemma1":
-#     # deprecated: union-based CIG. lemma1_sigma(sigma=1.0) is
-#     # mathematically identical to lemma1_circular_inclusion.
-#     result, is_hit, metadata = lemma1_sigma(...)
-```
+### Containment mode (K=0)
 
-Calling `run_query` with `algorithm in {"lemma1", "lemma2", "combined"}`
-today falls through to `raise ValueError(f"Unknown algorithm: {algorithm}")`
--- they're unreachable via the simulator. Only `"brute"`, `"lemma1_no_union"`,
-and `"lemma2_no_union"` are live dispatch targets. Population's own
-`run_population.py` only ever uses `ALGORITHMS = ['lemma1_no_union']`.
+`threshold = ceil(sigma * N)` is `0` at `N=0`. The existing structure
+(O1 gate, then `len(passing) >= threshold`) already reduces correctly to
+"hit iff contained" once `N=0` reaches it. The real fix was letting `N=0`
+reach the check at all: `population_runner.py`'s simulate-K used to clamp to
+`max(K, 1)` because a mean-recall accumulation divides by `K`. The fix is a
+guard (`if K > 0: recall_sum += ...`), not a clamp, so `mean_recall` stays at
+its default (0.0, meaning "not computed") for K=0 runs instead of dividing by
+zero.
 
-### Sigma-relaxed no-union variants (always in the dispatch path)
-
-`utils/base/lemmas_sigma.py` defines `lemma1_no_union_sigma` and
-`lemma2_no_union_sigma`, which relax the certification threshold from the
-full `N` to `ceil(sigma * N)`:
-
-```python
-threshold = math.ceil(sigma * N)
-...
-if len(passing) >= threshold:
-    ...
-```
-
-`sigma=1.0` gives `threshold = ceil(1.0*N) == N`, so this is algebraically
-and behaviorally identical to the exact (non-sigma) functions at the default.
-**Critically, `CacheSimulator.run_query` always routes `"lemma1_no_union"`/
-`"lemma2_no_union"` through these sigma-aware versions** -- it doesn't even
-import the plain functions from `lemmas.py`:
-
-```python
-from utils.base.lemmas_sigma import lemma1_no_union_sigma, lemma2_no_union_sigma
-```
-
-So callers never choose between a sigma and non-sigma entry point; `sigma`
-defaults to `1.0` in `run_query`'s signature and every caller either accepts
-that default or explicitly sweeps it. This is what makes population's
-`--sigma` sweep (Section 6) possible without any branching in the simulate
-call itself -- it's the same code path at every sigma value.
-
-### N=0 (population's containment mode, K_test=0): already correct, no code change needed
-
-`threshold = math.ceil(sigma * N)` is `0` when `N=0`. The existing structure
-of `lemma1_no_union_sigma` -- O1 gate first (`if d_Q > r_Q: continue`),
-*then* `passing = np.where(distances_to_q <= threshold_dist)[0]`, *then*
-`if len(passing) >= threshold` -- already reduces correctly to "hit iff
-contained" at `threshold=0`: `len(passing) >= 0` is always true once an
-entry has passed the O1 containment gate, and the O1 gate already runs
-unconditionally for every entry before this check, so an uncontained entry
-never reaches it. No special-casing was added for this (an earlier draft of
-this round's work proposed one; it was correctly identified as redundant --
-the existing code was already right, once `N=0` was actually allowed to
-reach it).
-
-That "actually allowed to reach it" is the real fix, in
-`population_runner.py:460`:
-
-```python
-sim_K = K  # was: sim_K = max(K, 1)
-```
-
-The old clamp existed because `population_runner.py`'s mean-recall
-accumulation divides by `K` (`recall_sum += len(...) / K`), which would
-raise `ZeroDivisionError` at `K=0` -- not because the CIG algorithm itself
-needed `K>=1`. The fix is a guard, not a clamp:
-
-```python
-if K > 0 and result.certified_indices is not None and test_gt_indices is not None:
-    recall_sum += len(set(result.certified_indices) & true_gt) / K
-    n_hits_with_recall += 1
-```
-
-`mean_recall` simply stays at its existing default (`0.0`, meaning "not
-computed") for K=0 runs, rather than attempting a division that's undefined
-for a zero-size target anyway ("recall against 0 required results" isn't a
-meaningful quantity to average).
-
-## 3. Candidate proposal theory (`utils/base/population.py`)
+## 3. Candidate proposal (`utils/base/population.py`)
 
 ### `CandidateEntry` and the completeness requirement on `R_c`
 
-```python
-@dataclass
-class CandidateEntry:
-    query: np.ndarray
-    r_Q: float
-    alpha: Optional[float]             # None for nested-sphere (ball) proposals
-    r_c: float                         # used as cache radius at hit time
-    R_c: object                        # bool array (len n_base) when store_rc=True, else None
-    rc_size: int                       # R_c.sum(); always set regardless of store_rc
-    covered_train_indices: object      # bool array (len n_train_queries)
-    covered_test_indices: object       # bool array (len n_test_queries)
-    top_k_vectors: List[np.ndarray]
-    top_k_indices: List[int]
-    half_gap: float
-    source_index: Optional[int] = None  # index into observed_queries this candidate was proposed from
-    n: Optional[int] = None             # neighbor rank (1..n_max) this candidate's sphere was built from
-```
+CIG soundness requires the stored set to be the *complete* set of base
+vectors within `r_c`, not just the candidate's nominal top-K. A candidate's
+cached content must be everything within its radius, or the downstream
+distance-threshold check is working against an incomplete set.
 
-`to_cache_entry()`'s own comment states the key soundness constraint
-directly: "CIG soundness requires the stored set to be the COMPLETE set of
-base vectors within `r_c` of the query, i.e. `R_c` -- not the (possibly much
-smaller) top_k set loaded at the eval K." A candidate's cached content must
-be everything within its radius, not just its nominal top-K, or the CIG
-distance-threshold check downstream would be checking against an incomplete
-set and could wrongly reject (or, worse, wrongly accept) a hit.
-
-`to_cache_entry()` also builds an **index-only** `CacheEntry` (`top_k_vectors
-= []`, only `top_k_indices` set) -- the comment explains why: candidates'
-`R_c` sets overlap heavily by construction (nested spheres, see below), so a
-private per-entry vector copy would duplicate the same base vectors across
-many entries. Distance computation instead goes through a shared
-`base_hat`/`base_vectors` matrix passed at hit-check time. A second comment
-notes `R_c`'s indices are stored as a compact `int32` array, not a Python
-list of boxed ints, because at real scale (tens of thousands of entries with
-~44% `R_c` fill over a 50k+ base) the boxed-int list cost ~9x more memory and
-"was a direct contributor to OOM kills at high budgets."
+`to_cache_entry()` builds an index-only `CacheEntry` (`top_k_vectors = []`,
+only `top_k_indices` set): candidates' `R_c` sets overlap heavily by
+construction (nested spheres, below), so a private per-entry vector copy
+would duplicate the same base vectors across many entries. Distance
+computation instead goes through a shared `base_hat`/`base_vectors` matrix
+passed at hit-check time. `R_c`'s indices are stored as a compact `int32`
+array rather than a Python list of boxed ints for the same reason at scale.
 
 ### Generic alpha-scaling proposal
 
-```python
-r_c = alpha * r_Q
-```
-
-`propose_candidates(alpha_values=...)`: the simplest scheme, scaling a
-query's own top-K radius by a constant factor. No triangle-inequality
-construction is used -- coverage is *checked* post-hoc via a CIG mask rather
-than *constructed* to guarantee it. Still supported (`test_e2e_runner_alpha_backward_compat`)
-but not used by the production sweep (`run_population.py` only calls
-`propose_candidates_ball`).
+`propose_candidates(alpha_values=...)`: `r_c = alpha * r_Q`, the simplest
+scheme. Coverage is checked post hoc via a CIG mask rather than constructed
+to guarantee it. Still supported and tested, but not used by the production
+sweep.
 
 ### The nested-sphere family: `propose_candidates_ball` (all K, including K=0)
 
-`propose_candidates_ball` (a standalone `propose_candidates_point` existed
-before Phase 3 Round 12; it was exactly `propose_candidates_ball(K=0)` and
-was removed as redundant once that was fully confirmed) delegates to one
-shared engine, `_propose_nested_spheres`, using **one uniform formula for
-every K, including K=0**:
+Delegates to one shared engine, `_propose_nested_spheres`, using one uniform
+formula for every K:
 
 ```
 r_c(i, n) = D(query_i, neighbor_n) + margin_lookup[neighbor_n]
 ```
 
-where `neighbor_n` is cache query `i`'s n-th nearest *other* cache-query
+where `neighbor_n` is cache query `i`'s n-th nearest other cache-query
 neighbor (`n` ranges `1..n_max`, so `n_max` nested spheres are proposed per
-query, one per neighbor rank -- not just the single nearest). No epsilon
-term -- see "Exactness and the removal of `NUMERICAL_EPS`" below.
+query). `margin_lookup[neighbor_n]` is the distance from `neighbor_n` to its
+own K-th nearest base vector (its own K-ball radius), computed via
+`_precompute_kth_base_dist`; at K=0 this is trivially zero, not a special
+case, just the natural value of the same formula.
 
-**What `margin_lookup[neighbor_n]` physically is**: uniformly, for every K
-including K=0, "distance from `neighbor_n` to its own K-th nearest **base
-vector**" -- the radius of a ball centered on `neighbor_n` containing
-`neighbor_n`'s own K nearest base vectors, computed via
-`_precompute_kth_base_dist`. At K=0 this is trivially `0` (a 0-nearest-base-
-vector ball has no radius) -- not a special substitution, just the natural
-value of the same formula:
-
-```python
-if K == 0:
-    margin_lookup = np.zeros(len(observed_queries), dtype=np.float32)
-else:
-    obs_hat = _normalize(observed_queries.copy())
-    base_hat = _normalize(base_vectors.copy())
-    margin_lookup = _precompute_kth_base_dist(obs_hat, base_hat, K, metric)
-```
-
-**Why the formula is sound for K>=1 (triangle-inequality containment
-argument):** the sphere of radius `r_c` centered at cache query
-`Q = query_i` is sized to *fully contain* `neighbor_n`'s own K-ball. For any
-point `x` with `D(neighbor_n, x) <= margin_lookup[neighbor_n]`:
+**Soundness (K>=1)**: the sphere of radius `r_c` centered at `Q = query_i`
+is sized to fully contain `neighbor_n`'s own K-ball. For any point `x` with
+`D(neighbor_n, x) <= margin_lookup[neighbor_n]`:
 
 ```
 D(Q, x) <= D(Q, neighbor_n) + D(neighbor_n, x) <= D(Q, neighbor_n) + margin_lookup[neighbor_n] = r_c
 ```
 
-So anything within `neighbor_n`'s own K-ball is guaranteed to also be within
-`Q`'s radius `r_c`.
-
-**What this means at K=0, worked through carefully** (this took several
-wrong turns to get right this round -- see the note at the end of this
-section): with `margin_lookup=0`, `r_c(i,n) = D(query_i, neighbor_n)`
-exactly -- the sphere is simply "large enough to reach `neighbor_n`," no
-more. The CIG certification check itself
-(`D(query_i, t) + train_r_t[t] <= r_c` for any query `t`) is unconditionally
-sound for *any* `r_c`, regardless of how it was constructed -- nothing is
-ever wrongly certified. What changes at K=0 is that `train_r_t` (and
-`test_r_t`) are *also* zero in containment mode (see "Containment mode:
-`train_r_t`/`test_r_t` are zero, not the loaded K=1 ground truth" below), so
-the coverage condition collapses to `D(query_i, t) <= r_c` -- pure distance
-containment, with no per-query margin contribution from either side. This
-matches simulate-time behavior exactly: once `sim_K`'s clamp to `>= 1` was
-removed (Section 6), the CIG algorithm's existing O1 gate plus
-`len(passing) >= threshold` logic *already* reduces to "hit iff contained"
-at `threshold=0`, with no code change needed in the lemma itself (Section 2
-covers this).
-
-**Wrong turns this round, worth recording**: I initially proposed keeping
-`margin_lookup = train_r_t` at K=0 (reusing the real, nonzero ground-truth
-K-th-neighbor-query radius, matching what the old standalone
-`propose_candidates_point` did) -- reasoning that simulate-time always
-requires a real neighbor-based certification. That was wrong: it was only
-true because of the `sim_K` clamp forcing `K=1` even in containment mode. I
-also briefly proposed an explicit `if threshold <= 0: <early-return>` branch
-in the CIG algorithm itself -- also unnecessary, since the existing
-`len(passing) >= threshold` check already handles `threshold=0` correctly
-once it's reachable at all.
+**At K=0**: `r_c(i,n) = D(query_i, neighbor_n)` exactly, the sphere reaches
+`neighbor_n` and no farther. The CIG check itself is sound for any `r_c`
+regardless of construction; what changes at K=0 is that `train_r_t`/
+`test_r_t` are also zero (see below), so the coverage condition collapses to
+pure distance containment with no per-query margin.
 
 ### `precompute_ball_invariants`: caching K-independent work across a K-sweep
 
 `_propose_nested_spheres` accepts an optional `invariants` parameter, filled
-by calling `precompute_ball_invariants(observed_queries, train_queries,
-test_queries, base_vectors, metric)` once and reusing it across every K in a
-sweep (e.g. `debug_trajectory.py`'s K in `[0, 1, 5, 10]` per benchmark).
-Every observed query's distance to every base vector / train query / test
-query, and the cache queries' pairwise nearest-neighbor ordering, are
-entirely K-independent (only `margin_lookup` and the K-specific
-`train_r_t`/`test_r_t` depend on K), so recomputing them once per K value was
-pure waste -- profiling found `_base_dists_for_query` alone was 4.1s of a
-12.8s `propose_candidates_ball` call (SIFT c2048/K=5), recomputed on every
-one of 4 swept K values for no reason.
+by `precompute_ball_invariants(...)` once and reused across every K in a
+sweep. Every observed query's distance to every base vector/train
+query/test query, and the cache queries' pairwise nearest-neighbor ordering,
+are K-independent (only `margin_lookup` and the K-specific `train_r_t`/
+`test_r_t` depend on K). The largest held array (`n_cache x n_base`) is
+about 410MB in float32 at the largest real scale in this codebase (c2048,
+n_base=50000), held only for the duration of the caller's K-sweep and only
+by callers that opt in.
 
-The largest held array, `all_dists` (`n_cache x n_base`), is ~410MB in
-float32 at the largest real scale in this codebase (c2048, `n_base=50000`)
--- held only for the duration of the caller's K-sweep, and only by callers
-that opt in; every existing call site that doesn't pass `invariants` is
-unaffected.
+`precompute_ball_invariants` also introduces `_raw_pairwise_dists`, the
+single canonical full-`(n,n)`-matrix helper both `_pairwise_cache_dists`
+(sorted, diagonal masked) and `precompute_ball_invariants` derive from,
+avoiding two independently-computed matrices that could disagree by a few
+ULPs at a certification boundary (see `docs/KNOWN_ISSUES.md`).
 
-`precompute_ball_invariants` also introduces `_raw_pairwise_dists`, a shared
-helper for the full `(n, n)` pairwise distance matrix among a set of
-pre-normalized vectors (diagonal left as the real near-zero self-distance,
-not masked). Both `_pairwise_cache_dists` (which sorts and masks the
-diagonal to `inf`) and `precompute_ball_invariants` (which reuses the raw
-matrix directly as `train_dist_only` when `train_queries is
-observed_queries`, true for every real caller) now derive from this single
-canonical matmul, rather than two independently-rounded ones that could
-disagree by a few ULPs at a certification boundary -- the same class of risk
-discussed in "Exact named-neighbor coverage" below.
+### Containment mode: `train_r_t`/`test_r_t` are zero
 
-### Containment mode: `train_r_t`/`test_r_t` are zero, not the loaded K=1 ground truth
-
-`population_runner.py`'s `_load_benchmark_and_resolve_K`, `k_test_override
-== 0` branch:
-
-```python
-cache_load_K = 1
-obs_r_Q = np.zeros(n_cache, dtype=np.float32)
-test_r_t = np.zeros(n_test, dtype=np.float32)
-```
-
-`obs_r_Q` is passed as *both* `observed_r_Q` and `train_r_t` at the
-`propose_fn` call site (`population_runner.py:399-407`, literally the same
-array both times) -- so zeroing it here zeroes the coverage-formula's
-`train_r_t` too, symmetric with `test_r_t` (which was already zeroed before
-this round). `cache_load_K` stays `1`: cache entries still need real top-1
-ground truth (vectors/half-gaps) for entry construction -- that's unrelated
-to `obs_r_Q`, which (confirmed by tracing every use of
-`CandidateEntry.r_Q`/`observed_r_Q`) has no functional role beyond an
-informational field in `_write_selection_log`'s debug output.
-`to_cache_entry()` builds the real `CacheEntry` from `r_c`, never from
-`observed_r_Q`.
-
-### Exact named-neighbor coverage, and the removal of `NUMERICAL_EPS`
-
-`_propose_nested_spheres` overrides the coverage check for the specific
-`neighbor_n` a sphere was sized around, using `margin_lookup[nn_index]`
-directly (the same value `r_c` was built from) rather than the separately
-recomputed general formula:
-
-```python
-train_covered[nn_index] = nn_dist + float(margin_lookup[nn_index]) <= r_c
-```
-
-Since `r_c = nn_dist + margin_lookup[nn_index]` exactly, this holds by
-construction -- an equality, not a floating-point coincidence -- for
-*every* K uniformly, including K=0. This is what let `NUMERICAL_EPS` be
-removed entirely (it existed in an earlier version of this formula,
-`r_c = ... + NUMERICAL_EPS`): its only real justification was defending
-against the *general* (non-`neighbor_n`) coverage formula recomputing
-`D(query_i, neighbor_n)` via a different code path
-(`_pairwise_cache_dists`'s full pairwise gemm vs. `_base_dists_for_query`'s
-per-query gemv) than the one `r_c` was built from -- a real, measured
-ULP-scale drift (~1e-7), but one that only mattered for the specific
-neighbor a sphere was named after, which the `margin_lookup`-based override
-above now makes exact regardless. Confirmed by a dedicated test
-(`test_named_neighbor_coverage_exact_no_epsilon`) using bit-for-bit
-identical internal values (population.py's own `_pairwise_cache_dists`/
-`_precompute_kth_base_dist`, not an independently re-derived distance), at
-both K=0 and K>=1.
-
-Residual, much narrower floating-point risk still exists in two unrelated
-places that don't have the same clean "reuse the exact value" fix: the
-general coverage formula for queries *other* than the named neighbor (no
-single value they can exactly reuse -- their `D(query_i, t)` is a genuinely
-independent computation with no construction-time counterpart), and the
-`R_c`/base-vector-membership boundary (`all_dists <= r_c`, checked against
-the full base vector set, not a single named target). Both are effectively
-measure-zero for continuous real data (an exact floating-point tie between
-two independently-computed values essentially never happens by chance) --
-not something `NUMERICAL_EPS` was ever comprehensively guarding against
-either, so removing it doesn't introduce a new risk, just stops paying for
-one that was never fully closed.
+`population_runner.py`'s `k_test_override == 0` branch zeroes both
+`obs_r_Q`/`train_r_t` and `test_r_t`. `cache_load_K` stays 1 since cache
+entries still need real top-1 ground truth for entry construction; that's
+unrelated to `obs_r_Q`, which has no functional role beyond an informational
+field in `_write_selection_log`'s debug output.
 
 ### `_precompute_kth_base_dist`'s `k >= 1` guard
 
-```python
-assert k >= 1, f"_precompute_kth_base_dist requires k >= 1, got k={k}"
-```
-
-This exists because `np.partition(d_batch, k-1, axis=1)[:, k-1]` at `k=0`
-becomes `partition(..., -1, ...)`, which extracts the **maximum** distance,
-not zero or any meaningful quantity -- a silent-wrong-answer failure mode if
-this function were ever called with K=0 instead of routing through the
-`margin_lookup = np.zeros(...)` branch above. Guarded loudly rather than
-silently. Tested directly by `test_precompute_kth_base_dist_rejects_k0`.
+`np.partition(d_batch, k-1, axis=1)[:, k-1]` at `k=0` becomes
+`partition(..., -1, ...)`, which extracts the maximum distance, not zero or
+any meaningful quantity. Guarded with an explicit assert rather than left to
+fail silently; K=0 always routes through the `margin_lookup = zeros(...)`
+branch instead.
 
 ### No dominance pruning at proposal time
 
 All `n_max` nested spheres per query are proposed and kept (unless a
 sphere's `covered_train_indices` is empty), even though a smaller sphere for
 the same query is strictly dominated once a larger sphere for that query
-exists in the pool.
+exists in the pool. A strictly-dominated smaller sphere can never win
+`select_candidates`'s newly-covered-per-marginal-cost ratio over the larger
+sphere it's a strict subset of, so pruning is left implicit to selection
+rather than done explicitly at proposal time. This keeps proposal a pure
+"generate everything geometrically valid" stage.
 
-> **My understanding (please confirm):** pruning is left implicit to the
-> selection stage's cost-efficiency scoring rather than done at proposal
-> time -- a strictly-dominated smaller sphere can never win `select_candidates`'
-> `newly-covered / marginal-cost` ratio over the larger sphere it's a strict
-> subset of, so it simply never gets selected, without needing an explicit
-> dominance check in the proposal code. This keeps proposal a pure
-> "generate everything geometrically valid" stage and pushes all trade-off
-> decisions into one place (selection).
-
-### `n_max` constraint
-
-`_propose_nested_spheres` raises `ValueError` if `n_max >= n_cache` -- it
-needs at least `n_max` other cache queries to rank against per query.
-
-## 4. Selection theory (`utils/base/selection.py`)
+## 4. Selection (`utils/base/selection.py`)
 
 `select_candidates(candidates, budget_B, strategy, n_train_queries,
 n_test_queries, seed=42) -> (selected, trajectory)`.
 
-**Budget accounting**: budget `B` is over *base-vector cache footprint*
-(`rc_size` / `R_c`), not candidate count. `_fits_budget` short-circuits via
-`rc_size` (cheapest case: zero overlap with what's already cached) and only
+Budget `B` is over base-vector cache footprint (`rc_size`/`R_c`), not
+candidate count. `_fits_budget` short-circuits via `rc_size` and only
 computes the true marginal `R_c & ~cached_mask` when the cheap check can't
-decide.
-
-**Coverage**: a train (or test) query index `t` is "covered" once any
-selected candidate's `covered_train_indices[t]` (computed at proposal time
-via the CIG condition) is True. Selection maintains a running OR of all
-selected candidates' coverage masks.
-
-**Trajectory**: one dict appended per accepted candidate --
-`{num_entries, vectors_cached, cig_train_coverage, cig_test_coverage,
-new_train_coverage, new_test_coverage}` -- letting downstream analysis plot
-coverage/hit-rate against memory spent incrementally, not just at the final
-budget.
+decide. A train (or test) query is "covered" once any selected candidate's
+`covered_train_indices` for it is True; selection maintains a running OR of
+all selected candidates' coverage masks. One trajectory entry is appended
+per accepted candidate, letting downstream analysis plot coverage/hit-rate
+against memory spent incrementally.
 
 ### The four strategies
 
 1. **`random`**: fixed-seed permutation, single pass, accept iff fits
-   budget. No re-scoring.
-2. **`greedy_naive`**: repeatedly picks the candidate with the most newly-
-   covered train queries, ignoring cost/size entirely.
+   budget.
+2. **`greedy_naive`**: repeatedly picks the candidate with the most
+   newly-covered train queries, ignoring cost entirely.
 3. **`greedy_cost_static`**: scores `newly / static_cost`, where
-   `static_cost = rc_size` -- the candidate's fixed, precomputed total ball
-   size, **not** its marginal cost against the current cache. A candidate
-   whose `R_c` heavily overlaps already-cached vectors is scored as if it
-   still costs its full ball size.
-4. **`greedy_cost`** (the strategy actually used in production,
-   `STRATEGIES = ['greedy_cost']` in `run_population.py`): scores
-   `newly / marginal`, where `marginal` is the *true* incremental cost
-   (`R_c & ~cached_mask`) recomputed as selection proceeds -- classic
-   weighted-set-cover-style benefit-per-unit-marginal-cost greedy.
+   `static_cost = rc_size` is the candidate's fixed total ball size, not its
+   marginal cost against the current cache.
+4. **`greedy_cost`** (production, `STRATEGIES = ['greedy_cost']`): scores
+   `newly / marginal`, where `marginal` is the true incremental cost
+   recomputed as selection proceeds, classic weighted-set-cover-style
+   greedy.
 
 `greedy_cost_static` and `greedy_cost` provably select identically when
-candidates have zero `R_c` overlap (tested directly:
-`test_greedy_cost_static_matches_dynamic_when_no_overlap`), since in that
-case static cost and marginal cost coincide.
+candidates have zero `R_c` overlap, since static and marginal cost coincide
+in that case. `greedy_cost` defers zero-marginal-cost, positive-benefit
+candidates into a separate list, flushed at the end sorted by benefit
+against the final coverage mask, since they're free once anything covering
+them is already cached.
 
-**Zero-marginal-cost candidates**: `greedy_cost` defers candidates with zero
-marginal cost and positive benefit (their `newly/marginal` score would be
-undefined/infinite) into a separate list, flushed at the end sorted by
-benefit against the final coverage mask, added for free since their `R_c` is
-already a subset of what's cached.
+### `greedy_cost`'s incremental delta-update
 
-### `greedy_cost`'s incremental delta-update design
-
-This is the most involved piece of `selection.py`, and its history matters
-for understanding why it looks the way it does. There have been four
-generations of this code:
-
-1. **Original**: `R_c`, `covered_train_indices`, `covered_test_indices` were
-   Python `set`s of ints; the greedy loops did `set` union/difference every
-   iteration -- expensive due to per-element Python object overhead (~28
-   bytes/int).
-2. **`selection_fast.py`** (now deleted from the working tree, recovered from
-   git history for this doc, commit `7685bd5`): replaced sets with a flat
-   numpy bool array for "what's cached" and numpy bool matrices for
-   train/test coverage, plus a CSR-like flat `R_c` structure with
-   `np.add.reduceat` for batched marginal-cost computation. Its own
-   benchmark script (`bench_selection.py`, also deleted) validated exact
-   trajectory-dict equality (to `1e-9`) against the original at every step,
-   for every strategy, and measured speedups of 6.8x-18.3x on synthetic data
-   (documented in the now-deleted `docs/selection_optimization.md`).
-   `selection_fast.py` still recomputed `marginal`/`newly` fully from
-   scratch every iteration via its batched helper -- faster per-recompute,
-   but still `O(|active| * n_base)` per iteration.
-3. **Current `selection.py`**: fully absorbed the fast-path techniques
-   directly (`cached_mask`/`covered_train_mask`/`covered_test_mask` as numpy
-   bool arrays, `CandidateEntry.R_c` itself now a bool array with a cached
-   `rc_size`), **and** added a further optimization beyond even
-   `selection_fast.py`: an incremental delta-update scheme. After picking
-   `best`, rather than recomputing `marginal`/`newly` for all remaining
-   `active` candidates from scratch, it computes exactly the bit positions
-   `best` newly contributed:
+The current implementation represents `cached_mask`/`covered_train_mask`/
+`covered_test_mask` as numpy bool arrays (`CandidateEntry.R_c` itself a bool
+array with a cached `rc_size`), and rather than recomputing `marginal`/
+`newly` for all remaining active candidates from scratch after each pick, it
+computes exactly the bit positions the picked candidate newly contributed,
+then subtracts, per remaining candidate, how many of those specific bits it
+also has:
 
 ```python
 new_base_idx = np.flatnonzero(best.R_c & ~cached_mask)
-new_train_idx = np.flatnonzero(best.covered_train_indices & ~covered_train_mask)
-```
-
-   (computed *before* mutating the masks), then subtracts, for each
-   remaining active candidate, how many of those specific newly-set bits it
-   also has:
-
-```python
 marginal = marginal - _chunked_delta_counts(active, 'R_c', new_base_idx)
-newly = newly - _chunked_delta_counts(active, 'covered_train_indices', new_train_idx)
 ```
 
-   This moves the dominant per-iteration cost from `O(|active| * n_base)` to
-   `O(|active| * k)` where `k` = number of newly-set bits that iteration, and
-   bounds total work over the whole run (summed `k` <= `n_base` for
-   marginal, <= `n_train_queries` for newly). `_chunked_delta_counts`
-   processes `active` in fixed batches (`_DELTA_CHUNK_SIZE = 6000`) to bound
-   peak transient memory.
-4. **Bit-packed delta counting** (current): `_chunked_delta_counts` gained a
-   second, bit-packed code path, chosen per chunk based on how large `idx`
-   (the number of newly-set bits to count) is relative to the attribute
-   array's length (`_BITPACK_IDX_FRACTION = 1/20`). The original fancy-index
-   gather (`batch[:, idx]` then `count_nonzero`) scales with `len(idx)`;
-   packing (`np.packbits` + a 256-entry byte popcount lookup table,
-   `_POPCOUNT_TABLE`) costs roughly a fixed amount per chunk regardless of
-   `idx` size, dominated by `np.packbits(chunk, axis=1)`. The two cross over
-   empirically around `idx ~= attr_len/20` (measured against real SIFT
-   c2048/K=5 data): below that, gather wins, often heavily, since most calls
-   in a real run have `idx` in the single digits to low hundreds; above it,
-   packing wins by up to ~12x at the largest real `idx` sizes observed
-   (~33000, i.e. late-budget iterations where the active set barely shrinks
-   and each pick contributes many newly-covered bits). Both paths compute
-   the exact same integer popcount -- verified via `np.array_equal` in
-   `tests/utils/test_selection.py` -- so this is purely a representation/
-   performance choice, not a behavior change.
-
-**Correctness of the delta-update -- required reading, not optional
-optimization detail**: this is designed and tested to be *exactly*
-equivalent to full recomputation, not an approximation. The source comment
-itself states it's "numerically exact... integer popcounts of set
-differences, not an approximation." Three tests in
-`tests/utils/test_selection.py` specifically guard this:
-
-- `test_vectorized_matches_naive_reference`
-- `test_greedy_cost_incremental_matches_reference_at_high_budget`
-- `test_greedy_cost_chunked_delta_matches_reference_across_chunk_boundary`
-  (specifically targets the chunking boundary, where a naive implementation
-  could plausibly double-count or miss a delta at the edge between
-  `_DELTA_CHUNK_SIZE` batches)
-
-A large comment block in `selection.py` (lines ~126-166) also documents an
-**abandoned** approach: an earlier attempt maintained a persistent stacked
-matrix shrunk via repeated boolean-mask indexing, creating several large
-transient copies per iteration and "ballooning peak memory to ~6GB with no
-speed benefit over the original Python loop at real scale." The design
-principle that survived: `greedy_naive`/`greedy_cost_static` build a fresh
-stacked matrix each iteration and discard it (their active-set filters
-shrink quickly, so this stays cheap), while `greedy_cost` "no longer follows
-this pattern" once budget fraction approaches 1.0 (the active set barely
-shrinks, so hundreds of full recomputes would dominate) -- motivating the
-incremental-delta approach as a genuinely different strategy, not just a
-faster version of the same one.
+This moves the dominant per-iteration cost from `O(|active| * n_base)` to
+`O(|active| * k)` where `k` is the number of newly-set bits that iteration,
+bounding total work over the whole run. `_chunked_delta_counts` processes
+`active` in fixed batches (`_DELTA_CHUNK_SIZE = 6000`) to bound peak
+transient memory, and has two code paths: a fancy-index gather (scales with
+the number of newly-set bits) and a bit-packed popcount path (`np.packbits`
+plus a 256-entry byte popcount table, roughly fixed cost per chunk). The two
+cross over empirically around `idx ~= attr_len/20`; both compute the exact
+same integer count, verified via `np.array_equal` in
+`tests/utils/test_selection.py`. This is a numerically exact optimization,
+not an approximation: `test_vectorized_matches_naive_reference`,
+`test_greedy_cost_incremental_matches_reference_at_high_budget`, and
+`test_greedy_cost_chunked_delta_matches_reference_across_chunk_boundary`
+guard exact equivalence to full recomputation, including at chunk
+boundaries.
 
 ## 5. `KVCache` internals (`utils/base/kv_cache.py`)
 
-### `CacheEntry` fields
+`CacheEntry` fields: `query` (Q), `top_k_vectors` (can be `[]` for
+index-only entries), `r_Q` (CIG radius), `half_gap` (HGG threshold),
+`top_k_indices` (stable base-vector indices), `top_k_matrix` (pre-stacked,
+pre-normalized, enabling a single-matmul CIG distance computation, built by
+`CandidateEntry.to_cache_entry()`, `None` when created via `add_entry`
+directly).
 
-- `query` -- the cached query vector Q.
-- `top_k_vectors` -- the K closest base vectors to `query` (can be `[]` for
-  index-only entries, see below).
-- `r_Q` -- distance to the K-th (farthest cached) vector; the CIG radius.
-- `half_gap` -- half the gap between the K-th and (K+1)-th vector; the HGG
-  threshold.
-- `top_k_indices` -- stable base-vector indices for `top_k_vectors`.
-- `top_k_matrix` -- pre-stacked, pre-normalized matrix enabling a single-
-  matmul CIG distance computation; built by `CandidateEntry.to_cache_entry()`
-  in the population pipeline, `None` when created via `add_entry` directly.
+Two ways entries get built: `populate_from_queries` (brute-force, used by
+hit-policy's on-the-fly mode) and `add_entry` directly (the low-level
+primitive population uses via `to_cache_entry()`, also used by `simulate.py`
+for index-only entries with an empty `top_k_vectors` list).
 
-### Two ways entries get built
-
-- `populate_from_queries(queries, main_memory, K)`: high-level, brute-force
-  path -- for each query runs `main_memory.top_k_search`, then
-  `add_entry(query, top_k_vecs, r_Q=top_k_dists[-1], half_gap=gap/2.0,
-  top_k_indices)`. Used by hit-policy's on-the-fly mode and synthetic.
-- `add_entry(...)` directly: the low-level primitive population uses via
-  `CandidateEntry.to_cache_entry()` -- and notably, `simulate.py`'s own
-  `populate_cache()` also calls `add_entry` directly with an **empty**
-  `top_k_vectors` list, creating index-only entries (see Section 3's
-  discussion of why -- avoiding duplicated per-entry vector copies across
-  heavily-overlapping `R_c` sets).
-
-### The lazy-build pattern: `get_d_Q_batch` / `get_entry_radii`
-
-```python
-def get_entry_radii(self) -> np.ndarray:
-    """(n_entries,) array of each cache entry's r_Q, for vectorizing the
-    O1 gate (d_Q <= r_Q) across all entries at once instead of a
-    per-entry Python comparison. Same lazy-build as get_d_Q_batch."""
-    if self._entry_radii is None:
-        self.build_query_matrix()
-    return self._entry_radii
-```
-
-Both `get_d_Q_batch(query)` and `get_entry_radii()` check if their backing
-array is `None` and, if so, call the *same* `build_query_matrix()`, which
-populates `_query_matrix` and `_entry_radii` together in one pass -- one
-lazy build serves both accessors, avoiding redundant recomputation whenever
-the cache is mutated (both are invalidated together on `add_entry`). The
-purpose is exactly what the docstring says: letting `CacheSimulator.run_query`
-vectorize the CIG "O1 gate" (`d_Q <= r_Q`) across *all* cache entries in one
-NumPy comparison, rather than a Python loop doing one comparison per entry --
-this is the concrete call site (`simulate.py`'s dispatch for
-`"lemma1_no_union"`) that justifies `get_entry_radii()`'s existence.
+`get_d_Q_batch(query)` and `get_entry_radii()` share one lazy build
+(`build_query_matrix()`), invalidated together on `add_entry`, letting
+`CacheSimulator.run_query` vectorize the CIG O1 gate across all cache
+entries in one NumPy comparison rather than a per-entry Python loop.
 
 ## 6. Pipeline orchestration (`population_runner.py`)
 
-### Stage-by-stage, with what runs how often
+Inside `run_population_benchmark()`: load benchmark and resolve K once, load
+ground truth once, propose candidates once total per benchmark (candidates
+don't depend on budget), then for each `(budget_B, strategy)` pair: select,
+build a fresh `KVCache`, and for each sigma in the sweep, simulate oracle
+then non_oracle.
 
-Inside `run_population_benchmark()`:
+**Oracle vs. non_oracle**: the only difference is the evaluation query set.
+Oracle uses the same queries the cache was populated from (an upper-bound
+sanity check); non_oracle uses the held-out test set (the actual metric of
+interest for generalization). `analyze_population_proposal.py` only reads
+non_oracle summaries for plotting; oracle results are written but not
+consumed by analysis.
 
-1. Load benchmark + resolve K (once).
-2. Load cache ground-truth arrays (once).
-3. **Propose candidates** -- runs **once total** per benchmark, before the
-   budget loop. Candidates don't depend on budget.
-4. For each `budget_B` in `budget_values`, for each `strategy`:
-   - **Select** under `budget_B` (`select_candidates`).
-   - **Build** a fresh `KVCache` from the selection.
-   - For each `sigma` in `sigma_values`: **simulate** oracle, then simulate
-     non_oracle.
+**Sigma sweep cost**: `select_candidates` and cache build run once per
+`(budget, strategy)` pair, before the sigma loop; only the simulate stage
+repeats per sigma. A 4-value sigma sweep takes roughly 2.9x the wall time of
+a single-sigma run for the same config.
 
-### oracle vs. non_oracle
+**Output nesting**: flat layout (`.../B{budget}/oracle/{strategy}/...`) when
+only the default `sigma=1.0` is used; nests one level deeper
+(`.../sigma_{value:.2f}/...`) for any other sweep. Trajectory/selection-log
+files are sigma-independent and stay directly under the budget directory.
 
-The only difference is which query set is passed as the evaluation set to
-`_run_simulation`:
-
-- **oracle**: `test_queries=obs_queries` -- the *same* queries the cache was
-  populated from, with `test_gt_indices=obs_ti` (the cache's own top-k
-  ground truth).
-- **non_oracle**: `test_queries=test_q` -- the held-out test query set,
-  evaluated against separately-loaded ground truth.
-
-> **My understanding (please confirm):** oracle measures an upper bound /
-> sanity check ("if you ask the cache about the exact queries it was
-> populated with, how often does it certify a hit"), while non_oracle
-> measures generalization to unseen queries, which is the actual metric of
-> interest for real cache effectiveness. Consistent with this,
-> `analyze_population_proposal.py` only ever reads `non_oracle` summaries
-> for plotting -- oracle results are produced and written to disk but not
-> consumed by analysis, which reads as "oracle exists for debugging/sanity,
-> not as a reported result."
-
-### Sigma sweep cost model
-
-Confirmed directly, `population_runner.py:462-485`:
-
-```python
-for sigma in sigma_values:
-    sigma_dir = b_dir if single_default_sigma else b_dir / f'sigma_{sigma:.2f}'
-
-    oracle_results = _timed_stage(..., _run_simulation,
-        kv_cache, base, obs_queries, sim_K, algorithms,
-        effective_name, strategy, budget_B, 'oracle', metric, sigma=sigma,
-        test_gt_indices=obs_ti)
-    ...
-    non_oracle_results = _timed_stage(..., _run_simulation,
-        kv_cache, base, test_q, sim_K, algorithms,
-        effective_name, strategy, budget_B, 'non_oracle', metric, sigma=sigma,
-        test_gt_indices=test_gt_indices)
-    ...
-```
-
-This loop is nested *inside* the `(budget, strategy)` loop, so `select_candidates`
-and `_build_kv_cache` run once per (budget, strategy) pair, before this sigma
-loop, and the same `kv_cache` object is reused unchanged across every sigma
-value -- **only the simulate stage repeats per sigma**, not propose/select/
-build. This was measured directly this session: a sigma sweep of 4 values
-(`0.7, 0.8, 0.9, 1.0`) took ~2.9x the wall time of a single sigma=1.0 run for
-the same config, consistent with "only 2 of 6 pipeline stages (oracle +
-non_oracle simulate) repeat 4x, everything else runs once."
-
-### Output nesting
-
-```python
-sigma_values = sigma_values if sigma_values else [1.0]
-single_default_sigma = sigma_values == [1.0]
-...
-sigma_dir = b_dir if single_default_sigma else b_dir / f'sigma_{sigma:.2f}'
-```
-
-Flat layout (`.../B{budget}/oracle/{strategy}/...`) when only the single
-default `sigma=1.0` is used; nests one level deeper
-(`.../B{budget}/sigma_{value:.2f}/oracle/{strategy}/...`) for any other sweep,
-including a single non-default value like `[0.9]`. Trajectory/selection-log
-files (sigma-independent, since they're produced before the sigma loop) stay
-directly under `b_dir` regardless.
-
-### Budget semantics
-
-`run_population.py::_budget_values` computes budgets as fractions of `n_base`
-(the base-vector corpus size for that benchmark, from `base_vectors.npy`'s
-row count), not the cache/train query count:
-
-```python
-def _budget_values(benchmark_dir: Path) -> list:
-    n_base = np.load(base, mmap_mode='r').shape[0]
-    return [max(1, int(f * n_base)) for f in BUDGET_FRACTIONS]
-```
-
-Each resulting `budget_B` is an absolute base-vector-count cap consumed by
-`select_candidates` as described in Section 4.
+**Budget semantics**: `run_population.py::_budget_values` computes budgets
+as fractions of `n_base` (the benchmark's base-vector corpus size), not the
+cache/train query count.
 
 ## 7. CLI driver (`run_population.py`)
-
-### Current CLI surface
 
 `--dataset` (required), `--n-max` (default 20), `--k-test` (default
 `[0, 1, 5, 10]`), `--benchmark` (default: all research benchmarks),
 `--strategies` (default `['greedy_cost']`), `--sigma` (default `[1.0]`),
-`--workers` (default 1), `--seed` (default 42). **`--method` does not
-exist** -- point-like proposal was removed as a standalone function; this
-script "only ever produces `ball/` output now"; there is no `_run_point`
-function left in the file.
+`--workers` (default 1), `--seed` (default 42). `K_cache = K_test = K`
+always, including K=0, with no separate clamp: `K = k_test` directly, no
+special-casing needed once population's zero-margin-at-K=0 behavior above
+was in place (regression-tested by
+`test_e2e_ball_runner_k_test_zero_containment`).
 
-### `K = k_test`
-
-```python
-# K_cache = K_test = K, always -- including K=0 (containment mode) --
-# no separate k_cache/k_test distinction, no clamp needed.
-K = k_test
-```
-
-An earlier version of this line was `K = k_test if k_test > 0 else 1` -- a
-clamp that forced `K=1` in containment mode. Fixed in an earlier round;
-directly regression-tested by `test_e2e_ball_runner_k_test_zero_containment`
-in `tests/population/test_e2e_population_proposal.py`. This `K` (the ball
-margin's own parameter) is distinct from `population_runner.py`'s
-*separate* `sim_K` (the simulate-time certification target, Section 2's
-"N=0" subsection) -- both are now simply `k_test`/`K` unconditionally,
-neither clamped, but they're different variables serving different roles
-(one sizes candidates at proposal time, the other is passed as `N` to the
-CIG algorithm at simulate time).
-
-(A separate variable, `override_K = k_test if k_test > 0 else None`, feeds a
-*different* code path in `population_runner.py`'s ground-truth-loading logic
--- not to be confused with the `K` used for `propose_candidates_ball`.)
-
-### Sweep dimensions
-
-```python
-BUDGET_FRACTIONS = [
-    0.05, 0.10, 0.15, 0.30, 0.45, 0.50, 0.55, 0.60, 0.65, 0.75, 0.85, 0.90, 0.95, 0.98, 1.0,
-]
-DEFAULT_K_TEST = [0, 1, 5, 10]
-DEFAULT_N_MAX = 20
-STRATEGIES = ['greedy_cost']
-```
-
-Cache-size sweep is encoded in the benchmark names themselves (`c256`,
-`c512`, `c1024`, `c2048` cache/train queries per `DATASET_CONFIG`'s
-`research_benchmarks` lists, 4 sizes x 2 datasets = 8 benchmarks total).
-
-`BUDGET_FRACTIONS` was densified from an original 7 values to the 15 above,
-adding finer resolution in the `0.45-0.98` range specifically -- where the
-hit-rate curves for both datasets are furthest from either extreme and most
-sensitive to budget, per the disappointing `memory_vs_hitrate.png`/
-`budget_pct_vs_metrics.png` results this investigated.
-
-### Work dispatch
-
-```python
-work = [(bm, args.n_max, k_test) for bm in benchmarks for k_test in k_test_vals]
-```
-
-One work item per (benchmark, k_test) pair (n_max isn't swept within one CLI
-invocation). `--workers 1` runs serially in-process; `--workers > 1` uses
-`concurrent.futures.ProcessPoolExecutor`, submits all items eagerly, and
-drains via `as_completed` (`.result()` re-raises any worker exception in the
-main process -- no partial-failure suppression). All workers share one
-`run_ts` so a parallel run lands under a single timestamped output tree.
-
-### Output naming
-
-```python
-sub_dir = output_dir / run_ts / 'ball' / f'nmax{n_max}_k{k_test}'
-```
-
-i.e. `{output_dir}/{run_ts}/ball/nmax{n_max}_k{k_test}/{benchmark_name}/B{budget}/...`.
-Directly regression-tested by `test_analyze_regex_matches_real_naming`,
-which also asserts two previously-used incorrect patterns
-(`n(\d+)_k(\d+)` and `n(\d+)_kc(\d+)_k(\d+)`) do *not* match -- see Section 8.
+`BUDGET_FRACTIONS` covers 15 values with finer resolution in the 0.45-0.98
+range, where both datasets' hit-rate curves are most sensitive to budget.
+Cache-size sweep is encoded in the benchmark names themselves (c256/c512/
+c1024/c2048, 4 sizes x 2 datasets = 8 benchmarks total). One work item per
+`(benchmark, k_test)` pair; `--workers > 1` uses
+`concurrent.futures.ProcessPoolExecutor`, all workers sharing one run
+timestamp.
 
 ## 8. Analysis (`analyze_population_proposal.py`)
 
-### What it produces
+`n_max` is fixed at 20 in every real run, so the analysis grid is `sigma x
+K_test` (rows=sigma, columns=K_test), one combined file per metric per
+dataset:
 
-`n_max` is fixed at 20 in every real run (`--n-max` takes a single value,
-never actually swept), so Phase 3 Round 12 replaced the previous `n x
-K_test` grid with **`sigma x K_test`** (rows=sigma, columns=K_test), and
-replaced the old per-sigma-directory separate plot files
-(`sigma_{v:.2f}/ball/...`) with **one combined file per metric per
-dataset** -- no more `sigma_*/` output nesting. `analyze_dataset()` walks
-`run_dir / 'ball'`, parses each `nmax{n}_k{k_test}` directory, loads every
-swept sigma value for each, and produces:
+- `ball/memory_vs_hitrate.png`: hit rate vs. memory utilization, train and
+  test overlaid per cell, one line per cache size.
+- `ball/memory_vs_candidates_cached.png`: same grid, y=candidate count. Uses
+  a shared y-axis across the global max rather than per-subplot autoscaling.
+- `ball/recall_vs_sigma.png`: rows=K_test, columns=budget fraction, x=sigma,
+  y=mean recall. Only produced when a real sigma sweep exists.
 
-- `ball/memory_vs_hitrate.png` -- hit rate vs. memory utilization
-  (`vectors_cached / n_base`), one grid cell per (sigma, K_test), **both
-  train and test hit rate overlaid per cell** (via `_plot_grid_train_test`,
-  shared train/test legend), one line per cache size, with a `y=x`
-  reference line. `n_max` noted in the title.
-- `ball/memory_vs_candidates_cached.png` -- same grid, y=candidate count
-  (`num_entries`, not vector count). Since candidate counts aren't naturally
-  bounded like a rate, `_plot_grid` computes a shared y-axis from the global
-  max across every cell (rather than each subplot auto-scaling to its own
-  local max) so cells stay visually comparable.
-- `ball/recall_vs_sigma.png` -- one combined grid: rows=K_test,
-  columns=budget fraction, x=sigma, y=`mean_recall` (from
-  `SimulationResult.mean_recall`, already serialized into `summary.json`),
-  one line per cache size per cell. Only produced when a real sigma sweep
-  exists (`len(sigma_vals) >= 2`) -- nothing meaningful to plot sigma
-  against with a single value.
+Directory-parsing regex: `nmax(\d+)_k(\d+)`, matching real
+`run_population.py` output exactly (no separate `K_cache` component, since
+`K_cache` has always equaled `K_test` in the real pipeline).
+`_sigma_values_in()` detects whether a sigma sweep exists per benchmark
+directory; `analyze_dataset()` is called once per dataset regardless,
+looping over `(param_dir, sigma)` pairs internally.
 
-`memory_vs_train_coverage.png` (a separate CIG-train-coverage grid) and
-`aggregate/max_budget_hit_rate_vs_num_train_queries.png` (a max-budget-only
-bar chart) were both produced by earlier versions of this script and have
-since been removed -- train coverage is no longer plotted standalone (train
-hit rate, plotted alongside test above, was the more useful signal), and the
-aggregate bar chart was dropped along with the rest of the `aggregate/`
-subdirectory as part of simplifying this script's output.
-`compile_proposal.py`'s `_method_images` still opportunistically globs an
-`aggregate/` subdirectory if one exists (harmless "skip if missing" -- see
-its convention for every optional debug image), but nothing currently
-populates it.
+Debug JSON is written to `{debug_dir}/{label}_ball_debug.json`, structured
+as `dataset -> params -> benchmarks -> budgets -> {hit_rate, mean_recall,
+memory_util, ...}`, plus sanity flags and roll-up summary blocks, for
+automated auditing of a full sweep without eyeballing every plot.
 
-If multiple `n` values were ever found (never expected in practice, since
-`n_max` isn't swept), `analyze_dataset()` prints a warning and uses the
-first one found for the title -- a defensive fallback, not a supported
-sweep dimension.
+`compile_proposal.py` compiles this script's PNGs (glob-based over whatever
+exists in `processed_dir / 'ball'`) into a PDF; its per-dataset header page
+is only rendered when a section actually has a title, since ball is the only
+proposal method.
 
-### Directory-parsing regex
+## 9. Overlap-threshold hit policy and the intersection-fraction calibration study
 
-```python
-m = re.fullmatch(r'nmax(\d+)_k(\d+)', param_dir.name)
-```
+### Motivation
 
-Matches real `run_population.py` output (`nmax{n}_k{k_test}`, no `kc`
-component since `K_cache` has always equaled `K_test` in the real
-pipeline). An earlier version of this regex never matched real pipeline
-output at all (expected a different naming shape) -- fixed in an earlier
-round, directly regression-tested by `test_analyze_regex_matches_real_naming`.
+An earlier slack-augmented CIG relaxation direction
+(`D(t,Q) + r_t <= r_c*(1+slack)`) was abandoned: recovering a meaningful
+fraction of missed queries needed large slack, and slack caused severe
+false-positive dilution (SIFT about 2x extra base vectors admitted at
+slack=1.0, ESCI up to about 140x in the worst cells). A hard, deterministic
+relaxed threshold isn't a usable direction.
 
-### Sigma detection and the single-call restructure
+This motivated a different question: does the actual geometric overlap
+between a cached candidate's K-sphere and a test query's own K-sphere
+predict whether that query is an oracle hit (its true top-K physically
+present in the cache)? If so, that overlap is a candidate signal for a
+probabilistic recall estimate, rather than a hard certify/reject rule.
 
-`_sigma_values_in()` peeks into one representative `B{budget}/` directory
-for `sigma_\d+\.\d+`-named subdirectories, returning `[]` for the flat
-(single default sigma) layout. `main()` calls `analyze_dataset()` **once
-per dataset** regardless of whether a sigma sweep exists (previously it
-looped and called `analyze_dataset()` once per sigma value, producing
-separate output trees) -- `analyze_dataset()` itself now loops over
-`(param_dir, sigma)` pairs internally, building one combined `all_data`
-dict keyed by `(sigma, k_test)` and passing it through a single set of grid
-plots.
+### Two overlap metrics
 
-### Debug JSON
+For a selected candidate `c` (center `Q`, real serving radius `r_c`) and
+test query `t` (radius `r_t` from ground truth, `D = D(t, Q)`):
 
-Written to `{debug_dir}/{label}_ball_debug.json`, structured as
-`dataset -> params -> benchmarks -> budgets -> {hit_rate, mean_recall,
-memory_util, budget_utilization, vectors_cached, num_entries,
-train_coverage_final, ...}`, plus `per_benchmark_sanity` flags (e.g.
-"hit_rate near zero across all budgets", "no candidates cached at max
-budget") and roll-up `param_combo_summary`/`dataset_summary` blocks
-identifying best/worst-performing combos. Param keys are now
-`sigma{sigma:.2f}_k{kt}` (were `n{n}_k{kt}`), and the top-level JSON
-includes an `n_max` field for provenance now that it's not part of the key
-structure.
+- **`angular_fraction(c, t)`**: the fraction of `t`'s own `r_t` spherical
+  cap on `S^{d-1}` (the angular sphere this codebase's distances are
+  natively defined on) that lies within `c`'s `r_c` cap.
+- **`solid_ball_fraction(c, t)`**: the fraction of `t`'s own `r_t` solid
+  Euclidean ball in ambient `R^d` (using chord distance) that lies within
+  `c`'s `r_c` solid ball.
 
-> **My understanding (please confirm):** the purpose is automated auditing of
-> a full sweep without eyeballing every plot -- a machine-readable place to
-> catch degenerate runs (zero coverage, empty cache, low budget utilization)
-> systematically rather than visually.
+Both are computed exactly, via closed form and 1D numerical quadrature, not
+Monte Carlo. `c.r_c` (the candidate's real serving radius, not the
+idealized ground-truth K-th-neighbor radius) is used, since candidates are
+proposed as nested spheres and selection may pick a sub-candidate whose
+radius differs from the full-K radius; what matters at serving time is the
+radius of the candidate actually cached.
 
-### Downstream PDF compilation: `compile_proposal_sigma.py` removed
+`oracle_hit(c, t)` and `union_covered(t)` are the exact ground-truth labels
+this signal is calibrated against: whether `t`'s true top-K is contained in
+`c`'s cached mask, and whether it's contained in the union of all selected
+candidates, respectively.
 
-`compile_proposal_sigma.py` existed specifically to walk the old
-`sigma_{v:.2f}/` output directories and render one PDF section per sigma
-value. Once analysis stopped producing that nesting (this round), it would
-have found zero sigma directories and silently produced an empty section --
-removed entirely rather than left as a dead, misleading path.
-`compile_proposal.py` (the plain compiler, already glob-based over whatever
-PNGs exist in `processed_dir / 'ball'`) needed only one addition --
-`recall_vs_sigma*.png` added to its glob patterns -- to pick up everything
-the reworked analysis script now produces in a single pass. The Makefile's
-`population-proposal-analyze` target was updated to call
-`compile_proposal.py` instead of the now-deleted `compile_proposal_sigma.py`.
-Its output now lands under `simulations/population_proposal_sigma/`
-(the directory name the deleted script used to write to) rather than
-directly under `simulations/`, and the per-dataset "Ball-like Proposal"
-header page was dropped from the PDF -- ball is the only method, so it was
-a redundant page between the dataset divider and the images
-(`simulations/pdf/report.py::render_sections` now skips the header page
-entirely when a `header()` node's title is falsy).
+### Implementation (`simulations/population/debug_intersection_calibration.py`)
 
-## 9. Test coverage map
+`exact_intersection_fraction(D, r_c, r_t, d)`: the angular predictor. Fast
+paths for no-overlap, full-containment, and concentric poles; otherwise a 1D
+`scipy.integrate.quad` over co-latitude, using the same quadrature method
+for both numerator and denominator so quadrature error cancels rather than
+compounds. `solid_ball_intersection_fraction(dist, R1, R2, n)`: the
+solid-ball predictor via a hyperplane-cap decomposition, using the ratio
+`(R1/R2)^n` rather than absolute volume (whose `Gamma` factor overflows
+float64 at real embedding dimensions).
+
+`compare_angular_vs_solid_ball` proposes and selects real candidates at a
+given budget, then for a sample of real test queries computes both
+fractions against every selected candidate plus the exact `oracle_hit`
+label. `run_dual_predictor_sweep` runs this across the full
+(benchmark, K, budget) grid, building one setup context per `(benchmark, K)`
+and reusing it across that combo's budget loop, since proposal is
+budget-independent.
+
+`bin_calibration` / `auc_score`: binned reliability-diagram data and a
+manual rank-based AUC (Mann-Whitney U, no sklearn dependency, matching the
+rest of this codebase). Cross-validated independently by
+`tests/intersection_fraction/test_intersection_fraction_calibration.py`,
+which reimplements the angular formula from scratch and checks it against
+both `exact_intersection_fraction` and Monte Carlo sampling on real SIFT/ESCI
+pairs.
+
+### Statistical methods
+
+Three complementary fits per `(dataset, benchmark, K)` cell, pooled across
+budgets excluding 100% (a degenerate configuration where `greedy_cost`
+admits far more heavily-overlapping candidates, skewing intersection
+fraction toward 1 almost everywhere):
+
+- **Logistic regression** (`statsmodels` `GLM(family=Binomial())`):
+  `P(hit) = sigmoid(b0 + b1*x)`, covering both the binary K=1 case and the
+  continuous-recall K>1 case (`n_trials=K`) via the same grouped-response
+  GLM family. Reports slope, slope p-value, and McFadden's pseudo-R^2.
+- **Mann-Whitney U**: the AUC already computed by `auc_score` is the
+  normalized Mann-Whitney U statistic, verified to match to under 1e-9.
+- **Point-biserial correlation**: a linear (not rank) correlation, tends to
+  read lower than AUC given the visibly sigmoid-shaped reliability curves;
+  kept for completeness.
+
+Pair counts run from thousands to millions, so p-values are essentially
+always significant regardless of effect size; AUC and pseudo-R^2 are the
+numbers that actually matter.
+
+### Results
+
+Full production sweep (both datasets, all 4 research benchmarks each,
+K in {1, 5, 10, 20}, all 14 non-degenerate budget fractions):
+
+- **SIFT**: AUC is uniformly high and essentially flat across K
+  (0.993-0.997 for every cell), pseudo-R^2 correspondingly strong
+  (0.77-0.87). Intersection fraction is an excellent ranking signal for SIFT
+  regardless of K.
+- **ESCI**: AUC is lower and shows real K-dependence, from 0.92-0.94 at K=1
+  rising to 0.96-0.97 at K=20 (roughly matching SIFT's level). Pseudo-R^2
+  shows the same pattern more sharply, from 0.31-0.38 at K=1 to 0.51-0.57 at
+  K=20, still below SIFT at every K but narrowing. Since ESCI is much
+  higher-dimensional than SIFT (384 vs 128), a larger K producing a larger,
+  less degenerate top-K set appears to make the intersection fraction a more
+  reliable signal at higher dimension.
+- No meaningful difference in this AUC/pseudo-R^2 trend across benchmark
+  cache sizes (256/512/1024/2048) within a dataset.
+
+### The overlap-threshold hit policy
+
+`overlap_threshold_hit_policy` (`utils/base/lemmas_sigma.py`) turns this
+finding into an actual, uncertified, probabilistic hit policy, dispatched
+via `algorithm="overlap_threshold"`:
+
+1. **Offline**: `fit_r_t_hat(train_r_t, percentile)` computes a fixed radius
+   estimate from cache/training query top-K radii only, never test queries
+   (a real hit policy can't know its own true top-K distance at decision
+   time).
+2. **Per query**: for every cache entry, scores the solid-ball intersection
+   fraction between the entry's own radius `r_c` and `r_t_hat`, keeping the
+   best-scoring entry.
+3. **Decision**: if the best score exceeds `threshold` (default 0.9),
+   reports a hit and returns that entry's nearest-N vectors re-sorted by
+   true distance (entries store `R_c` in ascending base-index order, not
+   distance order). Otherwise a miss, matching the no-union lemmas'
+   convention (no partial credit).
+
+Evaluated end-to-end via `simulations/hit_policy/run_overlap_threshold_sweep.py`,
+which reuses `debug_common.propose_full_pool`/`select_candidates` for real
+candidates and `population_runner._run_simulation` for real hit
+rate/recall against real ground truth.
+
+### Full-matrix hit-policy results
+
+Both datasets, all 4 benchmarks each, K in {1, 5, 10, 20}, all 14
+non-100%-budget fractions, `r_t_hat` at median/p95/p99, threshold grid
+{0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99}:
+
+- **`r_t_hat` percentile is not a tradeoff: p50 dominates**, in every
+  individual (dataset, benchmark) cell, not just pooled. A smaller assumed
+  radius produces a smaller target ball that's easier for a cache entry's
+  own radius to mostly contain, raising the intersection-fraction score for
+  entries that already generalize well, which correlates with higher
+  realized recall too, not just more (weaker) hits.
+- **SIFT hit rates are much higher than ESCI's** at matched
+  budget/K/benchmark size, consistent with ESCI's weaker intersection
+  fraction signal (lower AUC/pseudo-R^2, especially at low K).
+- **Cache size has a real effect for ESCI that SIFT doesn't show**: ESCI's
+  hit rate rises fairly consistently with cache size; SIFT shows no
+  comparable trend, consistent with SIFT already being close to saturated.
+- **Both hit rate and recall rise monotonically with budget fraction**,
+  with a visible knee around budget 0.45-0.55.
+- **Oracle (union) ceiling**: SIFT's p50 hit rate sits fairly close to its
+  oracle ceiling (a gap of about 0.1), but ESCI's p50 hit rate is far below
+  its ceiling (a gap of about 0.39) even though the ceilings themselves are
+  similar between datasets. This reframes the hit-rate gap: it isn't that
+  fewer of ESCI's true neighbors are physically present in the cache, it's
+  that this single-candidate policy is much worse at identifying the right
+  candidate for ESCI. A policy checking overlap against multiple
+  top-scoring candidates, not just the single best, would need to close
+  this gap for ESCI specifically.
+
+### Open directions
+
+- Directly test the query-clustering mechanism hypothesized to explain the
+  near-binary best-fraction split (plot `D(t, best candidate)`'s
+  distribution directly to confirm bimodality).
+- A statistically-calibrated, per-dataset slack on the CIG inequality,
+  informed by real `r_t` statistics, is still open as a secondary direction.
+- Extend the multi-candidate overlap check hinted at by the oracle-ceiling
+  gap above, particularly for ESCI.
+
+## 10. Performance characteristics
+
+The dominant cost in a real population run is `select_candidates`
+(`greedy_cost`), which scales steeply with budget size; it hasn't needed
+further optimization beyond the incremental delta-update design in section
+4. `propose_candidates_ball` and `select_candidates` together dominate
+runtime in the intersection-fraction sweep too (about 94% combined; the
+quadrature math itself is about 2%).
+
+**Known caveat**: `budget_fraction=1.0` completes but is memory-pressure
+risky on constrained machines; it's excluded by default from pooled
+statistical analysis (a degenerate configuration, see section 9) but the
+sweep itself still computes it since it's cheap to include. Disk
+persistence of proposed candidate pools (to reuse across separate process
+runs) was considered and rejected: a candidate pool measured at about 2.2GB
+and 6-8s to pickle per `(benchmark, K)`, comparable to or slower than
+recomputing.
+
+## 11. Test coverage map
 
 | File | What it validates |
 |---|---|
-| `tests/utils/test_proposals.py` | Sphere-sweep coverage invariants (all `n` in `[1,n_max]` proposed, `R_c` monotone in `n`); ball geometric correctness at both K=0 and K>=1 (n-th neighbor coverage boundary, `R_c` membership, CIG satisfaction, self-exclusion); `test_named_neighbor_coverage_exact_no_epsilon` -- proves the named-neighbor coverage check is exact by construction (no `NUMERICAL_EPS`) at both K=0 and K>=1, via bit-for-bit-identical internal values; `test_propose_candidates_ball_r_c_monotone_in_K` -- r_c monotone non-decreasing in K; `test_precompute_kth_base_dist_rejects_k0` -- the K>=1 guard; numerical helpers cross-checked against brute force. |
-| `tests/utils/test_lemmas.py` | `test_lemma1_no_union_sigma_n_zero_hits_when_contained`/`_misses_when_not_contained` -- pin down that `N=0` correctly reduces to "hit iff contained" via the *existing*, unmodified CIG algorithm structure, now that `population_runner.py`'s `sim_K` clamp no longer prevents `N=0` from being reached. |
-| `tests/utils/test_selection.py` | All 4 strategies' behavior and invariants; `test_greedy_cost_static_matches_dynamic_when_no_overlap`; vectorized/incremental/chunked `greedy_cost` correctness against a naive reference, including the chunk-boundary edge case. |
-| `tests/utils/test_selection_with_new_candidates.py` | Selection against realistic ball(K=0)/ball(K>=1)-shaped `CandidateEntry` data from a clustered synthetic benchmark. |
-| `tests/population/test_population_runner.py` | `_run_simulation` sigma/hit-rate correctness, recall bounds (`recall >= sigma` for every hit) for K>=1, index-space consistency between certified and ground-truth indices, `mean_recall` excluding misses; `test_run_simulation_k_zero_no_zero_division` -- confirms the recall-division guard at K=0 (no `ZeroDivisionError`, `mean_recall` stays at its default); `_write_selection_log`'s vectorized computation against a naive per-pair reference. |
-| `tests/population/test_e2e_population_proposal.py` | Full pipeline e2e via `run_population_benchmark` and via `_run_ball` directly: K=0/K=5 smoke tests, containment-only path, `n_max` sweep, no-K_cache-constraint check, **`test_e2e_ball_runner_k_test_zero_containment`** (the direct regression test for the fixed clamp bug, strengthened this round to also assert `mean_recall == 0.0`), budget-utilization range, sigma output-structure nesting, alpha-proposal backward compatibility. |
-| `tests/population/test_e2e_population.py` | Lower-level e2e: manual propose -> select (all 4 strategies) -> build -> simulate chain with selection invariants; output-file schema (`summary.json`, `per_query.csv`, trajectory JSON). |
-| `tests/population/test_analyze_proposal.py` | `test_analyze_regex_matches_real_naming` -- direct regex regression test; expected-plots-created check (including the combined `recall_vs_sigma.png` grid) with explicit negative checks for deprecated artifact filenames, old per-K_test recall filenames, and old `sigma_*/` nesting; `test_analyze_no_recall_plot_without_sigma_sweep` -- confirms no recall plot without a real sigma sweep; memory-utilization range; debug JSON schema (including the new `mean_recall` field and `sigma{v:.2f}_k{kt}` param keys). |
-| `tests/population/microbenchmarks/*` | `microbenchmark_containment` only (`microbenchmark_candidates`/`microbenchmark_k` and their dedicated test files were deleted -- they exercised the generic alpha-scaling `propose_candidates` path, unrelated to and unused by the production ball pipeline). Fixed a real strict-`<` vs. non-strict-`<=` inconsistency; still intentionally has its own separate `K_cache`/`K_test` distinction, `K_CACHE_VALUES`/`K_TEST_VALUES` valid only where `k_test < k_cache` -- a narrower diagnostic tool, not a leftover inconsistency with the main pipeline's now-unified `K`. |
-| `tests/population/test_debug_trajectory.py` | `debug_trajectory.py`'s standalone diagnostics: `test_monotonic_hit_rate_pass_matches_reference` (the most important test -- `monotonic_hit_rate_pass` against a naive reference implementation), its `dist_matrix`-supplied variant, its sigma!=1.0 rejection, `classify_phases`'s deferred-flush/strictly-increasing labeling, and `compute_budget_pct_view` (including the fixed `searchsorted` boundary semantics -- immediate-saturation and beyond-plateau cases both use the last step, not an under-converged early one). |
+| `tests/utils/test_proposals.py` | Sphere-sweep coverage invariants, ball geometric correctness at K=0 and K>=1, exact named-neighbor coverage (no epsilon fudge), `r_c` monotonicity in K, the K>=1 guard on `_precompute_kth_base_dist`. |
+| `tests/utils/test_lemmas.py` | Certification algorithm correctness including N=0 containment-mode reduction. |
+| `tests/utils/test_selection.py` | All 4 strategies' behavior and invariants, incremental/chunked `greedy_cost` correctness against a naive reference including the chunk-boundary edge case. |
+| `tests/utils/test_selection_with_new_candidates.py` | Selection against realistic ball(K=0)/ball(K>=1) candidate data from a clustered synthetic benchmark. |
+| `tests/population/test_population_runner.py` | `_run_simulation` sigma/hit-rate correctness, recall bounds, the K=0 recall-division guard, `_write_selection_log`'s vectorized computation against a naive reference. |
+| `tests/population/test_e2e_population_proposal.py` | Full pipeline end to end: K=0/K=5 smoke tests, containment-only path, `n_max` sweep, the K=0 containment regression test, budget-utilization range, sigma output-structure nesting, alpha-proposal backward compatibility. |
+| `tests/population/test_e2e_population.py` | Lower-level end-to-end chain (propose, select across all 4 strategies, build, simulate) and output-file schema. |
+| `tests/population/test_analyze_proposal.py` | Directory-naming regex, expected plots created, debug JSON schema. |
+| `tests/population/microbenchmarks/*` | Containment microbenchmark correctness and its distance invariants. |
+| `tests/intersection_fraction/test_intersection_fraction_calibration.py` | Independent reference-formula cross-check of the intersection-fraction calibration study, against both the exact quadrature implementation and Monte Carlo, on real SIFT/ESCI data. |
 
-## 10. Known gaps
+## 12. Known gaps
 
-Carried forward from `docs/KNOWN_ISSUES.md`, re-confirmed by this round's
-research:
-
-- **Proposal function duplication (partially addressed)**: `propose_candidates`
-  (generic alpha) remains a fully separate code path from the nested-sphere
-  family (`propose_candidates_ball`, covering every K including 0). They
-  share only low-level helpers like `_cig_mask`/`_normalize`, not the
+- **Proposal function duplication (partial)**: `propose_candidates` (generic
+  alpha) remains a fully separate code path from the nested-sphere family.
+  They share only low-level helpers (`_cig_mask`, `_normalize`), not the
   coverage/construction logic.
 - **`QueryResult.error` is effectively dead**: `run_query` sets
-  `error=metadata.get('error')`, but no lemma function in `lemmas.py` or
-  `lemmas_sigma.py` ever sets `metadata["error"]`, and there is no
-  `try/except` anywhere in `run_query` itself. In practice, real failures
-  (an unknown algorithm string, a downstream exception from a lemma call)
-  propagate directly out of `run_query` and would abort the simulation
-  loop rather than being captured per-query -- confirmed still true by this
-  round's research. Worth deciding explicitly whether that's the desired
-  behavior (defensive per-query capture vs. fail-fast) rather than leaving
-  it as an unused dataclass field that looks like it does something it
-  doesn't.
+  `error=metadata.get('error')`, but no lemma function ever sets
+  `metadata["error"]`, and there's no `try/except` in `run_query` itself.
+  Real failures propagate directly out of `run_query` rather than being
+  captured per-query. Worth deciding explicitly whether defensive per-query
+  capture or fail-fast is the desired behavior, rather than leaving an
+  unused field that looks like it does something it doesn't.

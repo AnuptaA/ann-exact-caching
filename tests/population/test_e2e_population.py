@@ -111,9 +111,6 @@ def test_e2e_population_workflow(dataset):
                 r = simulator.run_query(i, query, 'lemma1_no_union', ground_truth_indices=[])
                 results.append(r)
                 assert r.error is None, f"Unexpected error at query {i}: {r.error}"
-
-            hit_rate = sum(r.cache_hit for r in results) / len(results)
-            print(f"  [{dataset}/{strategy}] {len(selected)} entries | sim hit rate: {hit_rate:.1%}")
     finally:
         cleanup_temp_dir(tmpdir)
 

@@ -3,8 +3,8 @@
 """ESCI-format-specific dataloader tests (queries.npz/topk_100shards.npz/
 product_embeddings.npy raw format, benchmark save/load round-trip). Symmetric
 to tests/dataloaders/test_dataloaders_sift.py's coverage for SIFT's fvecs/ivecs
-format. Uses small synthetic fixtures written to a temp dir -- no real ESCI
-data needed (real ESCI raw files are large)."""
+format. Uses small synthetic fixtures written to a temp dir, since no real ESCI
+data is needed (real ESCI raw files are large)."""
 
 import json
 
@@ -84,7 +84,7 @@ def test_load_esci_data_with_embeddings():
 def test_save_load_esci_benchmark_roundtrip():
     """save_esci_benchmark() does not write base_vectors.npy (the full catalog
     is the fixed base, not embedded per-benchmark) but load_esci_benchmark()
-    unconditionally reads one -- write it manually here to exercise the
+    unconditionally reads one, so it is written manually here to exercise the
     round-trip, matching how prepare_benchmark.py's population-extension step
     supplies it in the real pipeline."""
     tmp = get_temp_dir()
@@ -122,7 +122,7 @@ def test_save_load_esci_benchmark_roundtrip():
 
 
 def test_save_esci_benchmark_config_roundtrip_types():
-    """config.json round-trips through JSON -- confirm no int/float coercion bugs."""
+    """config.json round-trips through JSON with no int/float coercion bugs."""
     tmp = get_temp_dir()
     try:
         dim = 4

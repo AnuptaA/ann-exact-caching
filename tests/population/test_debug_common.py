@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Tests for debug_common.py's shared setup helper (Phase 3 Round 14, plan
-Step G)."""
+"""Tests for debug_common.py's shared setup and ground-truth loading
+helpers."""
 
 import sys
 from pathlib import Path
@@ -59,7 +59,6 @@ def test_propose_and_select_full_budget_matches_direct_calls():
         assert np.array_equal(a.query, b.query)
 
     check_selection_invariants(selected, trajectory, bm['n_base'], label="debug_common")
-    print("  OK: propose_and_select_full_budget matches direct propose+select calls")
 
 
 def test_load_gt_r_t_k0_returns_zeros():
@@ -69,21 +68,3 @@ def test_load_gt_r_t_k0_returns_zeros():
     assert np.all(train_r_t == 0.0)
     assert np.all(test_r_t == 0.0)
     assert len(train_r_t) == 5 and len(test_r_t) == 3
-    print("  OK: load_gt_r_t(K=0) returns all-zero arrays without touching disk")
-
-
-#-------------------------------------------------------------------------------
-
-def main() -> None:
-    tests = [
-        test_propose_and_select_full_budget_matches_direct_calls,
-        test_load_gt_r_t_k0_returns_zeros,
-    ]
-    for fn in tests:
-        print(f"\n[{fn.__name__}]")
-        fn()
-    print("\nAll passed.")
-
-
-if __name__ == '__main__':
-    main()

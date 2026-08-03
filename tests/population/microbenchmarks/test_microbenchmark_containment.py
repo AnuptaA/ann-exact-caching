@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
+"""Tests for the containment microbenchmark's ball-cost, row-aggregation,
+CSV, and plotting logic."""
 
 import csv
 import importlib

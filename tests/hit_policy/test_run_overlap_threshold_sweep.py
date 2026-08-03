@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Smoke test for run_overlap_threshold_sweep.py's batch runner: runs one
-tiny real combo and checks the output shape, plus the correctness
-property the free-post-processing threshold design depends on (hit_rate
-must be monotonically non-increasing as threshold increases within a
-fixed (benchmark, K, budget, percentile) group -- a bug in scoring
-best_score once and reusing it across the threshold grid would silently
-produce wrong numbers for every row without failing loudly)."""
+"""Smoke test for run_overlap_threshold_sweep.py's batch runner.
+
+Runs one tiny real combo and checks the output shape, plus that hit_rate
+is monotonically non-increasing as threshold increases within a fixed
+(benchmark, K, budget, percentile) group.
+"""
 
 import numpy as np
 import pytest
@@ -64,12 +63,11 @@ def test_run_combo_recall_bounded_and_only_for_hits():
 
 
 def test_score_and_recall_handles_empty_cache():
-    """Regression test: an empty kv_cache (e.g. a tiny budget on a small
-    benchmark selects zero candidates -- hit in the real esci_c256 run)
-    left overlap_threshold_hit_policy's metadata['best_score'] as None,
-    which crashed _aggregate_at_thresholds's `scores > threshold` numpy
-    comparison instead of correctly reporting a miss at every
-    threshold."""
+    """An empty kv_cache leaves overlap_threshold_hit_policy's
+    metadata['best_score'] as None; _score_and_recall_per_query and
+    _aggregate_at_thresholds must handle this by reporting a miss at
+    every threshold instead of crashing on the `scores > threshold`
+    comparison."""
     rng = np.random.RandomState(0)
     base = rng.randn(20, 8).astype(np.float32)
     base_hat = base / np.linalg.norm(base, axis=1, keepdims=True)
@@ -89,14 +87,12 @@ def test_score_and_recall_handles_empty_cache():
 
 def test_score_and_recall_matches_always_hit_baseline():
     """_score_and_recall_per_query calls the policy with
-    threshold=min(THRESHOLDS) instead of -1.0 (always-hit) as a
-    performance optimization (skips the expensive result-building
-    branch for queries that would be a miss at every threshold in the
-    grid anyway). This must be mathematically exact -- the aggregated
-    hit_rate/mean_recall for every threshold in THRESHOLDS must be
-    identical to what the always-hit baseline would have produced,
-    since _aggregate_at_thresholds never reads a query's recall unless
-    best_score > threshold >= min(THRESHOLDS)."""
+    threshold=min(THRESHOLDS) instead of -1.0 (always-hit), skipping the
+    expensive result-building branch for queries that would be a miss at
+    every threshold in the grid anyway. The aggregated hit_rate and
+    mean_recall for every threshold in THRESHOLDS must be identical to
+    what the always-hit baseline would have produced.
+    """
     rng = np.random.RandomState(3)
     dim, n_base, K, n_entries, n_test = 12, 80, 4, 10, 25
     base_vectors = rng.randn(n_base, dim).astype(np.float32)

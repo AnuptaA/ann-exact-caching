@@ -21,8 +21,6 @@ SMALL_ANGLE_MAX_DEG = 5.0
 
 def test_similar_generation():
     """Test 'similar' strategy: shapes and per-query angle metadata."""
-    print("Test 1: Similar strategy generation")
-
     config = DatasetConfig(
         name="test_similar",
         num_base_vectors=100,
@@ -54,14 +52,10 @@ def test_similar_generation():
         assert 0.0 <= a <= SMALL_ANGLE_MAX_DEG + 1e-6, \
             f"Angle {i}={a:.4f}deg out of range [0, {SMALL_ANGLE_MAX_DEG}]"
 
-    print("Similar strategy works.")
-
 #-------------------------------------------------------------------------------
 
 def test_union_clustered_generation():
     """Test 'union_clustered' strategy: shapes and per-query angle metadata."""
-    print("\nTest 2: Union-clustered strategy generation")
-
     num_test = 40
     config = DatasetConfig(
         name="test_union_clustered",
@@ -93,14 +87,10 @@ def test_union_clustered_generation():
         assert 0.0 <= a <= SMALL_ANGLE_MAX_DEG + 1e-6, \
             f"Angle {i}={a:.4f}deg out of range [0, {SMALL_ANGLE_MAX_DEG}]"
 
-    print("Union-clustered strategy works.")
-
 #-------------------------------------------------------------------------------
 
 def test_variable_n_generation():
-    """Test 'similar' strategy with N_range (Set 4 variable-N): test_N_values populated."""
-    print("\nTest 3: Variable-N (Set 4) generation")
-
+    """Test 'similar' strategy with N_range: test_N_values populated."""
     lo, hi = 10, 20
     num_test = 60
     config = DatasetConfig(
@@ -132,14 +122,10 @@ def test_variable_n_generation():
         "test_perturbation_angles_deg should also be populated in variable-N mode"
     assert len(config.test_perturbation_angles_deg) == num_test
 
-    print("Variable-N generation works.")
-
 #-------------------------------------------------------------------------------
 
 def test_save_and_load():
     """Test save/load round-trip: arrays and config metadata survive serialization."""
-    print("\nTest 4: Save and load round-trip")
-
     test_dir = "./tests/generation/tmp"
 
     config = DatasetConfig(
@@ -185,14 +171,10 @@ def test_save_and_load():
     # cleanup
     shutil.rmtree(test_dir)
 
-    print("Save and load works.")
-
 #-------------------------------------------------------------------------------
 
 def test_reproducibility():
     """Test that the same seed produces identical outputs."""
-    print("\nTest 5: Reproducibility with seed")
-
     def make(seed):
         config = DatasetConfig(
             name="test_repro",
@@ -223,24 +205,5 @@ def test_reproducibility():
     # different seed should (very likely) give different test queries
     assert not np.array_equal(test1, test3), \
         "Different seeds should give different test queries"
-
-    print("Reproducibility works.")
-
-#-------------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    print("="*80)
-    print("Testing Dataset Generation")
-    print("="*80)
-
-    test_similar_generation()
-    test_union_clustered_generation()
-    test_variable_n_generation()
-    test_save_and_load()
-    test_reproducibility()
-
-    print("\n" + "="*80)
-    print("All tests passed.")
-    print("="*80)
 
 #-------------------------------------------------------------------------------

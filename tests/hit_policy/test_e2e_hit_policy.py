@@ -18,7 +18,7 @@ from tests.helpers import create_mini_benchmark, get_temp_dir, cleanup_temp_dir
 
 #-------------------------------------------------------------------------------
 
-# lemma1/lemma2/combined (union-based) are deprecated -- see simulations/core/simulate.py.
+# lemma1/lemma2/combined (union-based) are deprecated, see simulations/core/simulate.py.
 ALGORITHMS = ['lemma1_no_union', 'lemma2_no_union']
 
 

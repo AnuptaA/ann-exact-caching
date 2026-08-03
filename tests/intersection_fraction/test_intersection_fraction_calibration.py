@@ -45,8 +45,8 @@ def reference_intersection_fraction(D: float, r_c: float, r_t: float, d: int) ->
 
     D, r_c, r_t are in this codebase's normalized units (angle/pi); d is
     the ambient dimension (sphere is S^{d-1}). Inputs are cast to float64
-    defensively -- float32 pushes some near-boundary configs into spurious
-    underflow.
+    defensively, since float32 pushes some near-boundary configs into
+    spurious underflow.
     """
     D, r_c, r_t = float(D), float(r_c), float(r_t)
     D_a, rc_a, rt_a = D * np.pi, r_c * np.pi, r_t * np.pi
@@ -84,7 +84,7 @@ def reference_intersection_fraction(D: float, r_c: float, r_t: float, d: int) ->
 
 def reference_intersection_fraction_unbranched(D: float, r_c: float, r_t: float, d: int) -> float:
     """Same as reference_intersection_fraction but without the small/large
-    cap branch correction in g(phi) -- for testing that the branch matters."""
+    cap branch correction in g(phi), for testing that the branch matters."""
     D_a, rc_a, rt_a = D * np.pi, r_c * np.pi, r_t * np.pi
     if D_a >= rc_a + rt_a:
         return 0.0

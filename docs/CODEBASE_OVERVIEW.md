@@ -1,272 +1,183 @@
 # Codebase Overview
 
-This is a research codebase for a vector-database caching technique with two
-composable pipelines:
+Repo-wide map: what lives where, and how the pieces connect. Detailed
+algorithmic design lives in `docs/POPULATION_DESIGN.md`; resolved gotchas
+worth remembering live in `docs/KNOWN_ISSUES.md`.
 
-- **hit-policy**: given a pre-populated cache, is a new query certified as a
-  cache hit under a geometric guarantee (CIG or HGG)?
-- **population**: given a budget, which candidate cache entries should
-  actually be materialized to maximize hit coverage?
+## Two research threads
 
-Both pipelines are exercised against two real datasets (SIFT, ESCI) and one
-synthetic, controllable workload.
+- **Hit policy**: given an already-populated cache, which policy (CIG, HGG,
+  or the probabilistic overlap-threshold prototype) decides whether a query
+  hits, and how well does each do.
+- **Population**: given a query budget, which candidate cache entries should
+  be materialized to maximize certified hit coverage under that budget.
 
-## Architecture summary
+Both share the same certification core in `utils/base/` and the same
+simulator (`simulations/core/simulate.py`).
 
-```
-utils/base/            core algorithms (dataset-agnostic, no I/O)
-datasets/               raw-data loading + benchmark preparation (per dataset)
-simulations/core/       shared simulation engine (CacheSimulator)
-simulations/hit_policy/ hit-policy pipeline (run + analyze)
-simulations/population/ population pipeline (propose -> select -> run + analyze)
-simulations/analysis/   cross-cutting dataset characterization
-simulations/debug/      containment-microbenchmark debug tooling
-simulations/pdf/        shared PDF-report compiler used by every pipeline
-simulations/synthetic/  synthetic-workload run + analyze (own generator)
-tests/                  mirrors the simulations/ split, plus utils/dataloaders/generation
-```
+## `utils/base/` (core library)
 
-Both pipelines build on `simulations/core/simulate.py`'s `CacheSimulator`: the
-hit-policy pipeline drives it directly against precomputed ground truth, and
-the population pipeline (`population_runner.py`) hands it a `KVCache` built
-from selected candidates, then drives the same `run_query` dispatch.
+Everything here is importable as `utils.base.<name>`, re-exported from
+`utils/base/__init__.py`:
 
-## `utils/base/` -- core algorithms
+- `distance_metrics.py`: `euclidean_distance`, `cosine_distance`,
+  `angular_distance` (scalar, single pair), `pairwise_angular_distance`
+  (matrix, pre-normalized vectors), `get_distance_function`.
+- `main_memory.py`: `MainMemory` (brute-force top-k over the full base set,
+  used as ground truth and by the on-the-fly hit-policy path), `range_search`.
+- `kv_cache.py`: `KVCache` / `CacheEntry`, the cache data structure both
+  pipelines populate and query.
+- `lemmas.py`: the exact certification algorithms `lemma1_circular_inclusion`
+  (CIG, union), `lemma2_half_gap` (HGG, union), `combined_algorithm`, plus
+  `lemma1_no_union` / `lemma2_no_union` (single-entry variants). The union
+  variants and `combined_algorithm` are unreachable through
+  `CacheSimulator.run_query` (their dispatch branches were removed); they
+  remain importable for direct use and are still exported.
+- `lemmas_sigma.py`: sigma-relaxed no-union variants,
+  `lemma1_no_union_sigma` / `lemma2_no_union_sigma` (threshold
+  `ceil(sigma * N)` instead of the full `N`; `sigma=1.0` is behaviorally
+  identical to the plain no-union lemmas), plus `fit_r_t_hat` and
+  `overlap_threshold_hit_policy` (the probabilistic, uncertified hit-policy
+  prototype; see `docs/POPULATION_DESIGN.md` section 9). `CacheSimulator`
+  always routes `"lemma1_no_union"` / `"lemma2_no_union"` through these sigma
+  variants, never through the plain versions in `lemmas.py`.
+- `population.py`: `CandidateEntry`, `propose_candidates` (generic
+  alpha-scaling proposal), `propose_candidates_ball` (the nested-sphere
+  family used in production, all K including K=0), `precompute_ball_invariants`.
+- `selection.py`: `select_candidates`, dispatching to 4 strategies
+  (`random`, `greedy_naive`, `greedy_cost_static`, `greedy_cost`); production
+  uses `greedy_cost`.
+- `perturbation.py`: synthetic-query perturbation helpers for generating
+  test queries at controlled angular distance from a cache query.
 
-No I/O, no dataset knowledge -- pure geometry/algorithm code, reused by every
-pipeline above it.
+## `datasets/`
 
-### Guarantees: CIG and HGG (`lemmas.py`, `lemmas_sigma.py`)
+- `dataloaders.py`: shared load/save functions for both SIFT and ESCI
+  benchmark formats, plus the population-schema ground-truth loaders
+  (`load_cache_ground_truth_population` / `_full`, sampled vs. full base;
+  both are genuinely used by different pipelines, not redundant).
+- `sift/prepare_benchmark.py`, `esci/prepare_benchmark.py`: dataset-specific
+  benchmark preparation (splitting, ground-truth precomputation).
+- `synthetic/generator.py`: synthetic dataset generation for the hit-policy
+  synthetic workload.
 
-**CIG (Circular Inclusion Guarantee)**: for a cached entry `(Q, R_Q, r_Q)`, a
-new query `q` and vector `v` in `R_Q` are certified correct if
-`D(q, v) + D(q, Q) < r_Q` (triangle inequality argument). Costs one distance
-computation per candidate vector, but can certify a hit using *any subset* of
-a cache entry's vectors.
+## `simulations/`
 
-**HGG (Half-Gap Guarantee)**: if `D(q, Q) < half_gap` (half the gap between
-the K-th and (K+1)-th true neighbor of `Q`), the entry's *entire* cached
-top-K is guaranteed to equal `q`'s own top-K exactly. Zero per-vector distance
-computation, but it's all-or-nothing on the full `K`.
+### `simulations/core/`
+- `simulate.py`: `CacheSimulator`, the shared engine every pipeline runs
+  queries through. Dispatches `"brute"`, `"lemma1_no_union"`,
+  `"lemma2_no_union"`, `"overlap_threshold"`.
+- `analysis_helpers.py`: shared plotting/labeling helpers (`ALGO_LABELS`,
+  `lbl`, `save_fig`, `pct_fmt`, `load_summaries`, etc.) used by both
+  `hit_policy/analyze_hit_policy.py` and `synthetic/analyze_synthetic.py`.
 
-**Canonical algorithms going forward** (see `docs/KNOWN_ISSUES.md` for why the
-others are deprecated):
+### `simulations/hit_policy/`
+- `run_hit_policy.py` / `analyze_hit_policy.py`: run and analyze the CIG/HGG
+  hit-policy sweep over the SIFT/ESCI benchmark matrix.
+- `run_overlap_threshold_sweep.py` / `analyze_overlap_threshold.py`: run and
+  analyze the overlap-threshold prototype (see `POPULATION_DESIGN.md`
+  section 9) across the same matrix plus a threshold/percentile grid. Output
+  lands under `simulations/hit_policy/reports/overlap_threshold/<run_id>/`
+  (gitignored).
 
-- `lemma1_no_union` (`lemmas.py`) -- CIG, single cache entry must alone supply
-  the full `N` results (no accumulation across entries).
-- `lemma2_no_union` (`lemmas.py`) -- HGG, same single-entry constraint.
-- `lemma1_no_union_sigma` / `lemma2_no_union_sigma` (`lemmas_sigma.py`) --
-  sigma-relaxed variants: certify a hit once `ceil(sigma * N)` (instead of the
-  full `N`) is satisfiable from a single entry. `sigma=1.0` reproduces the
-  corresponding exact function's behavior exactly (see the equivalence tests
-  in `tests/utils/test_lemmas.py`). `CacheSimulator.run_query` always
-  dispatches `"lemma1_no_union"`/`"lemma2_no_union"` through these sigma-aware
-  versions (sigma defaults to `1.0`), so callers never need to choose between
-  the sigma and non-sigma entry points directly.
+### `simulations/population/`
+- `population_runner.py`: the shared propose/select/build/simulate engine,
+  analogous to `core/simulate.py` for the population thread.
+- `run_population.py`: CLI driver for the production ball-proposal sweep.
+- `analyze_population_proposal.py`: analyzes `run_population.py`'s output.
+- `debug_common.py`: shared setup (benchmark loading, candidate proposal,
+  plotting helpers) reused by the debug scripts below.
+- `debug_ball_geometry.py`, `debug_sigma_sensitivity.py`,
+  `debug_distance_concentration.py`, `debug_distance_ratio.py`: standalone
+  diagnostics against already-prepared benchmark data, no changes to the
+  production pipeline. `debug_distance_ratio.py` is a one-off (no Makefile
+  target, no test); the others have both.
+- `debug_intersection_calibration.py`: the intersection-fraction calibration
+  study (see `POPULATION_DESIGN.md` section 9), the largest and most
+  substantial of the debug scripts.
 
-**Deprecated (kept, not deleted, no longer dispatched)**: `lemma1_circular_inclusion`
-and `lemma2_half_gap` (union variants -- accumulate results across multiple
-cache entries), `combined_algorithm` (tries HGG then CIG per entry, unions
-across entries), `lemma1_sigma` (the union-based sigma variant), and
-`binary_search_last_index` (superseded by a direct `np.where` threshold mask
-in the hot path). Their dispatch branches in `simulations/core/simulate.py`
-and their dedicated test in `test_lemmas.py` are commented out, not removed.
+### `simulations/population/microbenchmarks/`
+- `microbenchmark_containment.py`: sphere-aware candidate proposal
+  containment microbenchmark, run per dataset via the Makefile's
+  `microbenchmark` target.
+- `containment_debug.py`, `debug_utils.py`: shared helpers for
+  `microbenchmark_containment.py`'s `--debug` diagnostic mode.
 
-### `MainMemory` / `range_search` (`main_memory.py`)
+### `simulations/pdf/`
+- `report.py`: `PdfReportBuilder` and shared rendering primitives every
+  other file here builds on.
+- `compile.py`, `collect_results.py`, `collect_results_population.py`,
+  `compile_proposal.py`, `collect_intersection_fraction.py`,
+  `collect_overlap_threshold.py`: one thin compiler/collector per report
+  type, each gathering a specific upstream producer's output into a PDF.
 
-`MainMemory` wraps the "database": `M` vectors of dimension `d`, precomputes a
-normalized matrix for a fast matmul-based `top_k_search`. Two code paths:
-untracked (vectorized matmul) and tracked (Python loop, every call counted via
-a `distance_tracker` -- used whenever the hit-policy/population pipelines need
-exact distance-call counts for reporting). These two paths are cross-checked
-in `tests/utils/test_main_memory.py::test_top_k_search_tracked_matches_untracked`.
-Module-level `range_search(query, radius, base_vectors, metric)` is a fully
-vectorized "vectors within radius" query, independently implemented but
-cross-checked against `top_k_search` in the same test file.
+### `simulations/analysis/`
+- `query_clustering_ratio.py`: cross-dataset query-clustering
+  characterization (`d(q)/r(q)` ratio), independent of either pipeline.
 
-### `KVCache` / `CacheEntry` (`kv_cache.py`)
+### `simulations/synthetic/`
+- `run_synthetic.py` / `analyze_synthetic.py`: run and analyze the
+  synthetic-workload hit-policy sweep.
 
-`CacheEntry`: a cached query plus its top-K result vectors, `r_Q` (CIG
-radius), `half_gap` (HGG threshold), optional `top_k_indices` (stable base
-indices) and `top_k_matrix` (pre-normalized matrix enabling a single-matmul
-CIG distance computation -- built by `CandidateEntry.to_cache_entry()` in the
-population pipeline). `KVCache` holds a list of `CacheEntry` and supports
-brute-force population from queries (`populate_from_queries`, used by the
-hit-policy pipeline's on-the-fly mode and the synthetic pipeline) or direct
-`add_entry` calls (used when materializing selected population candidates).
+### `simulations/debug/`
+Output-only. Contains no source files; every subdirectory here
+(`population_geometry/`, `population_sigma_sensitivity/`,
+`population_distance_concentration/`, `population_distance_ratio/`,
+`population_intersection_calibration/`, plus timestamped run dirs) is
+generated output from the debug scripts above, entirely gitignored. Don't
+expect to find source code here; it moved to
+`simulations/population/microbenchmarks/` for the containment-debug helpers
+that used to sit in this directory.
 
-### `distance_metrics.py`
+### Other generated-output directories (gitignored, no source)
+`simulations/{sift,esci,synthetic}/{raw,processed}/`,
+`simulations/results/{characterization,intersection_fraction,overlap_threshold,population}/`,
+`simulations/characterization/`, `simulations/population_proposal_sigma/`,
+`simulations/hit_policy/reports/`, `simulations/population/reports/`,
+`simulations/population/profiles/`.
 
-`euclidean_distance`, `cosine_distance`, `angular_distance` (the one actually
-used throughout the real benchmarks -- `arccos(cosine_similarity) / pi`,
-normalized to `[0, 1]`, satisfies the triangle inequality). `cosine_distance`
-does *not* satisfy the triangle inequality and is not used by any research
-benchmark; it exists for completeness only.
+## `tests/`
 
-### `population.py` -- candidate proposal
+Mirrors `simulations/`'s structure: `tests/utils/` (core library),
+`tests/population/` (+ `microbenchmarks/` subdir), `tests/hit_policy/`,
+`tests/synthetic/`, `tests/dataloaders/`, `tests/generation/`,
+`tests/intersection_fraction/` (the intersection-fraction calibration's
+independent validation, converted from a standalone script). `tests/helpers.py`
+holds shared fixtures (e.g. `make_clustered_candidate_benchmark`).
 
-Given observed cache queries and their true top-K ground truth, produces
-`CandidateEntry` objects (a proposed cache radius `r_c` and the *complete* set
-`R_c` of base vectors within that radius -- CIG soundness requires the
-complete set, not just the original top-K; also carries `source_index`, the
-observed query the candidate was proposed from, and `n`, the neighbor rank
-its sphere was sized around). For full design/theory detail (the
-triangle-inequality containment argument, the uniform K=0..K margin formula,
-selection theory, and everything else population-specific), see
-**`docs/POPULATION_DESIGN.md`**. Summary:
+## Makefile targets (by section)
 
-- `propose_candidates(alpha_values=...)` -- generic: `r_c = alpha * r_Q`.
-- `propose_candidates_ball(n_max=..., K=...)` -- **the only nested-sphere
-  proposal function**: `r_c` is sized to fully contain the n-th
-  cache-neighbor's own K-ball, uniformly for every `K` including `0`
-  (trivially a zero-radius ball). There is a single `K` parameter -- no
-  separate `k_cache`/`k_test` distinction; `K_cache = K_test` always. A
-  standalone `propose_candidates_point` function existed before Phase 3
-  Round 12; it was exactly `propose_candidates_ball(K=0)` and was removed
-  once that was fully confirmed.
+- **Synthetic**: `synthetic-generate`, `synthetic-run`, `synthetic-analyze`
+- **SIFT hit-policy**: `sift-prepare`, `sift-hit-policy-run`, `sift-hit-policy-analyze`
+- **SIFT population**: `sift-population-prepare`
+- **ESCI hit-policy**: `esci-prepare`, `esci-hit-policy-run`, `esci-hit-policy-analyze`
+- **ESCI population**: `esci-population-prepare`
+- **Microbenchmark / combined population**: `microbenchmark`, `population`
+- **Ball proposal sweeps**: `esci-population-ball`, `sift-population-ball`,
+  `population-proposal-analyze`, `population-proposal`,
+  `esci-population-ball-exact`, `sift-population-ball-exact`,
+  `population-proposal-exact`
+- **Population debug diagnostics**: `debug-ball-geometry`,
+  `debug-sigma-sensitivity`, `debug-distance-concentration`, `debug-population`
+- **Combined hit-policy analysis**: `analyze-hit-policy`
+- **Intersection-fraction / overlap-threshold PDF collection**:
+  `collect-intersection-fraction`, `collect-overlap-threshold`
+- **Characterization**: `dataset-characterize`, `full-pipeline`
+- **Tests**: `test`, `test-utils`, `test-synthetic`, `test-sift`, `test-esci`,
+  `test-hit-policy`, `test-population`, `test-containment`, `test-proposal`,
+  `test-dataloaders`, `test-generation`, `test-sigma`
+- **Utilities/cleanup**: `count-datasets`, `clean-cache`, `clobber`,
+  `clobber-synthetic`, `clobber-sift`, `clobber-esci`
 
-### `selection.py` -- budget-constrained selection
+Note: there is no Makefile target for running `run_overlap_threshold_sweep.py`,
+`analyze_overlap_threshold.py`, or `debug_intersection_calibration.py`
+directly, only their downstream PDF collectors
+(`collect-intersection-fraction`, `collect-overlap-threshold`). Run those
+scripts directly when iterating on that work.
 
-`select_candidates(candidates, budget_B, strategy, ...)`. Four strategies:
-`random`, `greedy_naive` (raw newly-covered-query count), `greedy_cost_static`
-(coverage / candidate's own size, computed once), `greedy_cost` (coverage /
-*actual marginal* new-vector cost, recomputed each iteration -- the strategy
-used in practice; the other three exist for comparison/analysis). When
-candidates have zero `R_c` overlap, `greedy_cost_static` and `greedy_cost`
-provably select identically (see the equivalence test in `test_selection.py`).
-`greedy_cost`'s marginal-cost recomputation has a bit-packed fast path
-(`np.packbits`-based set-membership tracking, gated by
-`_BITPACK_IDX_FRACTION`) that takes over from the plain fancy-index gather
-once the number of already-selected indices grows large -- see
-`docs/POPULATION_DESIGN.md` for the generation history.
+## Generated-output layout convention
 
-## `datasets/` -- dataset preparation
-
-SIFT (`.fvecs`/`.ivecs`, 1M-vector base, typically subsampled to 50K for
-research benchmarks) and ESCI (Amazon product search, pre-embedded `.npy`/
-`.npz`, full 1.82M-product catalog never subsampled for its hit-policy
-pipeline) each have a `prepare_benchmark.py` that produces **two possible GT
-schemas**:
-
-- **"population" schema** (`cache_gt_population_K{K}.npz`) -- brute-force KNN
-  against a *sampled* base (SIFT's subsample, or ESCI's fixed 50K sample).
-  Used by the population pipeline for both datasets, and by SIFT's hit-policy
-  pipeline (which already only ever works against a subsampled base).
-- **"full"/"lean" schema** (`cache_gt_K{K}.npz`) -- vectors embedded directly
-  in the file, computed against the *true full catalog*. Used by ESCI's
-  hit-policy pipeline by default; available to SIFT only via an explicit
-  `--full-base` prepare flag (off by default -- see the option's docstring in
-  `datasets/sift/prepare_benchmark.py` for how it validates against
-  `sift_groundtruth.ivecs`).
-
-`datasets/dataloaders.py` provides the shared abstraction that lets one
-`run_hit_policy.py` implementation serve both datasets despite the schema
-difference: `load_cache_ground_truth_population`/`_full` and
-`populate_cache_from_precomputed_population`/`_full`, wired together per
-dataset via `run_hit_policy.py`'s `DATASET_CONFIG`.
-
-## `simulations/` -- orchestration layer
-
-- **`core/simulate.py`**: `CacheSimulator` (the shared engine both pipelines
-  build on), `SimulationResult`/`QueryResult` dataclasses,
-  `DistanceCalculationTracker`. `run_query(query_id, query, algorithm, ...)`
-  dispatches by algorithm name; unknown algorithms and any exception raised
-  during dispatch are caught and recorded on `QueryResult.error` rather than
-  propagating (see `docs/KNOWN_ISSUES.md` for the implication of this for
-  `hit_rate` accounting).
-- **`hit_policy/`**: `run_hit_policy.py` (loads a prepared benchmark + GT,
-  runs each requested algorithm against every test query, writes
-  `summary.json`/`per_query.csv`/logs) and `analyze_hit_policy.py` (produces
-  hit-rate/timing plots from those outputs).
-- **`population/`**: `population_runner.py` (the shared engine: propose
-  candidates, select under budget, materialize into a `KVCache`, simulate at
-  each requested `sigma`, in both "oracle" (against the cache/observed
-  queries) and "non_oracle" (against held-out test queries) modes),
-  `run_population.py` (CLI for the ball-like proposal sweep, see
-  `docs/POPULATION_DESIGN.md`),
-  `analyze_population_proposal.py` (post-processing plots), `debug_*.py`
-  (standalone read-only diagnostics against already-prepared benchmark data,
-  no pipeline changes: `debug_ball_geometry.py`, `debug_trajectory.py`,
-  `debug_sigma_sensitivity.py`, `debug_distance_concentration.py` (the
-  latter is the only cross-dataset one, comparing SIFT and ESCI's background
-  query-to-base/query-to-query angular distance concentration directly in
-  one figure), `debug_vector_coverage.py` (sigma=1.0 only: compares vector
-  coverage -- the fraction of test queries whose full true top-K neighbor
-  set is physically cached, an upper bound independent of certification --
-  against the actual CIG-certified test hit rate, sweeping real budget caps
-  via `select_candidates` once per `run_population.py`'s `BUDGET_FRACTIONS`
-  value against a single proposed candidate pool; not derived from a single
-  unconstrained run like `debug_trajectory.py`'s budget_pct plot -- that
-  approximation broke down whenever one oversized candidate's own `R_c`
-  saturated most of the base in a single greedy pick), and `microbenchmarks/`
-  (containment sweep only --
-  `microbenchmark_containment.py`; the earlier candidate/K microbenchmark
-  scripts exercised the generic alpha-scaling proposal path, unused by the
-  production ball pipeline, and were removed along with their dedicated
-  tests).
-- **`analysis/`**: `characterize.py` and `query_clustering_ratio.py` --
-  cross-workload dataset characterization, not specific to either pipeline.
-- **`debug/`**: shared debug I/O helpers for the containment microbenchmarks.
-- **`pdf/`**: `report.py`'s `PdfReportBuilder`/`render_sections` generic
-  section-tree renderer, plus one thin compiler script per report type
-  (`compile.py`, `compile_proposal.py`, `collect_results[_population].py`).
-- **`synthetic/`**: a separate, fully controllable workload (own generator
-  under `datasets/synthetic/`) exercising the hit-policy `CacheSimulator`
-  directly -- useful for isolating perturbation-level/K/N effects that real
-  datasets can't cleanly control for.
-
-## Makefile targets (grouped)
-
-| Group | Targets |
-|---|---|
-| Synthetic | `synthetic-generate`, `synthetic-run`, `synthetic-analyze` |
-| SIFT hit-policy | `sift-prepare`, `sift-hit-policy-run`, `sift-hit-policy-analyze` |
-| SIFT population | `sift-population-prepare` |
-| ESCI hit-policy | `esci-prepare`, `esci-hit-policy-run`, `esci-hit-policy-analyze` |
-| ESCI population | `esci-population-prepare` |
-| Combined population | `microbenchmark` (containment microbenchmark, both datasets), `population` (microbenchmark + collected results) |
-| Ball proposal sweeps | `{esci,sift}-population-ball[-exact]`, `population-proposal[-exact]`, `population-proposal-analyze` |
-| Debug diagnostics | `debug-ball-geometry`, `debug-trajectory`, `debug-sigma-sensitivity`, `debug-distance-concentration`, `debug-population` (all four). `population-proposal-analyze` depends on `debug-distance-concentration` so its output is always current when the PDF is compiled. |
-| Combined hit-policy analysis | `analyze-hit-policy` |
-| Characterization | `dataset-characterize`, `full-pipeline` |
-| Tests | `test`, `test-utils`, `test-synthetic`, `test-sift`, `test-esci`, `test-hit-policy`, `test-population`, `test-containment`, `test-proposal`, `test-dataloaders`, `test-generation`, `test-sigma` |
-| Utilities/cleanup | `count-datasets`, `clean-cache`, `clobber[-synthetic\|-sift\|-esci]` |
-
-`sift-prepare`/`esci-prepare` are shared dataset preparation used as a
-prerequisite by both the hit-policy and population paths, not hit-policy
-specific -- hence they aren't prefixed like the run/analyze targets.
-
-## `tests/` directory map
-
-| Directory | Covers |
-|---|---|
-| `tests/utils/` | Every module in `utils/base/`, plus `simulations/core/simulate.py`. Includes the fast-path/reference-path equivalence tests (tracked vs. untracked `top_k_search`, `range_search` vs. `top_k_search`, `_batch_distances`/`_cig_distances` fast vs. fallback, `greedy_cost` vs. `greedy_cost_static`). |
-| `tests/dataloaders/` | `datasets/dataloaders.py`'s load/save/GT functions, one file per dataset. |
-| `tests/generation/` | `datasets/{sift,esci}/prepare_benchmark.py`'s own logic (benchmark naming, GT construction, partial-resume) -- previously only indirectly covered via `tests/helpers.py`'s fixtures. |
-| `tests/hit_policy/` | End-to-end `run_hit_policy.py` flow plus per-dataset edge cases. |
-| `tests/population/` | End-to-end `population_runner.py`/`run_population.py`/`analyze_population_proposal.py`/`debug_trajectory.py`, plus `microbenchmarks/` for `microbenchmark_containment.py`. |
-| `tests/synthetic/` | `datasets/synthetic/generator.py` (pytest-collected); `test_analysis.py`/`test_e2e_mini.py` are manual CLI-style smoke scripts (no `def test_*` functions, not pytest-collected -- run directly with `python`, not `pytest`). |
-
-`tests/helpers.py` holds fixtures shared across every subdirectory:
-`create_mini_benchmark[_with_population_data]` (dataset-agnostic mini SIFT/ESCI
-benchmarks), `make_clustered_candidate_benchmark` (clustered synthetic data for
-`utils/base/population.py`/`selection.py` tests), `check_selection_invariants`
-(shared budget/monotonicity/coverage-range assertions for `select_candidates`
-output), `get_temp_dir`/`cleanup_temp_dir`.
-
-## Generated-output layout
-
-Every pipeline follows the same convention:
-
-```
-simulations/<workload>/raw/<benchmark_or_timestamp>/
-  summary.json          aggregate results per algorithm
-  per_query.csv          one row per (algorithm, query)
-  logs/                  per-algorithm hit/miss logs
-
-simulations/<workload>/processed/<timestamp>/
-  *.png                  plots produced by the workload's analyze script
-```
-
-`simulations/pdf/collect_results[_population].py` walk these `processed/`
-trees across workloads and compile a combined report.
+Every run-producing script writes to a timestamped subdirectory
+(`<output_root>/<run_id>/...`), never overwriting a previous run. PDF
+collectors default to the latest run directory unless told otherwise
+(`simulations/pdf/report.py::latest_run_dir`).

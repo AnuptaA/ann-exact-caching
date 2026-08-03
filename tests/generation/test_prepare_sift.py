@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Unit tests for datasets/sift/prepare_benchmark.py's own logic -- benchmark
+"""Unit tests for datasets/sift/prepare_benchmark.py's own logic: benchmark
 naming, partial-GT resume, and the optional full-base cache GT builder.
 Uses small dummy arrays throughout; no real SIFT data needed."""
 
@@ -168,9 +168,9 @@ def test_build_cache_gt_full_rejects_k_ge_100():
 def test_multi_k_gt_matches_per_k_top_k_search():
     """_compute_single_query_gt_multi_k (one shared brute-force pass, sliced
     per K) must be bit-identical to calling _compute_single_query_gt (which
-    wraps MainMemory.top_k_search) once per K -- the whole point of the
-    multi-K dedup is that slicing from a single max-K pass is exact, not an
-    approximation. Checked across several queries and K values."""
+    wraps MainMemory.top_k_search) once per K. The multi-K dedup relies on
+    slicing from a single max-K pass being exact, not an approximation.
+    Checked across several queries and K values."""
     rng = np.random.RandomState(11)
     dim = 6
     n_base = 40

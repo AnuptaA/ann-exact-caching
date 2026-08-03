@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Unit tests for datasets/esci/prepare_benchmark.py's own logic -- benchmark
+"""Unit tests for datasets/esci/prepare_benchmark.py's own logic: benchmark
 naming, base-vector sampling, and the lean cache GT builder. Uses small dummy
 arrays throughout; no real ESCI data needed."""
 
@@ -74,8 +74,8 @@ def test_sample_base_vectors_different_seeds_differ():
 def test_population_preset_matches_population_sources():
     """The 'population' preset in main() (see prepare_benchmark.py's
     preset_configs) filters RESEARCH_BENCHMARKS down to exactly
-    _POPULATION_SOURCES -- the 12 K=99 benchmarks run_population.py's
-    K=100 population benchmarks actually derive from -- so
+    _POPULATION_SOURCES, the 12 K=99 benchmarks run_population.py's
+    K=100 population benchmarks actually derive from, so that
     esci-population-prepare's --preset population doesn't waste time
     preparing the K/N-relationship or c4096 benchmarks population work
     never uses. Replicates main()'s filter expression directly (the dict
@@ -98,8 +98,8 @@ def test_population_preset_matches_population_sources():
 def test_multi_k_gt_matches_per_k_brute_force():
     """_brute_force_knn_angular_multi_k (one shared O(n_queries*n_base) pass,
     sliced per K) must be bit-identical to calling _brute_force_knn_angular
-    once per K -- the whole point of the multi-K dedup is that slicing from
-    a single max-K pass is exact, not an approximation."""
+    once per K. The multi-K dedup relies on slicing from a single max-K pass
+    being exact, not an approximation."""
     rng = np.random.RandomState(21)
     dim = 6
     n_base = 40

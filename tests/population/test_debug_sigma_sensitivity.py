@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Tests for debug_sigma_sensitivity.py (Phase 3 Round 14, plan Step G)."""
+"""Tests for debug_sigma_sensitivity.py's certified_counts computation."""
 
 import sys
 from pathlib import Path
@@ -67,18 +67,3 @@ def test_certified_counts_matches_direct_lemma_call():
         assert counts[qi] == expected_best, (
             f"query {qi}: got {counts[qi]}, expected {expected_best}"
         )
-    print("  OK: certified_counts matches direct lemma1_no_union_sigma calls")
-
-
-#-------------------------------------------------------------------------------
-
-def main() -> None:
-    tests = [test_certified_counts_matches_direct_lemma_call]
-    for fn in tests:
-        print(f"\n[{fn.__name__}]")
-        fn()
-    print("\nAll passed.")
-
-
-if __name__ == '__main__':
-    main()

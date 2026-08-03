@@ -85,7 +85,7 @@ def _run_one(cache, base, test_q, gt_indices, K, sigma, metric='angular', **kw):
 
 
 def test_run_simulation_sigma_all_hits():
-    """All queries hit the cache -- hit_rate should be 1.0 for low sigma."""
+    """All queries hit the cache, so hit_rate should be 1.0 for low sigma."""
     rng = np.random.RandomState(10)
     dim = 16
     n_cache = 4
@@ -105,7 +105,7 @@ def test_run_simulation_sigma_all_hits():
 
 
 def test_run_simulation_sigma_no_hits():
-    """Empty cache -- hit_rate should be 0.0."""
+    """Empty cache, so hit_rate should be 0.0."""
     rng = np.random.RandomState(20)
     dim = 8
     n_test = 3
@@ -180,16 +180,13 @@ def test_recall_at_least_sigma_for_hits():
 
 
 def test_run_simulation_k_zero_no_zero_division():
-    """Phase 3 Round 12: population_runner.py's sim_K clamp (previously
-    max(K, 1)) was removed, so K=0 (containment mode) now actually reaches
-    _run_simulation. recall_sum += .../K would previously ZeroDivisionError
-    at K=0 -- confirm it's guarded instead. Phase 3 Round 15: K=0's
-    convention changed from "skip, recall stays 0.0" to "containment alone
-    is the full task at K=0, so a hit scores recall=1.0" (there's no K-sized
-    target to average against, but a hit is still a hit)."""
+    """K=0 (containment mode) reaches _run_simulation without a sim_K clamp;
+    recall_sum += .../K is guarded against division by zero. A hit at K=0
+    scores recall=1.0, since containment alone is the full task and there
+    is no K-sized target to average against."""
     query = np.array([1.0, 0.0], dtype=np.float32)
     cache = KVCache(metric='euclidean')
-    # Entry contains the test query itself, well within r_Q -- contained.
+    # Entry contains the test query itself, well within r_Q, so it is contained.
     cache.add_entry(query, [np.array([5.0, 5.0], dtype=np.float32)],
                      r_Q=0.5, half_gap=0.0, top_k_indices=[0])
     base = np.array([[5.0, 5.0]], dtype=np.float32)
@@ -211,7 +208,7 @@ def test_run_simulation_k_zero_miss_stays_zero_recall():
     pulled up by the new K=0 recall=1.0-on-hit convention."""
     query = np.array([1.0, 0.0], dtype=np.float32)
     cache = KVCache(metric='euclidean')
-    # Entry query is far from the test query -- O1 gate fails, no hit.
+    # Entry query is far from the test query, so the O1 gate fails, no hit.
     cache.add_entry(np.array([-1.0, 0.0], dtype=np.float32),
                      [np.array([5.0, 5.0], dtype=np.float32)],
                      r_Q=0.1, half_gap=0.0, top_k_indices=[0])
@@ -249,8 +246,8 @@ def test_index_space_consistency():
         true_gt = set(gt_indices[i])
         intersection = certified & true_gt
         assert len(intersection) > 0, (
-            f"query {i}: certified {certified} does not intersect true GT {true_gt} "
-            "-- possible index space mismatch"
+            f"query {i}: certified {certified} does not intersect true GT {true_gt}, "
+            "possible index space mismatch"
         )
         assert certified <= true_gt, (
             f"query {i}: certified {certified} not subset of true GT {true_gt}"
@@ -357,12 +354,10 @@ def test_simulation_loop_large_entries():
 
 
 def _reference_write_selection_log(out_path, selected, trajectory):
-    """Naive, pre-optimization reference for _write_selection_log's
-    min_dist_to_prev field: one angular_distance() Python call per
-    (step, prior-step) pair, kept only in this test for cross-checking the
-    vectorized production implementation (Round 6's fix for the O(n^2)
-    Python-loop bottleneck that dominated wall-clock at budget_fraction=1.0,
-    untimed by any profiled stage)."""
+    """Naive reference for _write_selection_log's min_dist_to_prev field:
+    one angular_distance() Python call per (step, prior-step) pair, kept
+    only in this test for cross-checking the vectorized production
+    implementation."""
     log = []
     cached_before = np.zeros(len(selected[0].R_c), dtype=bool) if selected else None
     prev_queries = []

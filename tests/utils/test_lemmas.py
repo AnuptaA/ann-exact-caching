@@ -26,44 +26,8 @@ from utils.base.lemmas_sigma import (
 
 #-------------------------------------------------------------------------------
 
-# binary_search_last_index is no longer used anywhere (the hot path uses a
-# direct np.where threshold mask instead) -- kept in utils/base/lemmas.py but
-# no longer tested or exercised.
-#
-# def test_binary_search():
-#     """Test binary search helper."""
-#     print("Test 1: Binary search last index")
-#
-#     # test case: sorted distances with some satisfying condition
-#     sorted_distances = [1.0, 2.0, 3.0, 4.0, 5.0]
-#     r_Q = 8.0
-#     d_q = 2.0
-#
-#     # D(q, E_i) + d_q < r_Q
-#     #-------------------------------
-#     # 1.0 + 2.0 = 3.0 < 8.0
-#     # 2.0 + 2.0 = 4.0 < 8.0
-#     # 3.0 + 2.0 = 5.0 < 8.0
-#     # 4.0 + 2.0 = 6.0 < 8.0
-#     # 5.0 + 2.0 = 7.0 < 8.0
-#
-#     theta = binary_search_last_index(sorted_distances, r_Q, d_q)
-#     assert theta == 4, f"Expected theta=4, got {theta}"
-#
-#     # test case: no vectors satisfy
-#     r_Q = 2.0
-#     theta = binary_search_last_index(sorted_distances, r_Q, d_q)
-#     assert theta == -1, f"Expected theta=-1 (none satisfy), got {theta}"
-#
-#     # test case: only some satisfy
-#     r_Q = 5.0
-#     theta = binary_search_last_index(sorted_distances, r_Q, d_q)
-#     # 1.0 + 2.0 = 3.0 < 5.0
-#     # 2.0 + 2.0 = 4.0 < 5.0
-#     # 3.0 + 2.0 = 5.0 NOT < 5.0
-#     assert theta == 1, f"Expected theta=1, got {theta}"
-#
-#     print("Binary search works.")
+# binary_search_last_index is not used anywhere; the hot path uses a direct
+# np.where threshold mask instead.
 
 #-------------------------------------------------------------------------------
 
@@ -81,8 +45,6 @@ def _make_single_entry_cache(K: int, metric: str = "euclidean", M: int = 100, d:
 
 def test_lemma1_simple():
     """Test Lemma 1 with simple case."""
-    print("\nTest 2: Lemma 1 simple case")
-
     mm, cache, cached_query = _make_single_entry_cache(K=10)
 
     # query very close to cached query (should hit)
@@ -94,54 +56,44 @@ def test_lemma1_simple():
         N=5,
         metric="euclidean"
     )
-    
+
     if is_hit:
         assert len(result) == 5, f"Expected 5 results, got {len(result)}"
-        print("Lemma 1 cache hit works.")
-    else:
-        print("Lemma 1 didn't hit.")
 
 #-------------------------------------------------------------------------------
 
 def test_lemma2_simple():
     """Test Lemma 2 with simple case."""
-    print("\nTest 3: Lemma 2 simple case")
-
     mm, cache, cached_query = _make_single_entry_cache(K=10)
 
     # query very close to cached query (within half gap)
     entry = cache.get_all_entries()[0]
     half_gap = entry.get_half_gap()
-    
+
     # make query at distance < half_gap from cached query
     perturbation_size = half_gap * 0.1
     similar_query = cached_query + np.random.randn(32) * perturbation_size
-    
+
     result, is_hit, _ = lemma2_half_gap(
         similar_query,
         cache.get_all_entries(),
         N=10,
         metric="euclidean"
     )
-    
+
     if is_hit:
         assert len(result) == 10, f"Expected 10 results, got {len(result)}"
-        print("Lemma 2 cache hit works.")
-    else:
-        print("Lemma 2 didn't hit (gap might be too small)")
 
 #-------------------------------------------------------------------------------
 
 def test_lemma2_union():
-    print("\nTest 4: Lemma 2 with union (K < N)")
-    
     mm = MainMemory(M=100, d=32, seed=42)
     cache = KVCache(metric="euclidean")
-    
+
     query1 = np.random.randn(32)
     query2 = query1 + np.random.randn(32) * 0.001
     cache.populate_from_queries(np.array([query1, query2]), mm, K=5)
-    
+
     test_query = query1 + np.random.randn(32) * 0.0001
     result, is_hit, metadata = lemma2_half_gap(
         test_query,
@@ -149,77 +101,61 @@ def test_lemma2_union():
         N=8,
         metric="euclidean"
     )
-    
+
     if is_hit:
         assert len(result) == 8
         assert metadata["vectors_added"] > 0
-        print("Lemma 2 union works.")
-    else:
-        print("Lemma 2 union didn't hit.")
 
 #-------------------------------------------------------------------------------
 
 def test_combined_algorithm():
     """Test combined algorithm."""
-    print("\nTest 5: Combined algorithm")
-    
     mm = MainMemory(M=100, d=32, seed=42)
     cache = KVCache(metric="euclidean")
-    
+
     cached_queries = np.random.randn(5, 32)
     cache.populate_from_queries(cached_queries, mm, K=10)
-    
+
     # test query similar to first cached query
     test_query = cached_queries[0] + np.random.randn(32) * 0.001
-    
+
     result, is_hit, metadata = combined_algorithm(
         test_query,
         cache.get_all_entries(),
         N=10,
         metric="euclidean"
     )
-    
+
     assert result is None or len(result) <= 10, "Result size shouldn't exceed N"
-    
-    print(f"Cache hit: {is_hit}")
-    if is_hit:
-        print(f"Hit via: {metadata.get('hit_lemma', 'unknown')}")
-    print("Combined algorithm works.")
 
 #-------------------------------------------------------------------------------
 
 def test_cache_miss():
     """Test that unrelated queries miss the cache."""
-    print("\nTest 6: Cache miss behavior")
-    
     mm = MainMemory(M=100, d=32, seed=42)
     cache = KVCache(metric="euclidean")
-    
+
     # cache queries in one region of space
     cached_queries = np.random.randn(3, 32) + 100
     cache.populate_from_queries(cached_queries, mm, K=10)
-    
+
     # query in different region
     test_query = np.random.randn(32) - 100
-    
+
     result, is_hit, _ = combined_algorithm(
         test_query,
         cache.get_all_entries(),
         N=10,
         metric="euclidean"
     )
-    
+
     assert is_hit == False, "Should miss cache for distant query"
     assert result is None, "Should return None on cache miss"
-    
-    print("Cache miss works correctly.")
 
 #-------------------------------------------------------------------------------
 
 def test_different_k_n():
     """Test with different K and N values."""
-    print("\nTest 7: Different K and N values")
-
     mm, cache, cached_query = _make_single_entry_cache(K=20)
 
     # test with N < K
@@ -230,10 +166,10 @@ def test_different_k_n():
         N=10,
         metric="euclidean"
     )
-    
+
     if is_hit:
         assert len(result) == 10, f"Expected N=10 results, got {len(result)}"
-    
+
     # test with N = K
     result, is_hit, _ = combined_algorithm(
         similar_query,
@@ -254,14 +190,10 @@ def test_different_k_n():
                     f"{algo.__name__} N={N}: expected {N} results, got {len(result)}"
                 )
 
-    print("Different K/N values work.")
-
 #-------------------------------------------------------------------------------
 
 def test_n_greater_than_k():
     """Test when requesting more vectors than cached."""
-    print("\nTest 8: N > K edge case")
-
     mm, cache, cached_query = _make_single_entry_cache(K=10)
 
     # request N=15 when only K=10 cached
@@ -284,20 +216,15 @@ def test_n_greater_than_k():
 #-------------------------------------------------------------------------------
 
 def test_lemma1_no_union():
-    print("\nTest 9: Lemma 1 no union")
     mm, cache, cached_query = _make_single_entry_cache(K=10)
     similar_query = cached_query + np.random.randn(32) * 0.001
     result, is_hit, _ = lemma1_no_union(similar_query, cache.get_all_entries(), N=5, metric="euclidean")
     if is_hit:
         assert len(result) == 5
-        print("Lemma 1 no union works.")
-    else:
-        print("Lemma 1 no union didn't hit.")
 
 #-------------------------------------------------------------------------------
 
 def test_lemma2_no_union():
-    print("\nTest 10: Lemma 2 no union")
     mm, cache, cached_query = _make_single_entry_cache(K=10)
     entry = cache.get_all_entries()[0]
     half_gap = entry.get_half_gap()
@@ -305,12 +232,9 @@ def test_lemma2_no_union():
     result, is_hit, _ = lemma2_no_union(similar_query, cache.get_all_entries(), N=5, metric="euclidean")
     if is_hit:
         assert len(result) == 5
-        print("Lemma 2 no union works.")
-    else:
-        print("Lemma 2 no union didn't hit.")
 
 #-------------------------------------------------------------------------------
-# sigma (relaxed-recall) variant of lemma1 -- CIG with sigma=1.0 must match the
+# sigma (relaxed-recall) variant of lemma1. CIG with sigma=1.0 must match the
 # exact lemma; sigma<1.0 relaxes the hit condition to >= ceil(sigma*N) certified.
 
 def _make_cache_entry_sigma(cache: KVCache, n_vectors: int, dim: int, rng):
@@ -335,9 +259,8 @@ def _angular_dist(a, b):
 
 
 #-------------------------------------------------------------------------------
-# sigma-relaxed no-union variants (canonical algorithms going forward) --
-# lemma1_no_union_sigma / lemma2_no_union_sigma, sigma=1.0 must exactly match
-# their non-sigma no-union counterparts.
+# sigma-relaxed no-union variants: lemma1_no_union_sigma / lemma2_no_union_sigma.
+# sigma=1.0 must exactly match their non-sigma no-union counterparts.
 
 def test_lemma1_no_union_sigma_one_matches_exact():
     """sigma=1.0 must give the same hit/miss, result, and result_indices as
@@ -463,7 +386,7 @@ def test_lemma2_no_union_sigma_relaxes_k_requirement():
     assert len(meta_08['certified_indices']) == K, "certified set should be the entry's full top-K"
 
 #-------------------------------------------------------------------------------
-# Fast-path vs fallback-path equivalence -- every production call from
+# Fast-path vs fallback-path equivalence. Every production call from
 # simulations/core/simulate.py passes a distance_tracker, so these hot-path
 # fast implementations are only ever exercised (in the tests above) via their
 # untracked/fallback form unless explicitly cross-checked here.
@@ -533,9 +456,9 @@ def test_cig_distances_matrix_path_matches_fallback():
 
 def test_cig_distances_precomputed_base_dist_matches_gather():
     """_cig_distances' index-only base_hat path (fresh per-entry matmul) and
-    its precomputed_base_dist gather path (Round 6's fix for simulate_oracle's
-    real-scale cost -- distances to the full base computed once per query
-    instead of once per cache entry) must return identical distances."""
+    its precomputed_base_dist gather path (distances to the full base
+    computed once per query instead of once per cache entry) must return
+    identical distances."""
     from utils.base.lemmas import _cig_distances
     from utils.base.distance_metrics import get_distance_function
 
@@ -582,13 +505,14 @@ def test_cig_distances_precomputed_base_dist_matches_gather():
 
 
 def test_lemma1_no_union_sigma_index_only_matches_real_vectors():
-    """End-to-end: lemma1_no_union_sigma on index-only entries (which now go
-    through Round 6's per-query precomputed_base_dist fast path via base_hat)
+    """End-to-end: lemma1_no_union_sigma on index-only entries (which go
+    through the per-query precomputed_base_dist fast path via base_hat)
     must produce identical hit/result/certified-indices output to the same
     entries built with real top_k_vectors instead (an independent, untouched
-    code path in _cig_distances that never consults base_hat/
-    precomputed_base_dist at all) -- proving the optimization didn't change
-    behavior, not just that two internal helpers agree with each other."""
+    code path in _cig_distances that never consults base_hat or
+    precomputed_base_dist at all). This proves the optimization didn't
+    change behavior, not just that two internal helpers agree with
+    each other."""
     rng = np.random.RandomState(23)
     dim = 12
     n_base = 60
@@ -640,14 +564,13 @@ def test_lemma1_no_union_sigma_index_only_matches_real_vectors():
             assert meta_a['result_indices'] == meta_b['result_indices']
 
 def test_cig_boundary_certifies_at_exact_equality():
-    """Round 7: the CIG certification condition is D(candidate,t)+r_t[t] <= r_c
-    (non-strict), not the old strict <. This directly constructs the exact
-    boundary case -- d_Q == r_Q (so threshold_dist == 0) with a stored vector
-    at exactly distance 0 from the query -- and confirms it certifies a hit.
-    Under the old strict semantics this would both (a) be skipped by the O1
-    gate (d_Q >= r_Q) and (b) fail the O2 threshold check (0 < 0 is False);
-    both must now admit this case."""
-    print("Test: CIG boundary certifies at exact equality (Round 7 <= fix)")
+    """The CIG certification condition is D(candidate,t)+r_t[t] <= r_c
+    (non-strict), not strict <. This directly constructs the exact boundary
+    case: d_Q == r_Q (so threshold_dist == 0) with a stored vector at
+    exactly distance 0 from the query, and confirms it certifies a hit.
+    Under strict semantics this would both (a) be skipped by the O1 gate
+    (d_Q >= r_Q) and (b) fail the O2 threshold check (0 < 0 is False); both
+    must admit this case."""
     dim = 2
     entry_center = np.array([0.0, 0.0], dtype=np.float32)
     r_Q = 1.0
@@ -673,21 +596,18 @@ def test_cig_boundary_certifies_at_exact_equality():
     assert meta['checked_entries'] == 1, (
         "O1 gate should not have skipped the d_Q == r_Q entry"
     )
-    print("  Certified at exact boundary (d_Q==r_Q, distance==threshold==0). Passed.")
 
 
 def test_cig_le_is_monotonic_superset_of_strict_lt():
-    """The <= fix can only ADD certifications relative to the old strict <
-    semantics, never remove any -- a monotonicity property independent of
-    any specific boundary construction. Cross-checks the live
-    lemma1_no_union_sigma against a naive reference that reproduces the old
-    strict-< behavior, across several random trials, and asserts every
-    strict-< hit is also a <= hit (never the reverse)."""
-    print("Test: <= certifies a superset of what strict < would certify")
+    """The <= semantics can only add certifications relative to strict <,
+    never remove any. This is a monotonicity property independent of any
+    specific boundary construction. Cross-checks the live
+    lemma1_no_union_sigma against a naive reference that reproduces strict-<
+    behavior, across several random trials, and asserts every strict-< hit
+    is also a <= hit (never the reverse)."""
 
     def _reference_strict_lt(query, cache_entries, N, metric='euclidean'):
-        """Old (pre-Round-7) strict-< CIG logic, kept only for this
-        comparison -- not used anywhere else."""
+        """Strict-< CIG logic, kept only for this comparison."""
         from utils.base.distance_metrics import get_distance_function
         distance_func = get_distance_function(metric)
         for entry in cache_entries:
@@ -725,20 +645,18 @@ def test_cig_le_is_monotonic_superset_of_strict_lt():
 
         if strict_hit:
             assert le_hit, (
-                "strict-< certified a hit that <= (its superset) did not -- "
+                "strict-< certified a hit that <= (its superset) did not, "
                 "monotonicity violated"
             )
-    print(f"  <= certified a superset of strict-< across {n_trials} random trials. Passed.")
 
 
 def test_lemma1_no_union_sigma_vectorized_gate_matches_fallback():
-    """Round 8: lemma1_no_union_sigma's vectorized O1 gate (entry_radii +
+    """lemma1_no_union_sigma's vectorized O1 gate (entry_radii +
     precomputed_d_Q given) must produce byte-identical results to the
     per-entry fallback loop (entry_radii omitted), across several random
     trials including a guaranteed full-miss case (every entry fails O1, so
     the whole cache is scanned) to specifically exercise the "candidate_idx
     is empty" / "scan everything, certify nothing" path."""
-    print("Test: vectorized O1 gate matches per-entry fallback")
     from utils.base.distance_metrics import get_distance_function
 
     rng = np.random.RandomState(456)
@@ -798,21 +716,16 @@ def test_lemma1_no_union_sigma_vectorized_gate_matches_fallback():
             assert meta_vec['checked_entries'] == len(entries), (
                 f"trial {trial}: full miss should check every entry"
             )
-    print(f"  Vectorized gate matched fallback across {n_trials} trials "
-          f"(including full-miss cases). Passed.")
 
 #-------------------------------------------------------------------------------
-# Phase 3 Round 12: N=0 (population's K_test=0 containment mode) must reduce
-# to "hit iff contained", via the *existing* O1 gate + len(passing) >=
-# threshold logic -- no special-casing added for this. These tests pin that
-# down now that population_runner.py's sim_K clamp (which previously forced
-# N >= 1) has been removed, so N=0 actually reaches this function.
+# N=0 (population's K_test=0 containment mode) must reduce to "hit iff
+# contained", via the existing O1 gate plus len(passing) >= threshold logic,
+# with no special-casing added for this.
 
 def test_lemma1_no_union_sigma_n_zero_hits_when_contained():
     """threshold=ceil(sigma*0)=0: len(passing) >= 0 is always true once an
-    entry passes O1 containment (d_Q <= r_Q) -- must certify immediately,
-    with no real vectors required."""
-    print("Test: N=0 certifies on containment alone")
+    entry passes O1 containment (d_Q <= r_Q), so it must certify
+    immediately, with no real vectors required."""
     query = np.array([1.0, 0.0], dtype=np.float32)
     entry = CacheEntry(
         query=np.array([1.0, 0.0], dtype=np.float32),
@@ -825,13 +738,11 @@ def test_lemma1_no_union_sigma_n_zero_hits_when_contained():
     assert is_hit, "contained entry at N=0 must certify"
     assert result == [], "N=0 hit should return zero results"
     assert metadata['certified_indices'] == []
-    print("  OK: contained entry certifies at N=0 with no vectors needed")
 
 
 def test_lemma1_no_union_sigma_n_zero_misses_when_not_contained():
-    """N=0 must still respect the O1 containment gate -- not a trivial
+    """N=0 must still respect the O1 containment gate, not a trivial
     always-hit regardless of distance."""
-    print("Test: N=0 still misses when not contained")
     query = np.array([10.0, 10.0], dtype=np.float32)
     entry = CacheEntry(
         query=np.array([1.0, 0.0], dtype=np.float32),
@@ -843,7 +754,6 @@ def test_lemma1_no_union_sigma_n_zero_misses_when_not_contained():
     )
     assert not is_hit, "uncontained entry must still miss at N=0"
     assert metadata['certified_indices'] == []
-    print("  OK: uncontained entry misses at N=0")
 
 #-------------------------------------------------------------------------------
 
@@ -867,20 +777,17 @@ def test_fit_r_t_hat_matches_percentile():
     train_r_t = rng.uniform(0.1, 0.3, size=200)
     assert fit_r_t_hat(train_r_t, 50.0) == np.percentile(train_r_t, 50.0)
     assert fit_r_t_hat(train_r_t, 95.0) == np.percentile(train_r_t, 95.0)
-    print("  OK: fit_r_t_hat matches np.percentile")
 
 
 def test_fit_r_t_hat_never_uses_test_queries():
-    """fit_r_t_hat's signature only accepts train_r_t -- there is no
+    """fit_r_t_hat's signature only accepts train_r_t; there is no
     way to pass test-query radii in, by construction."""
     import inspect
     params = list(inspect.signature(fit_r_t_hat).parameters)
     assert params == ['train_r_t', 'percentile']
-    print("  OK: fit_r_t_hat signature has no test-query input")
 
 
 def test_overlap_threshold_requires_r_t_hat():
-    print("Test: overlap_threshold_hit_policy requires r_t_hat")
     entry = CacheEntry(
         query=np.array([1.0, 0.0], dtype=np.float32), top_k_vectors=[],
         r_Q=0.1, half_gap=0.0, top_k_indices=np.array([0], dtype=np.int32),
@@ -894,7 +801,6 @@ def test_overlap_threshold_requires_r_t_hat():
         assert False, "expected ValueError for missing r_t_hat"
     except ValueError:
         pass
-    print("  OK: raises ValueError without r_t_hat")
 
 
 def test_overlap_threshold_rejects_non_angular_metric():
@@ -911,7 +817,6 @@ def test_overlap_threshold_rejects_non_angular_metric():
         assert False, "expected ValueError for non-angular metric"
     except ValueError:
         pass
-    print("  OK: raises ValueError for non-angular metric")
 
 
 def test_overlap_threshold_rejects_sigma_relaxation():
@@ -928,7 +833,6 @@ def test_overlap_threshold_rejects_sigma_relaxation():
         assert False, "expected ValueError for sigma != 1.0"
     except ValueError:
         pass
-    print("  OK: raises ValueError for sigma-relaxation")
 
 
 def test_overlap_threshold_empty_cache_misses():
@@ -939,14 +843,12 @@ def test_overlap_threshold_empty_cache_misses():
     assert not is_hit
     assert result is None
     assert metadata['certified_indices'] == []
-    print("  OK: empty cache misses")
 
 
 def test_overlap_threshold_hit_on_identical_query():
     """A cached entry at the exact same query with r_c == r_t_hat should
     score a perfect (score=1.0) self-overlap and hit at any threshold
     below 1.0."""
-    print("Test: overlap_threshold_hit_policy hits on identical query")
     rng = np.random.RandomState(1)
     dim, n_base, K = 16, 80, 5
     base_vectors = rng.randn(n_base, dim).astype(np.float32)
@@ -961,16 +863,14 @@ def test_overlap_threshold_hit_on_identical_query():
     assert is_hit
     assert metadata['best_score'] > 0.99
     assert result is not None and len(result) == K
-    print("  OK: identical query hits with near-perfect score")
 
 
 def test_overlap_threshold_result_sorted_by_true_distance():
     """Regression test: the returned vectors must be the N nearest to
     the query (by actual distance), not the first N entries of the
-    entry's raw top_k_indices array (which is unsorted -- to_cache_entry
+    entry's raw top_k_indices array. That array is unsorted; to_cache_entry
     stores the full R_c set via np.flatnonzero, in ascending base-index
-    order, not distance order)."""
-    print("Test: overlap_threshold_hit_policy result is nearest-N by distance")
+    order, not distance order."""
     rng = np.random.RandomState(7)
     dim, n_base, K, N = 10, 40, 12, 4
     base_vectors = rng.randn(n_base, dim).astype(np.float32)
@@ -990,7 +890,6 @@ def test_overlap_threshold_result_sorted_by_true_distance():
     dists = np.arccos(np.clip(base_hat[candidate_indices] @ q_hat, -1.0, 1.0)) / np.pi
     expected_order = candidate_indices[np.argsort(dists)][:N]
     assert metadata['certified_indices'] == [int(i) for i in expected_order]
-    print("  OK: result matches true nearest-N ordering")
 
 
 def test_overlap_threshold_miss_below_threshold():
@@ -1008,7 +907,6 @@ def test_overlap_threshold_miss_below_threshold():
     assert not is_hit
     assert result is None
     assert metadata['certified_indices'] == []
-    print("  OK: far-apart query/entry misses")
 
 
 def test_chord_distance_array_matches_scalar():
@@ -1017,15 +915,13 @@ def test_chord_distance_array_matches_scalar():
     expected = np.array([_chord_distance_from_angular_scalar(float(ri)) for ri in r])
     actual = _chord_distance_from_angular_array(r)
     np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-15)
-    print("  OK: vectorized and scalar chord distance agree")
 
 
 def test_overlap_threshold_vectorized_matches_unvectorized_scoring():
-    """End-to-end parity: overlap_threshold_hit_policy's new vectorized
-    scoring loop must pick the same best_idx/best_score as manually
-    looping the (now-unused-in-production) scalar helpers over the same
-    entries -- proving the optimization didn't change behavior."""
-    print("Test: overlap_threshold_hit_policy vectorized scoring matches manual scalar loop")
+    """End-to-end parity: overlap_threshold_hit_policy's vectorized scoring
+    loop must pick the same best_idx/best_score as manually looping the
+    (unused-in-production) scalar helpers over the same entries. This
+    proves the optimization didn't change behavior."""
     rng = np.random.RandomState(11)
     dim, n_base, K, n_entries = 20, 100, 8, 15
     base_vectors = rng.randn(n_base, dim).astype(np.float32)
@@ -1058,15 +954,14 @@ def test_overlap_threshold_vectorized_matches_unvectorized_scoring():
 
         assert metadata['hit_entry_index'] == best_idx_manual
         # float32 base_vectors vs the manual loop's float64 arithmetic
-        # introduce O(1e-8) drift in D -- not a correctness issue, just
+        # introduce O(1e-8) drift in D, not a correctness issue, just
         # precision, so a looser tolerance than the exact-match parity
         # tests above (which use identical-precision inputs) is correct.
         assert abs(metadata['best_score'] - best_score_manual) < 1e-6
-    print("  OK: vectorized hit-policy scoring matches manual per-entry scalar loop")
 
 
 def test_overlap_threshold_precomputed_r_c_matches_default():
-    """precomputed_r_c is purely a caching optimization -- passing it in
+    """precomputed_r_c is purely a caching optimization: passing it in
     must produce identical output to letting the function fetch radii
     from cache_entries itself."""
     rng = np.random.RandomState(9)
@@ -1091,46 +986,3 @@ def test_overlap_threshold_precomputed_r_c_matches_default():
     assert meta_a['hit_entry_index'] == meta_b['hit_entry_index']
     assert meta_a['best_score'] == meta_b['best_score']
     assert meta_a['certified_indices'] == meta_b['certified_indices']
-    print("  OK: precomputed_r_c matches default radius lookup")
-
-#-------------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    print("="*80)
-    print("Testing Lemma Implementations")
-    print("="*80)
-
-    # test_binary_search()  # commented out -- see definition above
-    test_lemma1_simple()
-    test_lemma2_simple()
-    test_lemma2_union()
-    test_combined_algorithm()
-    test_cache_miss()
-    test_different_k_n()
-    test_n_greater_than_k()
-    test_lemma1_no_union()
-    test_lemma2_no_union()
-    test_lemma1_no_union_sigma_one_matches_exact()
-    test_lemma1_no_union_sigma_relaxes_threshold()
-    test_lemma2_no_union_sigma_one_matches_exact()
-    test_lemma2_no_union_sigma_relaxes_k_requirement()
-    test_batch_distances_fast_matches_fallback()
-    test_cig_distances_matrix_path_matches_fallback()
-    test_fit_r_t_hat_matches_percentile()
-    test_fit_r_t_hat_never_uses_test_queries()
-    test_overlap_threshold_requires_r_t_hat()
-    test_overlap_threshold_rejects_non_angular_metric()
-    test_overlap_threshold_rejects_sigma_relaxation()
-    test_overlap_threshold_empty_cache_misses()
-    test_overlap_threshold_hit_on_identical_query()
-    test_overlap_threshold_result_sorted_by_true_distance()
-    test_overlap_threshold_miss_below_threshold()
-    test_chord_distance_array_matches_scalar()
-    test_overlap_threshold_vectorized_matches_unvectorized_scoring()
-    test_overlap_threshold_precomputed_r_c_matches_default()
-
-    print("\n" + "="*80)
-    print("All tests passed.")
-    print("="*80)
-
-#-------------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 #-------------------------------------------------------------------------------
 """SIFT-format-specific dataloader tests (fvecs/ivecs binary formats, raw SIFT
 dataset loading). ESCI uses a different raw data format entirely (queries.npz/
-topk_100shards.npz/product_embeddings.npy) -- see test_dataloaders_esci.py in
+topk_100shards.npz/product_embeddings.npy). See test_dataloaders_esci.py in
 this same directory for its equivalent coverage."""
 
 import shutil

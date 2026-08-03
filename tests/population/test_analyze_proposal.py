@@ -1,21 +1,13 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Tests for the proposal analysis script using synthetic mock outputs.
+"""Tests for analyze_population_proposal.py using synthetic mock outputs.
 
 Mock directory naming matches real run_population.py output exactly
-(nmax{n}_k{k_test}, no separate K_cache component -- point-like proposal was
-removed and K_cache always equals K_test in the real pipeline; see
-utils/base/population.py and docs/POPULATION_DESIGN.md). A prior version of
-this test used a different, incorrect naming convention that happened to
-agree with the (also incorrect) parsing in analyze_population_proposal.py
--- both were wrong relative to real pipeline output, just consistently
-wrong with each other. This version is checked against the real naming
-directly (see test_analyze_regex_matches_real_naming below).
-
-Phase 3 Round 12 reworked the analysis script's grid from n x K_test to
-sigma x K_test (n is fixed at 20 in every real run, never actually swept)
-and added a per-K_test recall-vs-sigma plot -- these tests build mock data
-with a real sigma sweep by default, matching that shape.
+(nmax{n}_k{k_test}); K_cache always equals K_test, so there is no separate
+K_cache component (see utils/base/population.py and
+docs/POPULATION_DESIGN.md). The analysis grid is sigma x K_test, since n is
+fixed at 20 and never swept in real runs; these tests build mock data with
+a real sigma sweep by default to match that shape.
 """
 
 import sys
@@ -87,20 +79,17 @@ def _build_raw(raw_dir: Path, n: int = 1, k_test_vals=(0, 1), sigma_vals=_SIGMA_
 #-------------------------------------------------------------------------------
 
 def test_analyze_regex_matches_real_naming():
-    """Direct regression test for the bug found in Phase 3 Round 9: the
-    analysis script's directory-name regex must match what run_population.py
-    actually produces (nmax{n}_k{k_test}), not some other assumed shape."""
+    """The analysis script's directory-name regex must match what
+    run_population.py actually produces (nmax{n}_k{k_test})."""
     real_dirname = 'nmax20_k5'
     m = re.fullmatch(r'nmax(\d+)_k(\d+)', real_dirname)
     assert m is not None, f"regex must match real pipeline naming: {real_dirname!r}"
     assert m.group(1) == '20'
     assert m.group(2) == '5'
 
-    # also confirm the old (broken) patterns do NOT match, documenting why
-    # they were replaced
+    # confirm unrelated naming patterns do not also match
     assert re.fullmatch(r'n(\d+)_k(\d+)', real_dirname) is None
     assert re.fullmatch(r'n(\d+)_kc(\d+)_k(\d+)', real_dirname) is None
-    print("  OK: nmax{n}_k{k_test} regex matches real naming, old patterns don't")
 
 
 def test_analyze_creates_expected_plots():
@@ -117,17 +106,13 @@ def test_analyze_creates_expected_plots():
             assert (processed_dir / 'ball' / fname).exists(), f"Missing {fname}"
         assert not (processed_dir / 'ball' / 'memory_vs_vectors_cached.png').exists()
 
-        # Phase 3 Round 15: memory_vs_coverage.png and the aggregate/
-        # max-budget plot were both removed -- coverage tracks hit_rate
-        # almost exactly by construction at sigma=1.0 (proven identity,
-        # verified to exact agreement on real data) so a separate plot
-        # added no signal; the aggregate plot wasn't useful in practice.
+        # coverage tracks hit_rate almost exactly at sigma=1.0, so no
+        # separate coverage plot is produced; there is no aggregate plot.
         assert not (processed_dir / 'ball' / 'memory_vs_coverage.png').exists()
         assert not (processed_dir / 'ball' / 'aggregate').exists()
 
-        # New (Round 12): one combined recall-vs-sigma grid file (rows=K_test,
-        # columns=budget), no more separate sigma_*/ directories nesting the
-        # other plots, and no more one-file-per-K_test split (Round 13).
+        # recall_vs_sigma.png is one combined grid (rows=K_test, columns=
+        # budget); there are no per-K_test files or separate sigma_*/ dirs.
         assert (processed_dir / 'ball' / 'recall_vs_sigma.png').exists(), (
             "Missing recall_vs_sigma.png"
         )
@@ -144,15 +129,13 @@ def test_analyze_creates_expected_plots():
         assert not list(processed_dir.rglob('coverage_trajectory_*.png'))
         assert not list(processed_dir.rglob('hit_rate_vs_n.png'))
         assert not list(processed_dir.rglob('hit_rate_vs_ktest.png'))
-
-        print("  OK: all expected PNG files created")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def test_analyze_no_recall_plot_without_sigma_sweep():
     """A flat (single default sigma=1.0) layout has nothing to plot sigma
-    against -- recall_vs_sigma.png must not be produced."""
+    against, so recall_vs_sigma.png must not be produced."""
     tmpdir = Path(tempfile.mkdtemp(prefix='analyze_nosweep_'))
     try:
         raw_dir = tmpdir / 'raw'
@@ -161,7 +144,7 @@ def test_analyze_no_recall_plot_without_sigma_sweep():
 
         from simulations.population.analyze_population_proposal import analyze_dataset
         # flat layout: summary lives directly under B{budget}/non_oracle/...,
-        # not B{budget}/sigma_1.00/non_oracle/... -- rebuild without nesting.
+        # not B{budget}/sigma_1.00/non_oracle/...; rebuild without nesting.
         shutil.rmtree(raw_dir)
         for bm in _BENCHMARKS:
             for budget in [50, 100]:
@@ -178,7 +161,6 @@ def test_analyze_no_recall_plot_without_sigma_sweep():
             "recall_vs_sigma plots should not appear for a single-sigma run"
         )
         assert (processed_dir / 'ball' / 'memory_vs_hitrate.png').exists()
-        print("  OK: no recall_vs_sigma plot without a real sigma sweep")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -202,8 +184,6 @@ def test_analyze_memory_utilization_values():
                     f"Utilization out of range: bm={bm} budget={budget_str} util={util:.4f}"
                 )
                 assert 0.0 <= entry['mean_recall'] <= 1.0
-
-        print("  OK: memory utilization values in valid range")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -221,7 +201,6 @@ def test_analyze_no_sim_hit_rate_cig():
 
         cig_files = list(processed_dir.rglob('sim_hit_rate_cig.png'))
         assert len(cig_files) == 0, f"Unexpected cig files: {cig_files}"
-        print("  OK: sim_hit_rate_cig.png not produced")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -269,32 +248,5 @@ def test_analyze_debug_json():
 
         assert 'sanity_checks' in debug
         assert 'n_combos_with_exact_1.0_hit_rate_at_max_budget' in debug['sanity_checks']
-
-        print("  OK: debug JSON has expected structure")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-
-
-#-------------------------------------------------------------------------------
-
-def main():
-    tests = [
-        test_analyze_regex_matches_real_naming,
-        test_analyze_creates_expected_plots,
-        test_analyze_no_recall_plot_without_sigma_sweep,
-        test_analyze_memory_utilization_values,
-        test_analyze_no_sim_hit_rate_cig,
-        test_analyze_debug_json,
-    ]
-    print(f"\n{'='*70}")
-    print("Testing analysis script")
-    print('='*70)
-    for fn in tests:
-        print(f"\n[{fn.__name__}]")
-        fn()
-    print(f"\n{'='*70}")
-    print("All passed.")
-    print('='*70)
-
-if __name__ == '__main__':
-    main()

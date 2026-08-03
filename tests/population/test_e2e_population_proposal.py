@@ -109,12 +109,11 @@ def test_e2e_ball_proposal_runner(dataset):
 @pytest.mark.parametrize('dataset', ['sift', 'esci'])
 def test_e2e_k_test_zero(dataset):
     """K_test=0: cache entries still populated at K=1, but obs_r_Q/train_r_t
-    and test_r_t are both zeroed -- coverage and simulate-time hit
-    certification both reduce to pure distance containment. sim_K is no
-    longer clamped to 1, avoiding a division-by-zero in the old recall
-    formula. Phase 3 Round 15: recall at K=0 now scores 1.0 for every hit
-    (containment alone is the full task, no K-sized target to fall short
-    of) instead of being skipped/left at 0.0."""
+    and test_r_t are both zeroed, so coverage and simulate-time hit
+    certification reduce to pure distance containment. sim_K is not
+    clamped, avoiding a division by zero, and mean_recall scores 1.0 for
+    every hit, since containment alone is the full task with no K-sized
+    target to fall short of."""
     tmpdir = Path(tempfile.mkdtemp(prefix=f'{dataset}_prop_ktest0_'))
     try:
         _make_mini(dataset, tmpdir)
@@ -141,9 +140,9 @@ def test_e2e_k_test_zero(dataset):
 
 @pytest.mark.parametrize('dataset', ['sift', 'esci'])
 def test_e2e_point_various_n_max_values(dataset):
-    """n_max is no longer swept externally -- a single call proposes every
-    sphere in [1, n_max] at once. This just confirms the runner produces
-    valid output across a range of n_max sizes.
+    """A single call proposes every sphere in [1, n_max] at once; n_max is
+    not swept externally. This just confirms the runner produces valid
+    output across a range of n_max sizes.
 
     Mini benchmark has 20 cache queries, so n_max must be <= 19.
     """
@@ -162,8 +161,8 @@ def test_e2e_point_various_n_max_values(dataset):
 
 @pytest.mark.parametrize('dataset', ['sift', 'esci'])
 def test_e2e_ball_runner_no_k_cache_constraint(dataset):
-    """K_cache = K_test = K now, so there is no separate K_cache to skip
-    against -- _run_ball must run for any k_test >= 1 without special-casing."""
+    """K_cache = K_test = K, so there is no separate K_cache to skip
+    against; _run_ball must run for any k_test >= 1 without special-casing."""
     from simulations.population.run_population import _run_ball
 
     tmpdir = Path(tempfile.mkdtemp(prefix=f'{dataset}_prop_ball_run_'))
@@ -188,15 +187,11 @@ def test_e2e_ball_runner_no_k_cache_constraint(dataset):
 
 @pytest.mark.parametrize('dataset', ['sift', 'esci'])
 def test_e2e_ball_runner_k_test_zero_containment(dataset):
-    """Phase 3 Round 9 fixed _run_ball's K clamp (was forced to 1 in
-    containment mode). Phase 3 Round 12 went further: propose_candidates_ball's
-    K=0 margin is now uniformly 0 (not a reused train_r_t substitution), and
-    population_runner.py's sim_K is no longer clamped to 1 either -- so
-    containment mode now genuinely means "hit iff contained" end-to-end, not
-    an artificially-forced K=1 real-neighbor check. This runs the actual
-    driver end-to-end at k_test=0 and confirms real, sane output. Phase 3
-    Round 15: mean_recall at K=0 now scores 1.0 per hit (see
-    test_e2e_k_test_zero), not skipped/left at 0.0."""
+    """_run_ball's K=0 (containment mode) means "hit iff contained"
+    end-to-end: propose_candidates_ball's margin is uniformly 0 and
+    population_runner.py's sim_K is not clamped. Runs the driver end-to-end
+    at k_test=0 and confirms mean_recall scores 1.0 per hit (see
+    test_e2e_k_test_zero)."""
     from simulations.population.run_population import _run_ball
 
     tmpdir = Path(tempfile.mkdtemp(prefix=f'{dataset}_prop_ball_k0_'))
@@ -268,8 +263,8 @@ def test_e2e_budget_utilization_range(dataset):
 def test_e2e_sigma_output_structure(dataset):
     """Sigma sweep: B{budget}/sigma_*/ directory structure, summary.json's
     sigma/hit_rate/mean_recall fields, and a trajectory written once per
-    budget/strategy (not once per sigma -- sigma only affects the hit test,
-    not the proposal/caching trajectory)."""
+    budget/strategy, not once per sigma, since sigma only affects the hit
+    test, not the proposal/caching trajectory."""
     sigma_values = [0.70, 0.90]
     tmpdir = Path(tempfile.mkdtemp(prefix=f'{dataset}_prop_sigma_'))
     try:

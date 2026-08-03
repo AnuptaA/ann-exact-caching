@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""
-Edge case tests for the ESCI simulation workflow.
+"""Edge case tests for the ESCI simulation workflow.
 
-ESCI-specific notes vs SIFT edge cases (tests/test_edge_cases_sift.py):
-  - Exercises run_esci.py's precomputed-GT pipeline (load_cache_ground_truth /
-    populate_cache_from_precomputed), not raw CacheSimulator construction --
-    a genuinely different code path from SIFT's edge cases, not a mirror pair.
-  - The simulator is built with a dummy zero base_vectors array on purpose:
-    run_esci.py never does a real base search (the full 1.82M catalog is
-    never loaded), it only certifies hits via precomputed cache GT.
-  - Angular metric only, no multi-metric tests.
-  - Tests use synthetic 384-dim L2-normalized vectors (no real ESCI data needed).
+Exercises run_esci.py's precomputed-GT pipeline (load_cache_ground_truth /
+populate_cache_from_precomputed). The simulator is built with a dummy zero
+base_vectors array since run_esci.py only certifies hits via precomputed
+cache GT and never runs a real base search. Angular metric only, using
+synthetic 384-dim L2-normalized vectors.
 """
 
 import json
@@ -69,7 +64,7 @@ def test_empty_cache():
 def test_lemma_algorithms_run():
     """Test that both canonical no-union lemma algorithms run without error.
 
-    lemma1/lemma2/combined (union-based) are deprecated -- see
+    lemma1/lemma2/combined (union-based) are deprecated, see
     simulations/core/simulate.py.
     """
     tmpdir = get_temp_dir("edge_algos_")

@@ -2,12 +2,8 @@
 #-------------------------------------------------------------------------------
 """Edge case tests for the SIFT simulation workflow.
 
-SIFT-specific notes vs ESCI edge cases (tests/test_edge_cases_esci.py):
-  - Exercises CacheSimulator directly with a real base_vectors array (not
-    ESCI's precomputed-GT-loading pipeline) -- a genuinely different code
-    path from ESCI's edge cases, not a mirror pair.
-  - Multi-metric (angular/euclidean) tests, since SIFT's CacheSimulator path
-    supports both.
+Exercises CacheSimulator directly with a real base_vectors array, covering
+both angular and euclidean metrics.
 """
 
 import numpy as np

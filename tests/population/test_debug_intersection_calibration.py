@@ -4,7 +4,7 @@
 
 Distances/radii throughout are in this codebase's normalized angular units
 (D = arccos(dot)/pi, in [0,1]), matching debug_common.pairwise_dist's
-convention -- the cap sampler converts to true geodesic radians internally.
+convention. The cap sampler converts to true geodesic radians internally.
 """
 
 import sys
@@ -119,7 +119,7 @@ def test_cap_sampler_tangential_direction_unbiased():
 
 def test_intersection_fraction_exactly_one_when_fully_contained():
     """D + r_t <= r_c: every sampled point in t's cap is provably also in
-    q's cap (triangle inequality) -- MC estimate must be exactly 1.0."""
+    q's cap (triangle inequality), so the MC estimate must be exactly 1.0."""
     dim = 24
     rng_setup = np.random.default_rng(6)
     q = _random_pole(dim, seed=7)
@@ -136,7 +136,7 @@ def test_intersection_fraction_exactly_one_when_fully_contained():
 
 def test_intersection_fraction_exactly_zero_when_no_overlap():
     """D >= r_c + r_t: every sampled point in t's cap is provably outside
-    q's cap -- MC estimate must be exactly 0.0."""
+    q's cap, so the MC estimate must be exactly 0.0."""
     dim = 24
     q = np.zeros(dim); q[0] = 1.0
     # place t at angular distance D from q along axis 0/1 plane
@@ -213,8 +213,8 @@ def test_oracle_hit_matches_manual_R_c_containment():
 def test_oracle_hit_true_implies_query_covered_by_union():
     """One-directional only: if any candidate's oracle_hit is True for a
     query, the union-based covered label must also be True. Do NOT assert
-    the reverse (it's false in general -- neighbors can be split across
-    multiple candidates' balls)."""
+    the reverse: it's false in general, since neighbors can be split across
+    multiple candidates' balls."""
     from tests.helpers import make_clustered_candidate_benchmark
     from utils.base.selection import select_candidates
 
@@ -395,7 +395,7 @@ def test_load_sweep_reconstructs_same_shape_as_run(tmp_path):
 
 def test_save_then_load_sweep_matches_real_sweep():
     """End-to-end: a real (small) run_dual_predictor_sweep, saved and
-    reloaded, must reproduce the same data -- not just the synthetic
+    reloaded, must reproduce the same data, not just the synthetic
     round trip above."""
     bdir = dc.DATASET_CONFIG['sift']['base_dir'] / 'sift_b50k_c256k100_t512n20_s42'
     if not (bdir / 'cache_queries.npy').exists():
@@ -442,7 +442,7 @@ def test_exact_fraction_monotone_nonincreasing_in_distance():
 def test_exact_fraction_monotone_nonincreasing_in_dimension():
     """Fixed equal radii and a fixed partial-overlap distance: intersection
     fraction must be monotonically non-increasing as dimension increases
-    (concentration of measure -- fixed angular separation becomes
+    (concentration of measure: fixed angular separation becomes
     relatively 'more distant' as ambient dimension grows)."""
     r = 0.15
     D = 0.1  # partial overlap: D < 2r
@@ -472,7 +472,7 @@ def test_exact_fraction_matches_elementary_d2():
 def test_exact_fraction_matches_elementary_d3():
     """d=3: both the outer weight (sin(theta)) and the cross-sectional
     single-cap fraction (an S^1 arc fraction, theta/pi) reduce to
-    elementary trig expressions -- integrate them independently via a raw
+    elementary trig expressions. Integrate them independently via a raw
     quadrature of elementary functions, not reusing
     single_cap_volume_fraction, as a genuine independent check."""
     from scipy.integrate import quad
@@ -503,7 +503,7 @@ def test_exact_fraction_matches_elementary_d3():
 
 
 def test_exact_fraction_equal_radii_zero_distance_is_one():
-    """Equal radii, D=0: intersection is exactly 1.0 -- tested explicitly
+    """Equal radii, D=0: intersection is exactly 1.0. Tested explicitly
     as a boundary-equality case (D+r_t == r_c exactly), not just trusting
     the fast path's own internal logic."""
     for r in [0.05, 0.1, 0.2, 0.3]:
@@ -527,7 +527,7 @@ def test_exact_fraction_raw_volume_symmetric_under_swap():
 
 def test_exact_fraction_continuous_at_no_overlap_boundary():
     """As D approaches r_c+r_t from below, the fraction approaches 0
-    continuously -- no discontinuous jump at the fast-path boundary."""
+    continuously, with no discontinuous jump at the fast-path boundary."""
     r_c, r_t, d = 0.1, 0.1, 16
     boundary = r_c + r_t
     for eps in [0.05, 0.01, 0.001, 0.0001]:
@@ -606,7 +606,7 @@ def test_exact_vs_monte_carlo_cross_check():
 def test_sampler_fix_no_collapse_at_high_dim_small_radius():
     """At d=128 with a small radius, sampled points must actually spread
     out within the cap, not collapse to the exact pole (sf/isf regression
-    check -- see sample_cap_points docstring)."""
+    check, see sample_cap_points docstring)."""
     d = 128
     r = 0.05
     pole = np.zeros(d, dtype=np.float32); pole[0] = 1.0
@@ -614,11 +614,11 @@ def test_sampler_fix_no_collapse_at_high_dim_small_radius():
     pts = sample_cap_points(pole[None, :], np.array([r]), 2000, rng)[0]
     dists = np.arccos(np.clip(pts @ pole, -1.0, 1.0)) / np.pi
 
-    assert dists.max() > 0.0, "all samples collapsed to the exact pole -- sf/isf fix regressed"
+    assert dists.max() > 0.0, "all samples collapsed to the exact pole, sf/isf fix regressed"
     assert dists.std() > 0.0
     assert dists.max() > r * 0.5, (
-        f"samples cluster too close to the pole (max dist {dists.max()} for r={r}) "
-        "-- suggests the tail sampling is still numerically degenerate"
+        f"samples cluster too close to the pole (max dist {dists.max()} for r={r}), "
+        "suggesting the tail sampling is still numerically degenerate"
     )
 
 #-------------------------------------------------------------------------------
@@ -628,15 +628,15 @@ def test_sampler_fix_no_collapse_at_high_dim_small_radius():
 
 def test_exact_fraction_raises_on_underflow():
     """d=384, r_t=r_c=0.02, D=0.0004: both num and den integrals underflow
-    to exactly 0.0 -- must raise a clear error, not silently return NaN.
-    Avoids both fast paths, exercising the general quadrature path."""
+    to exactly 0.0, so this must raise a clear error, not silently return
+    NaN. Avoids both fast paths, exercising the general quadrature path."""
     with pytest.raises(ValueError, match="underflowed"):
         exact_intersection_fraction(0.0004, 0.02, 0.02, 384)
 
 
 def test_exact_fraction_no_underflow_at_real_data_ranges():
     """Regression guard: the fix must not become overly conservative and
-    reject real, safe production values -- SIFT's real range (d=128, r
+    reject real, safe production values. SIFT's real range (d=128, r
     down to ~0.02) and ESCI's real range (d=384, r down to ~0.16) must
     not raise."""
     exact_intersection_fraction(0.05, 0.1, 0.025, 128)  # SIFT-like
@@ -658,7 +658,7 @@ def test_exact_fraction_rejects_float32_inputs():
 def test_exact_fraction_split_check_agrees_on_real_and_synthetic_configs():
     """The independent split-range recomputation should agree with the
     primary result (no warning) across both extreme ESCI-like and
-    ordinary SIFT-like configs -- no false-alarm warnings."""
+    ordinary SIFT-like configs, with no false-alarm warnings."""
     import warnings
     configs = [
         (0.2931, 0.4238, 0.2529, 384),
@@ -679,7 +679,7 @@ def test_exact_fraction_split_check_agrees_on_real_and_synthetic_configs():
 
 def test_solid_ball_J_boundary_values():
     """J(R, 0) = 0.5 (hyperplane through center), J(R,R) = 0 (zero-height
-    cap), J(R,-R) = 1 (entire ball) -- checked indirectly via
+    cap), J(R,-R) = 1 (entire ball), checked indirectly via
     solid_ball_intersection_fraction's degenerate-case behavior."""
     # R1=R2=1, dist=1: hyperplane through midpoint, each J=0.5 by symmetry.
     for n in [2, 5, 20]:
@@ -767,7 +767,7 @@ def test_chord_distance_matches_direct_l2():
 def test_conditional_cap_fraction_matches_single_cap_volume_fraction():
     """conditional_cap_fraction inlines single_cap_volume_fraction's
     formula as scalar math for speed (see exact_intersection_fraction's
-    hot integrand path) -- must still match the reference vectorized
+    hot integrand path), but must still match the reference vectorized
     implementation exactly, across real SIFT/ESCI dimensions."""
     rng = np.random.default_rng(0)
     for d in [16, 128, 384]:
@@ -858,7 +858,7 @@ def test_fit_binomial_glm_recovers_known_sigmoid():
 
 def test_fit_binomial_glm_null_data_gives_weak_fit():
     """Fit a GLM on data with genuinely no relationship (y independent of
-    x) -- pseudo-R2 should be near zero and the slope not significant."""
+    x). pseudo-R2 should be near zero and the slope not significant."""
     rng = np.random.default_rng(1)
     n = 2000
     x = rng.uniform(0.0, 1.0, n)
@@ -871,8 +871,8 @@ def test_fit_binomial_glm_null_data_gives_weak_fit():
 
 def test_fit_binomial_glm_grouped_recall_case():
     """Grouped/proportion form (n_trials=K>1, successes=round(recall*K))
-    must also recover a known relationship -- same model family as the
-    binary case, generalized."""
+    must also recover a known relationship, using the same model family as
+    the binary case, generalized."""
     rng = np.random.default_rng(2)
     n = 1000
     K = 5
@@ -888,7 +888,7 @@ def test_fit_binomial_glm_grouped_recall_case():
 def test_mannwhitney_matches_auc_score():
     """mannwhitney_test's 'auc' must exactly match the existing
     auc_score (same Mann-Whitney U statistic, just also carrying a
-    p-value) -- direct cross-check between the hand-rolled and
+    p-value), as a direct cross-check between the hand-rolled and
     library-based computations."""
     rng = np.random.default_rng(3)
     n = 500
@@ -902,7 +902,7 @@ def test_mannwhitney_matches_auc_score():
 
 def test_mannwhitney_empty_group_returns_nan():
     x = np.array([0.1, 0.2, 0.3])
-    y = np.array([True, True, True])  # no misses -- one group empty
+    y = np.array([True, True, True])  # no misses, so one group is empty
     mw = mannwhitney_test(x, y)
     assert np.isnan(mw['auc'])
     assert np.isnan(mw['pvalue'])
@@ -942,14 +942,14 @@ def test_actual_budgets_empty_data():
 
 
 def test_actual_budgets_skips_missing_k():
-    # K=5 never appears for this benchmark -- must not raise.
+    # K=5 never appears for this benchmark, so this must not raise.
     data = {'bm1': {1: {0.05: {}}}}
     assert _actual_budgets(data, [1, 5]) == [0.05]
 
 
 def test_actual_budgets_counts_key_presence_not_value_truthiness():
     # A budget attempted-but-failed (result stored as None) still counts
-    # as "actually swept" -- _actual_budgets looks at dict keys, not at
+    # as "actually swept": _actual_budgets looks at dict keys, not at
     # whether the stored result is non-None.
     data = {'bm1': {1: {0.05: None, 0.15: {}}}}
     assert _actual_budgets(data, [1]) == [0.05, 0.15]
@@ -957,7 +957,7 @@ def test_actual_budgets_counts_key_presence_not_value_truthiness():
 
 def test_actual_budgets_exclude_full_drops_100pct():
     """budget=1.0 (100%) is a degenerate config (near-unconstrained
-    budget) that skews pooled statistics -- exclude_full=True must drop
+    budget) that skews pooled statistics. exclude_full=True must drop
     it, exclude_full=False (default) must keep it."""
     data = {'bm1': {1: {0.05: {}, 0.5: {}, 1.0: {}}}}
     assert _actual_budgets(data, [1]) == [0.05, 0.5, 1.0]

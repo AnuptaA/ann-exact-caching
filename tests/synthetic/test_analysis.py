@@ -149,8 +149,8 @@ def test_analyze_partial_produces_plots():
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
         # analyze_partial() always writes under the real project processed/
-        # dir (it's also a manual CLI tool, not just a test helper) -- clean
-        # up the test-generated output so runs don't accumulate.
+        # dir (it's also a manual CLI tool, not just a test helper), so
+        # clean up the test-generated output here to avoid accumulation.
         if outdir is not None and outdir.exists():
             shutil.rmtree(outdir, ignore_errors=True)
 

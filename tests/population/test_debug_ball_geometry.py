@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Tests for debug_ball_geometry.py (Phase 3 Round 14, plan Step G)."""
+"""Tests for debug_ball_geometry.py's margin, utility ratio, and
+self-exclusion checks."""
 
 import sys
 from pathlib import Path
@@ -44,7 +45,6 @@ def test_compute_margins_matches_brute_force():
         assert abs(float(margins[i]) - expected) < 1e-5, (
             f"query {i}: got {margins[i]:.6f}, expected {expected:.6f}"
         )
-    print("  OK: compute_margins matches brute-force reference")
 
 
 def _brute_force_utility_ratio(cache_q, base, K):
@@ -80,14 +80,13 @@ def _brute_force_utility_ratio(cache_q, base, K):
 
 def test_utility_ratio_k0_reduces_to_nn_over_dmin():
     """At K=0, utility ratio must equal exactly nn_dist / d_min (margin=0
-    by construction) -- checked against the brute-force reference."""
+    by construction), checked against the brute-force reference."""
     bm = _make_benchmark()
     ratio = compute_utility_ratio(bm['cache'], bm['base'], K=0)
     expected = _brute_force_utility_ratio(bm['cache'], bm['base'], K=0)
     assert np.allclose(ratio, expected, atol=1e-5), (
         f"K=0 utility ratio mismatch:\ngot={ratio}\nexpected={expected}"
     )
-    print("  OK: K=0 utility ratio matches nn_dist / d_min brute-force reference")
 
 
 def test_utility_ratio_k_positive_matches_brute_force():
@@ -101,7 +100,6 @@ def test_utility_ratio_k_positive_matches_brute_force():
     assert np.allclose(ratio, expected, atol=1e-5), (
         f"K={K} utility ratio mismatch:\ngot={ratio}\nexpected={expected}"
     )
-    print("  OK: K>0 utility ratio matches brute-force reference")
 
 
 def test_self_exclusion_holds_on_real_candidates():
@@ -113,14 +111,13 @@ def test_self_exclusion_holds_on_real_candidates():
     assert result['self_exclusion_violations'] == 0, (
         f"Expected 0 self-exclusion violations, got {result['self_exclusion_violations']}"
     )
-    print("  OK: self-exclusion holds on real candidates")
 
 
 def test_self_exclusion_check_detects_deliberate_violation():
-    """The self-exclusion check must actually fail on a deliberately broken
-    input -- proving the assertion in compute_rc_sizes_and_utility isn't a
-    no-op. Directly exercises the same detection logic used there, against
-    a candidate whose own source index was (wrongly) marked covered."""
+    """The self-exclusion check must fail on a deliberately broken input,
+    proving the assertion in compute_rc_sizes_and_utility isn't a no-op.
+    Directly exercises the same detection logic used there, against a
+    candidate whose own source index was (wrongly) marked covered."""
     from utils.base.population import propose_candidates_ball
 
     bm = _make_benchmark()
@@ -145,24 +142,3 @@ def test_self_exclusion_check_detects_deliberate_violation():
     cand.covered_train_indices[src_idx] = True
     violation_detected = cand.covered_train_indices[src_idx]
     assert violation_detected, "self-exclusion check failed to detect a deliberate violation"
-    print("  OK: self-exclusion check detects a deliberate violation")
-
-
-#-------------------------------------------------------------------------------
-
-def main() -> None:
-    tests = [
-        test_compute_margins_matches_brute_force,
-        test_utility_ratio_k0_reduces_to_nn_over_dmin,
-        test_utility_ratio_k_positive_matches_brute_force,
-        test_self_exclusion_holds_on_real_candidates,
-        test_self_exclusion_check_detects_deliberate_violation,
-    ]
-    for fn in tests:
-        print(f"\n[{fn.__name__}]")
-        fn()
-    print("\nAll passed.")
-
-
-if __name__ == '__main__':
-    main()

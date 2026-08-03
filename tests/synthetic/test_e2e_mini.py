@@ -13,7 +13,7 @@ from simulations.synthetic.analyze_synthetic import analyze
 
 #-------------------------------------------------------------------------------
 
-# lemma1/lemma2/combined (union-based) are deprecated -- see simulations/core/simulate.py.
+# lemma1/lemma2/combined (union-based) are deprecated, see simulations/core/simulate.py.
 ALGOS = ["lemma1_no_union", "lemma2_no_union", "brute"]
 METRICS = ["euclidean", "angular"]
 
@@ -23,12 +23,12 @@ METRICS = ["euclidean", "angular"]
 TINY = dict(num_base_vectors=200, dimension=16, seed=42)
 
 MINI_CONFIGS = [
-    # set1 -- baseline
+    # set1: baseline
     DatasetConfig(name="set1_baseline_seed42",
                   num_cache_queries=30, num_test_queries=15,
                   K=5, N=5, perturbation_level=2,
                   test_query_strategy="similar", **TINY),
-    # set2 -- three perturbation levels
+    # set2: three perturbation levels
     DatasetConfig(name="set2_pert_small_seed42",
                   num_cache_queries=30, num_test_queries=15,
                   K=5, N=5, perturbation_level=2,
@@ -41,7 +41,7 @@ MINI_CONFIGS = [
                   num_cache_queries=30, num_test_queries=15,
                   K=5, N=5, perturbation_level=0,
                   test_query_strategy="similar", **TINY),
-    # set3 -- two (K, N) combos
+    # set3: two (K, N) combos
     DatasetConfig(name="set3_kn_K5_N5_seed42",
                   num_cache_queries=30, num_test_queries=15,
                   K=5, N=5, perturbation_level=2,
@@ -50,7 +50,7 @@ MINI_CONFIGS = [
                   num_cache_queries=30, num_test_queries=15,
                   K=5, N=10, perturbation_level=2,
                   test_query_strategy="similar", **TINY),
-    # set4 -- variable N
+    # set4: variable N
     DatasetConfig(name="set4_varn_low_seed42",
                   num_cache_queries=30, num_test_queries=15,
                   K=15, N=0, N_range=(5, 10),
@@ -61,7 +61,7 @@ MINI_CONFIGS = [
                   K=15, N=0, N_range=(3, 12),
                   perturbation_level=2,
                   test_query_strategy="similar", **TINY),
-    # set5 -- union effectiveness (two cluster counts)
+    # set5: union effectiveness (two cluster counts)
     DatasetConfig(name="set5_union_X5_seed42",
                   num_cache_queries=30, num_test_queries=15,
                   K=5, N=5, perturbation_level=2,
@@ -72,7 +72,7 @@ MINI_CONFIGS = [
                   K=5, N=5, perturbation_level=2,
                   test_query_strategy="union_clustered",
                   num_clusters=10, **TINY),
-    # set6 -- two cache sizes
+    # set6: two cache sizes
     DatasetConfig(name="set6_cache_20_seed42",
                   num_cache_queries=20, num_test_queries=15,
                   K=5, N=5, perturbation_level=2,

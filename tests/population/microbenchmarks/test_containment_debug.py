@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Distance invariant checks for the containment microbenchmark's debug data,
-replacing the sanity_check() report-generation code that used to live in
-containment_debug.py."""
+"""Distance invariant checks for the containment microbenchmark's debug data."""
 
 import sys
 from pathlib import Path

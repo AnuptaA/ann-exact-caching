@@ -241,5 +241,8 @@ simulations/**/profiles/
 .claude/settings.local.json
 .claude/CLAUDE.md
 
+# old docs
+docs/old/
+
 # .DS_Store
 **/.DS_Store

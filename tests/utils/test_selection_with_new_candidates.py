@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """Confirm selection algorithms work correctly with K=0 (point-equivalent,
-removed as a standalone function in Phase 3 Round 12 -- see
-docs/POPULATION_DESIGN.md) and K>=1 ball candidates. These tests call
-propose_candidates_ball(K=0) directly and still exercise that data shape
-specifically since it's a genuinely different R_c/coverage density pattern
-than K>=1 ball, worth testing selection against independently."""
+exercised via propose_candidates_ball(K=0); see docs/POPULATION_DESIGN.md)
+and K>=1 ball candidates. K=0 is a genuinely different R_c/coverage density
+pattern than K>=1 ball, worth testing selection against independently."""
 
 import sys
 from pathlib import Path
@@ -48,7 +46,6 @@ def test_selection_point_candidates_greedy():
             seed=42,
         )
         check_selection_invariants(selected, trajectory, budget, f"point/{strategy}")
-    print("  OK: point candidates work with all greedy strategies")
 
 
 def test_selection_ball_candidates_greedy():
@@ -67,7 +64,6 @@ def test_selection_ball_candidates_greedy():
             seed=42,
         )
         check_selection_invariants(selected, trajectory, budget, f"ball/{strategy}")
-    print("  OK: ball candidates work with all greedy strategies")
 
 
 def test_selection_budget_not_exceeded():
@@ -96,25 +92,3 @@ def test_selection_budget_not_exceeded():
                 check_selection_invariants(
                     selected, trajectory, budget, f"{method}/{strategy}/budget={budget}"
                 )
-    print("  OK: budget never exceeded across all methods/strategies")
-
-#-------------------------------------------------------------------------------
-
-def main():
-    tests = [
-        test_selection_point_candidates_greedy,
-        test_selection_ball_candidates_greedy,
-        test_selection_budget_not_exceeded,
-    ]
-    print(f"\n{'='*70}")
-    print("Testing selection with new candidate types")
-    print('='*70)
-    for fn in tests:
-        print(f"\n[{fn.__name__}]")
-        fn()
-    print(f"\n{'='*70}")
-    print("All passed.")
-    print('='*70)
-
-if __name__ == '__main__':
-    main()

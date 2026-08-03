@@ -22,8 +22,8 @@ def _make_dataset(n_base=30, n_obs=5, n_test=10, d=8, seed=0):
     return base, obs, test
 
 def _mask(indices: set, n_domain: int) -> np.ndarray:
-    """Boolean coverage array of length n_domain from a set of indices --
-    matches the covered_train_indices/covered_test_indices representation."""
+    """Boolean coverage array of length n_domain from a set of indices,
+    matching the covered_train_indices/covered_test_indices representation."""
     m = np.zeros(n_domain, dtype=bool)
     for i in indices:
         m[i] = True
@@ -49,10 +49,9 @@ def test_candidate_entry_to_cache_entry():
     """to_cache_entry() uses r_c (not r_Q) as the radius and builds the stored
     index set from R_c (the complete within-r_c index set), not top_k_indices.
 
-    Entries are index-only (no private top_k_vectors/top_k_matrix copy) --
+    Entries are index-only (no private top_k_vectors/top_k_matrix copy);
     distance computation and result-vector lookup go through a shared
     base_hat/base_vectors matrix at hit-check time instead."""
-    print("Test: CandidateEntry.to_cache_entry()")
     base, obs, test = _make_dataset()
     r_Q, tv, ti, hg = _gt_for_queries(obs[:1], base)
 
@@ -78,12 +77,10 @@ def test_candidate_entry_to_cache_entry():
     assert list(entry.top_k_indices) == R_c_indices, "top_k_indices should come from R_c"
     assert entry.top_k_vectors == [], "index-only entries carry no private vector copy"
     assert entry.top_k_matrix is None, "index-only entries carry no private matrix copy"
-    print("  Passed.")
 
 
 def test_candidate_entry_to_cache_entry_requires_rc():
     """to_cache_entry() raises if R_c was not computed (store_rc=False)."""
-    print("Test: CandidateEntry.to_cache_entry() requires R_c")
     base, obs, test = _make_dataset()
     r_Q, tv, ti, hg = _gt_for_queries(obs[:1], base)
 
@@ -105,23 +102,18 @@ def test_candidate_entry_to_cache_entry_requires_rc():
         assert False, "expected ValueError when R_c is None"
     except ValueError:
         pass
-    print("  Passed.")
 
 def test_to_cache_entry_cig_soundness():
-    """Regression: when R_c is the complete within-r_c set, certified indices satisfy CIG.
+    """When R_c is the complete within-r_c set, certified indices satisfy CIG.
 
-    Reproduces the failure mode where r_c covers far more base vectors than K_test:
-    a buggy (pre-fix) to_cache_entry stored only K_test vectors; certified indices then
-    contained non-NN vectors and recall < sigma. With the fix (store full R_c), all
-    certified indices are closer to the test query than any non-stored base vector,
-    so recall >= sigma is guaranteed on every hit.
+    Covers the case where r_c covers far more base vectors than K_test: since
+    to_cache_entry stores the full R_c (not just K_test vectors), all certified
+    indices are closer to the test query than any non-stored base vector, so
+    recall >= sigma is guaranteed on every hit.
 
-    Uses lemma1_no_union_sigma (the active algorithm) against an index-only
-    CacheEntry, threading the shared base_hat/base_vectors matrices the way
-    CacheSimulator does -- lemma1_sigma (union-based) is deprecated and no
-    longer wired to interoperate with index-only entries.
+    Uses lemma1_no_union_sigma against an index-only CacheEntry, threading the
+    shared base_hat/base_vectors matrices the way CacheSimulator does.
     """
-    print("Test: to_cache_entry CIG soundness (regression)")
     from utils.base.lemmas_sigma import lemma1_no_union_sigma
     from utils.base.distance_metrics import angular_distance
 
@@ -173,16 +165,14 @@ def test_to_cache_entry_cig_soundness():
         certified = set(meta['certified_indices'])
         recall = len(certified & true_topk) / K_TEST
         assert recall >= sigma - 1e-9, (
-            f"sigma={sigma}: recall={recall:.4f} < sigma -- CIG soundness violated"
+            f"sigma={sigma}: recall={recall:.4f} < sigma, CIG soundness violated"
         )
-    print("  Passed.")
 
 
 #-------------------------------------------------------------------------------
 
 def test_propose_candidates_coverage_correctness():
     """covered_test_indices matches the manual CIG coverage check."""
-    print("Test: coverage correctness")
     for metric in ('angular', 'euclidean'):
         base, obs, test = _make_dataset(n_base=30, n_obs=3, n_test=8)
         r_Q, tv, ti, hg = _gt_for_queries(obs, base, K=3)
@@ -209,13 +199,10 @@ def test_propose_candidates_coverage_correctness():
             assert np.array_equal(cand.covered_test_indices, expected), \
                 f"Coverage mismatch for metric={metric}: got {cand.covered_test_indices}, expected {expected}"
 
-    print("  Passed.")
-
 #-------------------------------------------------------------------------------
 
 def test_propose_candidates_alpha_scaling():
     """Larger alpha produces equal or more R_c entries for the same query."""
-    print("Test: alpha scaling")
     # Use test queries as train (no source exclusion) to ensure both alphas produce candidates.
     base, obs, test = _make_dataset(n_base=50)
     r_Q, tv, ti, hg = _gt_for_queries(obs, base, K=3)
@@ -242,13 +229,11 @@ def test_propose_candidates_alpha_scaling():
             found = True
 
     assert found, "Need at least one query with both alphas to test scaling"
-    print("  Passed.")
 
 #-------------------------------------------------------------------------------
 
 def test_propose_source_query_excluded():
     """Source query index must not appear in any candidate's covered_train_indices."""
-    print("Test: source query excluded from train coverage")
     base, obs, _ = _make_dataset(n_base=30, n_obs=5, n_test=10, seed=0)
     r_Q, tv, ti, hg = _gt_for_queries(obs, base, K=3)
     # With obs as both train and test, source i is discarded from train coverage.
@@ -263,16 +248,14 @@ def test_propose_source_query_excluded():
         src_idx = next(idx for idx, q in enumerate(obs) if np.allclose(q, c.query))
         assert not c.covered_train_indices[src_idx], \
             f"Source index {src_idx} found in covered_train_indices for candidate {src_idx}"
-    print(f"  {len(candidates)} candidates checked. Passed.")
 
 #-------------------------------------------------------------------------------
 
 def test_propose_empty_covered_pruned():
     """Candidates whose train covered set is empty after source exclusion are pruned."""
-    print("Test: empty-covered candidates pruned")
     base, obs, _ = _make_dataset(n_base=30, n_obs=3, n_test=10)
     r_Q, tv, ti, hg = _gt_for_queries(obs[:1], base, K=3)
-    # 1 train query = the source itself; after discard(0), train_covered is empty → pruned
+    # 1 train query = the source itself; after discard(0), train_covered is empty, so pruned
     candidates = propose_candidates(
         obs[:1], r_Q[:1], tv[:1], ti[:1], hg[:1],
         obs[:1], r_Q[:1],
@@ -280,13 +263,11 @@ def test_propose_empty_covered_pruned():
         base, alpha_values=[1.2], metric='angular',
     )
     assert candidates == [], f"Expected empty list; got {len(candidates)} candidates"
-    print("  Passed.")
 
 #-------------------------------------------------------------------------------
 
 def test_propose_candidates_deterministic():
     """Same inputs always produce the same output."""
-    print("Test: deterministic output")
     base, obs, test = _make_dataset()
     r_Q, tv, ti, hg = _gt_for_queries(obs, base, K=3)
     test_r_t = np.zeros(len(test), dtype=np.float32)
@@ -300,29 +281,3 @@ def test_propose_candidates_deterministic():
         assert np.array_equal(a.R_c, b.R_c), "R_c differs on repeat call"
         assert np.array_equal(a.covered_train_indices, b.covered_train_indices)
         assert np.array_equal(a.covered_test_indices, b.covered_test_indices)
-    print("  Passed.")
-
-#-------------------------------------------------------------------------------
-
-def main():
-    print("=" * 70)
-    print("Testing population.py")
-    print("=" * 70)
-
-    test_candidate_entry_to_cache_entry()
-    test_candidate_entry_to_cache_entry_requires_rc()
-    test_to_cache_entry_cig_soundness()
-    test_propose_candidates_coverage_correctness()
-    test_propose_candidates_alpha_scaling()
-    test_propose_source_query_excluded()
-    test_propose_empty_covered_pruned()
-    test_propose_candidates_deterministic()
-
-    print("\n" + "=" * 70)
-    print("All tests passed.")
-    print("=" * 70)
-
-#-------------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    main()
