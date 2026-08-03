@@ -2,13 +2,14 @@
 #-------------------------------------------------------------------------------
 """Query-Clustering Ratio Benchmark.
 
+----- To be removed soon, left for reference
+
 For each dataset, computes for every query q:
   r(q) = Euclidean distance to its nearest neighbor in the database
-  d(q) = Euclidean distance to its nearest other query in Q (excluding self)
+  d(q) = Euclidean distance to its nearest other query in Q
   ratio(q) = d(q) / r(q)
 
-ratio < 1 means queries cluster tighter than the database is sampled — the
-regime where the caching correctness guarantees deliver the most benefit.
+ratio < 1 = queries cluster more tightly than data => optimal setting
 """
 
 import sys
@@ -70,8 +71,8 @@ def _load_esci(
     rng = np.random.default_rng(seed)
     idx = np.sort(rng.choice(len(queries), size=n_sample, replace=False))
     queries = queries[idx]
+
     # topk_scores are dot-product similarities for L2-normalized vectors
-    # Euclidean: ||a - b||^2 = 2 - 2*(a . b)
     r_q = np.sqrt(np.maximum(0.0, 2.0 - 2.0 * topk_scores[idx, 0].astype(np.float64)))
     print(f"  {len(queries)} queries (sample of {n_sample}), r range [{r_q.min():.4f}, {r_q.max():.4f}]")
     return queries, r_q
@@ -180,7 +181,7 @@ def _plot_cdf(datasets: dict, outdir: Path) -> None:
     _pct_fmt(ax, 'y')
     ax.legend()
     plt.tight_layout()
-    fig.suptitle("Query Clustering Ratio — Empirical CDF", y=1.02)
+    fig.suptitle("Query Clustering Ratio - Empirical CDF", y=1.02)
     fig.savefig(outdir / 'ratio_cdf.png', dpi=200, bbox_inches='tight')
     plt.close(fig)
     print("  ratio_cdf.png")
@@ -220,9 +221,9 @@ def _plot_geometry_scatter(datasets: dict, outdir: Path) -> None:
         ax.set_yscale('log')
         ax.set_xlim(lo, hi)
         ax.set_ylim(lo, hi)
-        ax.set_xlabel(r"$r(q)$ — database NN distance")
+        ax.set_xlabel(r"$r(q)$ - database NN distance")
         if col == 0:
-            ax.set_ylabel(r"$d(q)$ — query-set NN distance")
+            ax.set_ylabel(r"$d(q)$ - query-set NN distance")
         ax.set_title(label)
         ax.legend(fontsize=8, markerscale=3)
 
@@ -235,9 +236,6 @@ def _plot_geometry_scatter(datasets: dict, outdir: Path) -> None:
 
 def _plot_distance_distributions(datasets: dict, outdir: Path) -> None:
     """Histogram of r(q) and d(q) per dataset, one file each with its own scale.
-
-    If d(q) distribution lies left of r(q), queries cluster more tightly than the
-    database is sampled — the caching regime.
     """
     for label, res in datasets.items():
         r_q = res['r'][res['r'] > 0]
@@ -250,9 +248,9 @@ def _plot_distance_distributions(datasets: dict, outdir: Path) -> None:
 
         fig, ax = plt.subplots(figsize=(7, 5))
         ax.hist(r_q, bins=bins, density=True, alpha=0.55, color='steelblue',
-                label=r"$r(q)$ — database NN")
+                label=r"$r(q)$ - database NN")
         ax.hist(d_q, bins=bins, density=True, alpha=0.55, color='darkorange',
-                label=r"$d(q)$ — query-set NN")
+                label=r"$d(q)$ - query-set NN")
         ax.set_xscale('log')
         ax.set_xlabel("Distance")
         ax.set_ylabel("Density")
@@ -319,7 +317,7 @@ def _plot_ratio_vs_r_density(datasets: dict, outdir: Path) -> None:
         fig.colorbar(hb, ax=ax, label='Count')
         ax.axhline(1.0, color='red', linestyle='--', linewidth=1.2, alpha=0.7,
                    label='ratio = 1')
-        ax.set_xlabel(r"$r(q)$ — database NN distance")
+        ax.set_xlabel(r"$r(q)$ - database NN distance")
         if col == 0:
             ax.set_ylabel(r"$d(q)/r(q)$")
         ax.set_title(label)

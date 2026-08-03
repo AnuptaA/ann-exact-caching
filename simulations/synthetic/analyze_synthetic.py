@@ -1140,19 +1140,19 @@ def plot_set6_coverage_and_hit_rate(
             ax = axes[row_idx][col_idx]
             cs_arr = np.array(cache_sizes, dtype=float)
 
-            # coverage (actual) — red
+            # coverage (actual) - red
             h_cov, = ax.plot(cs_arr, cov_mean, color='red', linewidth=2.5,
                              label='Coverage (actual)')
             if h_cov_handle is None:
                 h_cov_handle = h_cov
 
-            # coverage (estimated) — blue dashed
+            # coverage (estimated) - blue dashed
             h_est, = ax.plot(cs_arr, est_vals, color='blue', linewidth=2,
                              linestyle='--', label='Coverage (estimated)')
             if h_est_handle is None:
                 h_est_handle = h_est
 
-            # hit rate line for this algo/metric — green
+            # hit rate line for this algo/metric - green
             m_sub = sub[
                 (sub['metric'] == metric) &
                 (sub['algorithm'] == algo)

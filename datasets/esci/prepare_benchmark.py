@@ -15,12 +15,12 @@ from datasets.dataloaders import load_esci_data, save_esci_benchmark
 ESCI_DIR = Path("datasets/esci")
 
 RESEARCH_BENCHMARKS = [
-    # Set 1: Baseline -- 1024 cache x 3 seeds
+    # Set 1: Baseline, 1024 cache x 3 seeds
     # test_start=5000 matches Set 2 so 1024 shared with Set 2 uses identical test queries
     dict(num_cache=1024, num_test=512, cache_K=99, test_N=20, seed=42, test_start=5000),
     dict(num_cache=1024, num_test=512, cache_K=99, test_N=20, seed=43, test_start=5000),
     dict(num_cache=1024, num_test=512, cache_K=99, test_N=20, seed=44, test_start=5000),
-    # Set 2: Cache size scaling -- 5 sizes x 3 seeds
+    # Set 2: Cache size scaling, 5 sizes x 3 seeds
     # test_start=5000 anchors test queries beyond max cache size (4096) so all sizes use
     # identical test queries (perm[5000:5512]). 1024 is shared with Set 1.
     dict(num_cache=256,  num_test=512, cache_K=99, test_N=20, seed=42, test_start=5000),
@@ -41,7 +41,7 @@ RESEARCH_BENCHMARKS = [
     # overlap an 8192-sized cache range), so this uses a different held-out
     # test set than the 256-4096 rows above.
     dict(num_cache=8192, num_test=512, cache_K=99, test_N=20, seed=42, test_start=8692),
-    # Set 3: K/N relationship -- 9 pairs x 3 seeds; (K,N) in {20,50,99}^2
+    # Set 3: K/N relationship, 9 pairs x 3 seeds; (K,N) in {20,50,99}^2
     dict(num_cache=1024, num_test=256, cache_K=20,  test_N=20,  seed=42),
     dict(num_cache=1024, num_test=256, cache_K=20,  test_N=20,  seed=43),
     dict(num_cache=1024, num_test=256, cache_K=20,  test_N=20,  seed=44),
@@ -94,7 +94,7 @@ def build_cache_gt(
     Build and save cache query ground truth from precomputed topk data.
 
     Converts cosine similarity scores to angular distances and saves the
-    top-K product vectors (needed for KVCache population at simulation time).
+    top-K product vectors needed for KVCache population at simulation time.
 
     Args:
         cache_query_indices: indices into the full query set (130K) for cache queries
@@ -121,7 +121,6 @@ def build_cache_gt(
         scores_kp1 = topk_scores[global_i, :cache_K + 1] # (K+1,) cosine similarity
 
         # convert cosine similarity -> angular distance, normalized by pi -> [0, 1]
-        # matches angular_distance() in utils/base/distance_metrics.py
         distances_kp1 = (np.arccos(np.clip(scores_kp1, -1.0, 1.0)) / np.pi).astype(np.float32)
         distances = distances_kp1[:cache_K]              # (K,) distances for cache entry
 
@@ -183,7 +182,7 @@ def prepare_esci_benchmark(
     total_queries_needed = num_cache_queries + num_test_queries
     print(f"\nLoading ESCI data (need {total_queries_needed:,} of 130,652 queries)...")
 
-    # Load embeddings -- needed once to extract top-K vectors for cache GT
+    # Load embeddings, needed once to extract top-K vectors for cache GT
     product_embeddings, query_vectors, topk_ids, topk_scores = load_esci_data(
         str(ESCI_DIR), load_embeddings=True
     )
@@ -268,7 +267,7 @@ _POPULATION_SOURCES = [
     "esci_c2048k99_t512n20_s42",
     "esci_c2048k99_t512n20_s43",
     "esci_c2048k99_t512n20_s44",
-    # Cache density investigation (single seed only)
+    # temporarily added to observe cache size scaling effects
     "esci_c4096k99_t512n20_s42",
     "esci_c8192k99_t512n20_s42",
 ]
@@ -287,7 +286,7 @@ POPULATION_BENCHMARKS = [
     "esci_c2048k100_t512n20_s42",
     "esci_c2048k100_t512n20_s43",
     "esci_c2048k100_t512n20_s44",
-    # Cache density investigation (single seed only)
+    # temporarily added to observe cache size scaling effects
     "esci_c4096k100_t512n20_s42",
     "esci_c8192k100_t512n20_s42",
 ]
@@ -368,11 +367,7 @@ def _brute_force_knn_angular_multi_k(
 ) -> dict:
     """
     Brute-force top-K_max angular KNN of queries against base, sliced per K
-    in K_list -- one shared O(n_queries * n_base) matmul pass instead of one
-    pass per K (top-1 subset top-5 subset ... subset top-k_max are nested).
-    Identical math to _brute_force_knn_angular, just parameterized by
-    k_max = max(K_list) and sliced afterward (verified bit-identical in
-    tests/datasets/test_multi_k_gt.py).
+    in K_list, using one shared O(n_queries * n_base) matmul pass.
 
     Returns {k: [(indices, distances, gap), ...] per query} for k in K_list.
     """
@@ -485,7 +480,7 @@ def create_esci_population_benchmark(
     with open(output_dir / 'config.json', 'w') as f:
         json.dump(config, f, indent=2)
 
-    # base_vectors.npy — 50K sample, fixed seed
+    # base_vectors.npy - 50K sample, fixed seed
     base_file = output_dir / 'base_vectors.npy'
     idx_file = output_dir / 'base_sample_indices.npy'
     if base_file.exists():
@@ -565,7 +560,7 @@ def extend_benchmark_with_population_data(
     print(f"Extending with population data: {benchmark_dir.name}")
     print(f"{'='*80}")
 
-    # base_vectors.npy — 50K sample, fixed seed
+    # 50K sample, fixed seed
     base_file = benchmark_dir / 'base_vectors.npy'
     idx_file = benchmark_dir / 'base_sample_indices.npy'
     if base_file.exists():
@@ -616,7 +611,7 @@ def extend_benchmark_with_population_data(
         print(f"  Saved: test_r_t.npy  range=[{r_t.min():.4f}, {r_t.max():.4f}]")
 
     # per-K GT files for K-microbenchmark (K=[1,5,10,20]): one shared pass
-    # at max(K_VALUES), sliced per K, instead of one pass per K.
+    # at max(K_VALUES)
     _save_population_gt_multi_k(cache_q, base, K_VALUES, benchmark_dir, "cache")
 
     # per-K test GT files for K-override runs
@@ -674,9 +669,6 @@ def main():
                           if b['cache_K'] == 99 and b['test_N'] == 20],
         'kn_relationship': [b for b in RESEARCH_BENCHMARKS
                             if b['num_cache'] == 1024 and b['num_test'] == 256],
-        # exactly the K=99 source benchmarks _POPULATION_SOURCES derives the
-        # K=100 population benchmarks from -- avoids --all's wasted prep of
-        # the K/N-relationship and c4096 benchmarks population work never uses.
         'population': [b for b in RESEARCH_BENCHMARKS
                        if create_benchmark_name(
                            b['num_cache'], b['cache_K'], b['num_test'], b['test_N'], b['seed']

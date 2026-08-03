@@ -79,15 +79,13 @@ def select_candidates(
     return selected, trajectory
 
 #-------------------------------------------------------------------------------
-# Scalar helpers -- used by _select_random, which processes one candidate at a
-# time from a fixed permutation and never rescans, so it has no need for the
-# batched/vectorized helpers below.
+# Scalar helpers
 #-------------------------------------------------------------------------------
 
 def _fits_budget(c: CandidateEntry, cached_mask: np.ndarray, n_cached: int, budget_B: int) -> bool:
     if c.R_c is None:
         raise ValueError("_fits_budget requires R_c; use store_rc=True in propose_candidates")
-    # Short-circuit: best case (zero overlap) — if it still doesn't fit, reject early.
+    # Short-circuit: best case (zero overlap) - if it still doesn't fit, reject early.
     if n_cached + c.rc_size <= budget_B:
         return True
     new_vecs = int(np.sum(c.R_c & ~cached_mask))
@@ -124,45 +122,6 @@ def _select_random(
 
 #-------------------------------------------------------------------------------
 # Vectorized batch helpers for the three greedy strategies below.
-#
-# All three repeatedly rescan a shrinking "working"/"active" list to find the
-# next best candidate. At large budgets, _fits_budget's capacity check stops
-# rejecting candidates (the budget rarely gets exceeded), so the active set
-# stays large for many iterations -- a Python-level loop calling one numpy
-# reduction per candidate (the previous implementation) pays per-candidate
-# Python/numpy dispatch overhead on every single iteration, which dominates
-# at scale (~41k candidates x hundreds of iterations on real data).
-#
-# Design notes (important for memory -- an earlier version of this file
-# maintained a persistent stacked matrix shrunk via repeated boolean-mask
-# indexing, which turned out to create several large transient copies per
-# iteration, ballooning peak memory to ~6GB with no speed benefit over the
-# original Python loop at real scale; that approach was abandoned):
-#   - The object list itself (`working`/`active`) is filtered the same cheap
-#     way the original code did (a plain Python list comprehension) -- this
-#     never touches R_c/covered_train_indices data, so it's O(active) in
-#     Python-object-reference cost only, not O(active * n_base).
-#   - A 2D stack of R_c/covered_train_indices is only ever built fresh, for
-#     whatever the *current* (already-filtered) working set is, used for
-#     exactly one vectorized computation, and then discarded -- never
-#     persisted or incrementally shrunk. This bounds peak memory to one
-#     stack's worth of data at a time.
-#   - For greedy_naive/greedy_cost_static, R_c is only needed for the budget
-#     fits-check (scoring uses covered_train_indices and, for cost_static,
-#     the scalar rc_size -- never R_c itself), so the expensive R_c check is
-#     only performed for the subset that fails the cheap rc_size
-#     short-circuit -- typically small at large budgets, since most
-#     candidates trivially fit.
-#   - greedy_cost no longer follows this "fresh stack per iteration" pattern
-#     for its own marginal/newly bookkeeping -- see the incremental-delta
-#     design note at the top of _select_greedy_cost below, which replaced
-#     the per-iteration full recompute with delta updates (a further round
-#     of optimization after the "fresh stack" approach above stopped being
-#     fast enough at budget_fraction close to 1.0, where the active set
-#     barely shrinks and hundreds of full O(active * n_base) recomputes
-#     dominated runtime). The "fresh stack, one-time use" pattern is still
-#     exactly right for greedy_naive/greedy_cost_static below, which don't
-#     have this problem (their filters shrink the active set quickly).
 #-------------------------------------------------------------------------------
 
 def _fits_mask(working: list, cached_mask: np.ndarray, n_cached: int, budget_B: int) -> np.ndarray:
@@ -192,16 +151,7 @@ _DELTA_CHUNK_SIZE = 6000
 _POPCOUNT_TABLE = np.array([bin(i).count('1') for i in range(256)], dtype=np.uint16)
 
 # Crossover for switching from the fancy-index gather to the bit-packed
-# path, expressed as a fraction of the attribute array's length. Measured
-# directly (utils/base/selection.py's _chunked_delta_counts profiling,
-# real SIFT c2048/K=5 data): fancy-index gather cost scales with
-# len(idx), bit-packing's cost is ~fixed per chunk (dominated by
-# np.packbits(chunk, axis=1), independent of idx size) -- the two cross
-# over empirically around idx ~= attr_len/20 (e.g. ~2500 for a 50000-long
-# R_c array). Below that, gather wins (often heavily -- most calls in a
-# real run have idx in the single digits to low hundreds, where packing
-# would be a large regression); above it, packing wins by up to ~12x at
-# the largest real idx sizes observed (~33000).
+# path, expressed as a fraction of the attribute array's length.
 _BITPACK_IDX_FRACTION = 1 / 20
 
 
@@ -242,16 +192,7 @@ def _chunked_delta_counts(active: list, attr: str, idx: np.ndarray,
     else:
         for start in range(0, len(active), chunk_size):
             chunk = active[start:start + chunk_size]
-            # One cheap full-array grab per candidate (contiguous copy, not
-            # fancy-indexed) then a single vectorized 2D gather across the
-            # whole chunk -- not one fancy-index call per candidate. The
-            # per-candidate version (getattr(c, attr)[idx] in the list
-            # comprehension) was measured spending ~97% of wall time in
-            # numpy's mapiter_trivial_get at real scale (c4096, K=0: many
-            # greedy iterations x a large active set, each iteration paying
-            # per-call fancy-index overhead len(active) times). Matches the
-            # bitpack path's existing full-grab pattern; bit-identical
-            # result, not an approximation.
+
             batch_full = np.array([getattr(c, attr) for c in chunk])
             batch = batch_full[:, idx]
             counts[start:start + len(chunk)] = np.count_nonzero(batch, axis=1)
@@ -338,30 +279,11 @@ def _select_greedy_cost(
     selected, cached_mask, covered_train_mask, covered_test_mask, trajectory,
 ):
     # marginal/newly are maintained incrementally across iterations rather
-    # than recomputed from scratch each time. cached_mask/covered_train_mask
-    # only ever grow (|= only), so both quantities are monotonically
-    # non-increasing, and the *change* each iteration depends only on the
-    # bits the just-selected candidate's R_c/covered_train_indices newly
-    # set -- not on the full n_base/n_train_queries dimension. This turns
-    # the dominant per-iteration cost from O(|active| * n_base) (rebuilding
-    # and reducing a fresh stacked matrix every iteration) into
-    # O(|active| * k), where k is the number of newly-set bits that
-    # iteration; summed over the whole run, total k is bounded by n_base
-    # (for marginal) / n_train_queries (for newly), giving a large net
-    # reduction in total work at large budgets, where the active set barely
-    # shrinks. Numerically exact: these are integer popcounts of set
-    # differences, not an approximation.
+    # than recomputed from scratch each time.
     active = list(candidates)
     deferred: List[CandidateEntry] = []
 
     if active:
-        # cached_mask is freshly all-zero here (just initialized in
-        # select_candidates, untouched before this point), so
-        # count_nonzero(c.R_c & ~cached_mask) == count_nonzero(c.R_c) ==
-        # c.rc_size exactly -- already computed and stored on every
-        # candidate, so the initial marginal needs no matrix construction
-        # at all (this used to build a full (|active|, n_base) ~2GB stack
-        # plus a same-size transient AND result, ~4.1GB peak at real scale).
         marginal = np.array([c.rc_size for c in active], dtype=np.int64)
         newly = _newly_covered_mask(active, covered_train_mask)
     else:
@@ -405,10 +327,7 @@ def _select_greedy_cost(
         prev_train = int(covered_train_mask.sum())
         prev_test = int(covered_test_mask.sum())
 
-        # Bits best newly contributes -- computed before cached_mask/
-        # covered_train_mask are mutated below, so this is exactly the set
-        # difference that needs to be subtracted from every remaining
-        # active candidate's marginal/newly.
+        # bits best newly contributes
         new_base_idx = np.flatnonzero(best.R_c & ~cached_mask)
         new_train_idx = np.flatnonzero(best.covered_train_indices & ~covered_train_mask)
 
