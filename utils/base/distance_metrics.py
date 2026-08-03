@@ -87,6 +87,14 @@ def angular_distance(a: np.ndarray, b: np.ndarray) -> float:
 
 #-------------------------------------------------------------------------------
 
+def pairwise_angular_distance(a_hat: np.ndarray, b_hat: np.ndarray) -> np.ndarray:
+    """Pairwise angular distance matrix between two sets of pre-normalized
+    (unit-norm) vectors: arccos(clip(a_hat @ b_hat.T, -1, 1)) / pi."""
+    dots = np.clip(a_hat @ b_hat.T, -1.0, 1.0)
+    return np.arccos(dots) / np.pi
+
+#-------------------------------------------------------------------------------
+
 def get_distance_function(metric: DistanceMetric) -> Callable[[np.ndarray, np.ndarray], float]:
     """
     Get the distance function for a given metric.

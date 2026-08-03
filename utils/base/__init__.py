@@ -6,6 +6,7 @@ from .distance_metrics import (
     euclidean_distance,
     cosine_distance,
     angular_distance,
+    pairwise_angular_distance,
     get_distance_function
 )
 from .main_memory import MainMemory, range_search
@@ -40,6 +41,7 @@ __all__ = [
     'euclidean_distance',
     'cosine_distance',
     'angular_distance',
+    'pairwise_angular_distance',
     'get_distance_function',
     'MainMemory',
     'range_search',

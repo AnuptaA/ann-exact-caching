@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Shared setup for the Phase 3 Round 14 trajectory/sigma-sensitivity debug
-scripts (debug_trajectory.py, debug_sigma_sensitivity.py). Entirely separate
-from population_runner.py/selection.py -- calls propose_candidates_ball and
-select_candidates directly against already-prepared benchmark data, at
-budget=100% (full base size, i.e. no memory constraint), matching K=K_cache=
-K_test convention used throughout the real pipeline (run_population.py).
-"""
+"""Shared setup for sigma sensitity and trajectory debug scripts."""
 
 import re
 from pathlib import Path
@@ -17,6 +11,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from datasets.dataloaders import load_esci_benchmark, load_sift_benchmark
+from utils.base.distance_metrics import pairwise_angular_distance
 from utils.base.population import propose_candidates_ball, precompute_ball_invariants
 from utils.base.selection import select_candidates
 
@@ -54,8 +49,7 @@ DATASET_CONFIG = {
 
 
 def load_gt_r_t(bdir: Path, K: int, n_cache: int, n_test: int) -> tuple:
-    """(train_r_t, test_r_t) for a given K, matching population_runner.py's
-    k_test_override=0 branch: K=0 means pure containment, both zeroed."""
+    """(train_r_t, test_r_t) for a given K, K=0 means pure containment."""
     if K == 0:
         return (
             np.zeros(n_cache, dtype=np.float32),
@@ -73,10 +67,7 @@ def load_gt_r_t(bdir: Path, K: int, n_cache: int, n_test: int) -> tuple:
 
 
 def load_gt_indices(bdir: Path, K: int, n: int) -> list:
-    """Test queries' true top-K neighbor index lists for a given K, matching
-    population_runner.py's _load_gt_indices. K=0 has no GT file (containment
-    mode has no neighbor requirement); callers needing K=0 semantics should
-    branch before calling this."""
+    """Test queries' true top-K neighbor index lists for a given K."""
     data = np.load(bdir / f'test_gt_population_K{K}.npz')
     return [data[f'indices_{i}'].tolist() for i in range(n)]
 
@@ -86,21 +77,7 @@ def propose_full_pool(
     train_r_t: np.ndarray, test_r_t: np.ndarray, K: int,
     n_max: int = N_MAX, metric: str = METRIC, invariants: dict = None,
 ) -> list:
-    """Just the propose step -- budget-independent, so callers that need to
-    sweep select_candidates over multiple real budget caps against the same
-    candidate pool (e.g. debug_vector_coverage.py) can call this once and
-    reuse the result, instead of re-proposing per budget value.
-
-    top_k_vectors/top_k_indices/half_gap are unused by the debug scripts
-    (they build cache entries via CandidateEntry.to_cache_entry(), which
-    only needs R_c/r_c/query), so dummy placeholders are passed to
-    propose_candidates_ball for the observed_top_k_* args.
-
-    invariants: optional precomputed K-independent quantities (see
-    precompute_ball_invariants_for_benchmark below), reused across a
-    K-sweep for the same benchmark. Default None recomputes everything
-    per call, unchanged from before.
-    """
+    """Just the propose step."""
     n_cache = len(cache_q)
     tv_dummy = [[] for _ in range(n_cache)]
     ti_dummy = [[] for _ in range(n_cache)]
@@ -138,21 +115,15 @@ def propose_and_select_full_budget(
 def precompute_ball_invariants_for_benchmark(
     base: np.ndarray, cache_q: np.ndarray, test_q: np.ndarray, metric: str = METRIC,
 ) -> dict:
-    """Thin wrapper: cache_q doubles as both observed_queries and
-    train_queries (matching every real call site's convention -- see
-    utils/base/population.py's precompute_ball_invariants docstring for
-    why this reuse is valid), so this is the exact invariants payload
-    every K value in a K-sweep for one benchmark can share."""
     return precompute_ball_invariants(cache_q, cache_q, test_q, base, metric)
 
 
 def pairwise_dist(a_hat: np.ndarray, b_hat: np.ndarray, metric: str) -> np.ndarray:
-    """Distance matrix between two sets of pre-normalized vectors, matching
-    utils/base/lemmas.py's _cig_distances formula exactly (angular: arccos
-    of the dot product; euclidean-on-normalized: sqrt(2 - 2*dot))."""
-    dots = np.clip(a_hat @ b_hat.T, -1.0, 1.0)
+    """Distance matrix between two sets of pre-normalized vectors
+    (angular: arccos of the dot product; euclidean-on-normalized: sqrt(2 - 2*dot))."""
     if metric == "angular":
-        return np.arccos(dots) / np.pi
+        return pairwise_angular_distance(a_hat, b_hat)
+    dots = np.clip(a_hat @ b_hat.T, -1.0, 1.0)
     return np.sqrt(np.maximum(2.0 - 2.0 * dots, 0.0))
 
 
@@ -171,13 +142,6 @@ def load_benchmark(dataset: str, benchmark_name: str) -> tuple:
     return base, cache_q, test_q, bdir
 
 #-------------------------------------------------------------------------------
-# Shared plotting helpers (moved from debug_ball_geometry.py so
-# debug_trajectory.py can reuse them for selected-candidate plots without
-# debug_ball_geometry.py's own lightweight n_max=1/no-selection candidate
-# generation having to duplicate a full n_max=20+selection pass just to
-# get access to this plotting code).
-#-------------------------------------------------------------------------------
-
 
 def _boxplot_panel(ax, data_by_label: dict, title: str, ylabel: str, log_y: bool = False) -> None:
     labels = list(data_by_label.keys())
@@ -206,9 +170,7 @@ def _boxplot_grid(panels: list, suptitle: str, out_path: Path) -> None:
 
 
 def _density_panel(ax, data_by_label: dict, title: str, xlabel: str) -> None:
-    """Overlapping KDE curves, one per label (K value), on the same axes --
-    complements _boxplot_panel's per-K summary with the full distribution
-    shape (multimodality, skew, tail weight aren't visible in a boxplot)."""
+    """Overlapping KDE curves, one per label (K value), on the same axes."""
     from scipy.stats import gaussian_kde
 
     for label, values in data_by_label.items():
@@ -228,8 +190,7 @@ def _density_panel(ax, data_by_label: dict, title: str, xlabel: str) -> None:
 
 def _density_grid(panels: list, suptitle: str, out_path: Path) -> None:
     """panels: list of (data_by_label, title, xlabel) tuples, one per
-    subplot (one per cache size), laid out in a single row -- same grid
-    convention as _boxplot_grid."""
+    subplot (one per cache size) in a single row"""
     fig, axes = plt.subplots(1, len(panels), figsize=(max(6, len(panels) * 5.5), 5), squeeze=False)
     axes = axes[0]
     for ax, (data_by_label, title, xlabel) in zip(axes, panels):

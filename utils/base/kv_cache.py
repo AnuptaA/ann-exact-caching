@@ -3,7 +3,7 @@
 
 import numpy as np
 from typing import List, Optional
-from .distance_metrics import DistanceMetric
+from .distance_metrics import DistanceMetric, pairwise_angular_distance
 from .main_memory import MainMemory
 
 #-------------------------------------------------------------------------------
@@ -107,8 +107,7 @@ class KVCache:
         q_norm = float(np.linalg.norm(query))
         q_hat = (query / q_norm).astype(np.float32) if q_norm != 0.0 else query.astype(np.float32)
         if self.metric == "angular":
-            dots = np.clip(self._query_matrix @ q_hat, -1.0, 1.0)
-            return np.arccos(dots) / np.pi
+            return pairwise_angular_distance(self._query_matrix, q_hat)
         return np.linalg.norm(self._query_matrix - q_hat, axis=1)
 
     def get_entry_radii(self) -> np.ndarray:

@@ -3,7 +3,7 @@
 
 import numpy as np
 from typing import Callable, List, Optional, Tuple, Union
-from .distance_metrics import DistanceMetric, get_distance_function
+from .distance_metrics import DistanceMetric, get_distance_function, pairwise_angular_distance
 
 #-------------------------------------------------------------------------------
 
@@ -98,8 +98,7 @@ class MainMemory:
             q_norm = float(np.linalg.norm(query))
             q_hat = query / q_norm if q_norm != 0.0 else query.copy()
             if metric == "angular":
-                dots = np.clip(self._B_hat @ q_hat, -1.0, 1.0)
-                dists = np.arccos(dots) / np.pi
+                dists = pairwise_angular_distance(self._B_hat, q_hat)
             else:
                 dists = np.linalg.norm(self._B_hat - q_hat, axis=1)
 
@@ -169,9 +168,7 @@ def range_search(
     B_hat = base_vectors / row_norms  # (M, d)
 
     if metric == "angular":
-        dots = B_hat @ q_hat  # (M,)
-        dots = np.clip(dots, -1.0, 1.0)
-        dists = np.arccos(dots) / np.pi
+        dists = pairwise_angular_distance(B_hat, q_hat)
     elif metric == "euclidean":
         diff = B_hat - q_hat  # (M, d)
         dists = np.linalg.norm(diff, axis=1)

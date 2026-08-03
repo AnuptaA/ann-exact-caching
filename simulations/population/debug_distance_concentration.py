@@ -1,31 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Distance-concentration comparison: SIFT vs. ESCI (Phase 3 Round 16).
-
-Standalone, cross-dataset diagnostic (unlike debug_ball_geometry.py/
-debug_trajectory.py, which loop per-dataset): a single figure comparing
-both datasets directly, one panel per train size.
-
-Motivated by a real finding this session: ESCI's utility ratio (r_c/d_min,
-"how much extra radius do you pay beyond the bare-minimum nearest-base-
-vector distance") is comparable to or slightly *better* than SIFT's at
-every K -- so ESCI's true near neighbors are not, relatively speaking,
-any harder to reach than SIFT's. Yet ESCI's candidate spheres end up
-covering nearly the entire base once K>=1 (R_c size ~40-50k out of 50k),
-while SIFT's stay far smaller and more varied. The reconciliation: this
-isn't about *local* clustering quality (utility ratio measures that, and
-it's fine) -- it's about *global* concentration of the background
-query-to-base distance distribution. ESCI's distances are far more
-tightly clustered around their mean (coefficient of variation ~0.08) than
-SIFT's (~0.21), so a radius calibrated with the same modest multiplicative
-slack over the nearest neighbor immediately sweeps up most of the base in
-ESCI, while the same relative slack still stays well short of the bulk of
-SIFT's much more spread-out base.
-
-No pipeline rerun, no changes to population_runner.py/selection.py --
-reads already-prepared benchmark data via debug_common.py, same as every
-other debug_*.py script.
-"""
+"""Distance-concentration comparison: SIFT vs. ESCI."""
 
 import sys
 from pathlib import Path
@@ -64,10 +39,7 @@ def _dist_summary(flat: np.ndarray) -> dict:
 
 def compute_distance_stats(base: np.ndarray, cache_q: np.ndarray) -> dict:
     """Query-to-base and query-to-query angular distance distributions for
-    the same sample of cache queries -- the latter checks whether the
-    concentration effect is specific to the query/base relationship or a
-    general property of the embedding space (also present among queries
-    themselves)."""
+    the same sample of cache queries."""
     rng = np.random.RandomState(SEED)
     n_sample = min(N_QUERY_SAMPLE, len(cache_q))
     idx = rng.choice(len(cache_q), n_sample, replace=False)
@@ -76,11 +48,9 @@ def compute_distance_stats(base: np.ndarray, cache_q: np.ndarray) -> dict:
     base_hat = _normalize(base.copy())
     q_hat = _normalize(sample_q.copy())
 
-    qb_dots = np.clip(q_hat @ base_hat.T, -1.0, 1.0)
-    qb_flat = (np.arccos(qb_dots) / np.pi).flatten()  # (n_sample, n_base)
+    qb_flat = dc.pairwise_dist(q_hat, base_hat, METRIC).flatten()  # (n_sample, n_base)
 
-    qq_dots = np.clip(q_hat @ q_hat.T, -1.0, 1.0)
-    qq_dists = np.arccos(qq_dots) / np.pi
+    qq_dists = dc.pairwise_dist(q_hat, q_hat, METRIC)
     qq_flat = qq_dists[np.triu_indices(len(q_hat), k=1)]  # exclude self, dedupe symmetric pairs
 
     return {

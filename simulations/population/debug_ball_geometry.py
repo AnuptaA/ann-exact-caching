@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Ball-proposal geometry diagnostics (Phase 3 Round 14, plan Step B).
+"""Ball-proposal geometry diagnostics.
 
-Standalone: calls _precompute_kth_base_dist/propose_candidates_ball directly
-against already-prepared benchmark data. No pipeline rerun, no changes to
-population_runner.py/selection.py.
+Does K reasonably change candidate-sphere geometry (curse-of-dimensionality
+check) + utility-ratio distribution (K=0 vs K>0) + sanity checks
 
-Addresses: does K change candidate-sphere geometry (curse-of-dimensionality
-check), utility-ratio distribution (K=0 vs K>0), and a real-data
-self-exclusion sanity check.
-
-One grid file per metric per dataset (cache size as columns) rather than one
-file per (metric, benchmark) -- cache size is the only thing varying across
-a dataset's benchmarks, same convention analyze_population_proposal.py uses
-for its sigma x K_test grids.
 """
 
 import sys
@@ -34,7 +25,7 @@ from utils.base.population import (
 )
 from simulations.population.debug_common import (
     parse_benchmark_sizes, precompute_ball_invariants_for_benchmark,
-    _boxplot_grid, _density_grid,
+    pairwise_dist, _boxplot_grid, _density_grid,
 )
 
 #-------------------------------------------------------------------------------
@@ -42,9 +33,7 @@ from simulations.population.debug_common import (
 METRIC = 'angular'
 K_VALUES = [1, 5, 10, 20]
 UTILITY_K_VALUES = [0, 1, 5, 10]
-N_MAX_FOR_RC = 1  # single (nearest-neighbor) sphere per query is enough to
-                   # characterize per-query candidate geometry without the
-                   # cost of proposing all n_max nested spheres
+N_MAX_FOR_RC = 1  # single (nearest-neighbor) sphere per query, maybe should change
 
 DATASET_CONFIG = {
     'sift': dict(
@@ -82,9 +71,7 @@ def _load_gt_r_Q(path: Path, n: int) -> np.ndarray:
 
 
 def compute_margins(cache_q: np.ndarray, base: np.ndarray, K: int) -> np.ndarray:
-    """margin_lookup: K-th nearest base distance for each cache query --
-    the exact quantity propose_candidates_ball uses to size a neighbor's
-    own K-ball (D(neighbor, E_K))."""
+    """margin_lookup: K-th nearest base distance for each cache query."""
     cache_hat = _normalize(cache_q.copy())
     base_hat = _normalize(base.copy())
     return _precompute_kth_base_dist(cache_hat, base_hat, K, METRIC).astype(np.float64)
@@ -96,28 +83,6 @@ def compute_utility_ratio(
 ) -> np.ndarray:
     """Ratio of the radius needed to reach a query's nearest cache-neighbor's
     K-sphere, to the distance from the query to its own nearest base vector.
-
-    r_c = nn_dist + margin_lookup[nn_index] -- the exact quantity
-    propose_candidates_ball builds a candidate's radius from (the "distance
-    required to cover the furthest point in the neighbor's K-sphere").
-    d_min = the query's own nearest-base-vector distance -- the theoretical
-    minimum radius that would certify anything about this query at all, a
-    K-independent baseline.
-
-    Lower is better: a ratio near 1 means the sphere needed to reach the
-    neighbor barely exceeds what's needed to reach even a single base
-    vector; higher means paying a lot of extra radius for comparatively
-    little. At K=0, margin_lookup is uniformly 0 (see
-    propose_candidates_ball's K=0 docstring), so this reduces exactly to
-    nn_dist / d_min.
-
-    margin_lookup: optional, reuse compute_margins' already-computed result
-    for this K instead of calling _precompute_kth_base_dist a second time
-    with identical arguments. invariants: optional precomputed
-    sorted_cache_dists/sorted_cache_indices/all_dists (see
-    precompute_ball_invariants) to reuse instead of recomputing
-    _pairwise_cache_dists and the cache-to-base matmul. Both default to
-    None (recompute), unchanged from before.
     """
     if invariants is not None:
         sorted_dists = invariants['sorted_cache_dists']
@@ -127,11 +92,7 @@ def compute_utility_ratio(
         sorted_dists, sorted_indices = _pairwise_cache_dists(cache_q, METRIC)
         cache_hat = _normalize(cache_q.copy())
         base_hat = _normalize(base.copy())
-        dots = np.clip(cache_hat @ base_hat.T, -1.0, 1.0)
-        if METRIC == "angular":
-            all_dists = np.arccos(dots) / np.pi
-        else:
-            all_dists = np.sqrt(np.maximum(2.0 - 2.0 * dots, 0.0))
+        all_dists = pairwise_dist(cache_hat, base_hat, METRIC)
 
     nn_dist = sorted_dists[:, 0].astype(np.float64)
     nn_index = sorted_indices[:, 0]
@@ -158,11 +119,6 @@ def compute_rc_size_and_self_exclusion(
 ) -> dict:
     """One propose_candidates_ball(K, n_max=1) call: nearest-neighbor sphere
     per cache query. Returns rc sizes and a self-exclusion violation count.
-
-    invariants: optional precomputed K-independent quantities (see
-    precompute_ball_invariants), passed straight through to
-    propose_candidates_ball instead of leaving it to recompute
-    _pairwise_cache_dists/_base_dists_for_query from scratch every call.
     """
     n_cache = len(cache_q)
     tv_dummy = [[] for _ in range(n_cache)]
@@ -263,9 +219,7 @@ def run_dataset(dataset: str, cfg: dict) -> dict:
         n_test = len(test_q)
 
         # K-independent proposal invariants computed once per benchmark and
-        # reused across the K-loop below, instead of every compute_margins/
-        # compute_utility_ratio/compute_rc_size_and_self_exclusion call
-        # redoing the same O(n_cache * n_base) and O(n_cache^2) work.
+        # reused across the K-loop below
         invariants = precompute_ball_invariants_for_benchmark(base, cache_q, test_q, metric=METRIC)
 
         margin_by_k = {}
@@ -289,11 +243,8 @@ def run_dataset(dataset: str, cfg: dict) -> dict:
             if test_r_t is not None:
                 rt_test_by_k[f'$K={K}$'] = test_r_t
 
-            # Reuse the GT-loaded train_r_t as margin_lookup instead of
-            # recomputing D(query, E_K) on the fly via compute_margins --
-            # the exact same quantity, same pattern as this session's other
-            # redundant-computation fixes. Falls back to compute_margins
-            # only if the per-K GT file is missing for this benchmark.
+            # Reuse the GT-loaded train_r_t as margin_lookup. Falls back to
+            # compute_margins only if the per-K GT file is missing for this benchmark.
             margin_lookup = (
                 train_r_t.astype(np.float64) if train_r_t is not None
                 else compute_margins(cache_q, base, K)

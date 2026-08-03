@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from datasets.dataloaders import load_sift_benchmark, load_esci_benchmark
+from utils.base.distance_metrics import pairwise_angular_distance
 
 #-------------------------------------------------------------------------------
 
@@ -86,8 +87,7 @@ def _compute_ball_costs(cache_q: np.ndarray) -> tuple:
     Self-distance is excluded (set to inf before sorting).
     """
     cache_norm = _normalize(cache_q)
-    sims = np.clip(cache_norm @ cache_norm.T, -1.0, 1.0)
-    dists = np.arccos(sims) / np.pi
+    dists = pairwise_angular_distance(cache_norm, cache_norm)
     np.fill_diagonal(dists, np.inf)
     order = np.argsort(dists, axis=1)
     sorted_dists = np.take_along_axis(dists, order, axis=1)
@@ -298,10 +298,10 @@ def run_benchmark(
 
     test_norm = _normalize(test_q)
     cache_norm = _normalize(cache_q)
-    test_dists = np.arccos(np.clip(test_norm @ cache_norm.T, -1.0, 1.0)) / np.pi
+    test_dists = pairwise_angular_distance(test_norm, cache_norm)
 
     base_norm = _normalize(base)
-    cb_dists = np.arccos(np.clip(cache_norm @ base_norm.T, -1.0, 1.0)) / np.pi
+    cb_dists = pairwise_angular_distance(cache_norm, base_norm)
 
     ball_costs, nn_indices = _compute_ball_costs(cache_q)
     rows = _compute_rows(test_dists, ball_costs, nn_indices, cb_dists, r_t_by_k, benchmark_name)

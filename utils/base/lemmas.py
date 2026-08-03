@@ -3,7 +3,7 @@
 
 import numpy as np
 from typing import Callable, List, Optional, Tuple
-from .distance_metrics import get_distance_function, DistanceMetric
+from .distance_metrics import get_distance_function, DistanceMetric, pairwise_angular_distance
 from .kv_cache import CacheEntry
 
 #-------------------------------------------------------------------------------
@@ -41,8 +41,7 @@ def _batch_distances(
         q_norm = float(np.linalg.norm(query))
         q_hat = query / q_norm if q_norm != 0.0 else query.copy()
         if metric == "angular":
-            dots = np.clip(mat_hat @ q_hat, -1.0, 1.0)
-            return np.arccos(dots) / np.pi
+            return pairwise_angular_distance(mat_hat, q_hat)
         else:
             return np.linalg.norm(mat_hat - q_hat, axis=1)
     return np.asarray([distance_func(query, v) for v in vectors])
