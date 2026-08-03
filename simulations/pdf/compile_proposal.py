@@ -16,7 +16,6 @@ ROOT = Path(__file__).parent.parent.parent
 SIM_DIR = ROOT / 'simulations'
 
 BALL_GEOMETRY_DIR = SIM_DIR / 'debug' / 'population_geometry'
-TRAJECTORY_DIR = SIM_DIR / 'debug' / 'population_trajectory'
 DISTANCE_CONCENTRATION_DIR = SIM_DIR / 'debug' / 'population_distance_concentration'
 
 DEBUG_FILES = [
@@ -52,11 +51,6 @@ def _method_images(method_dir: Path) -> list:
 
 def _debug_images(dataset: str) -> list:
     imgs = [BALL_GEOMETRY_DIR / dataset / f for f in DEBUG_FILES]
-    imgs.append(TRAJECTORY_DIR / dataset / 'trajectory.png')
-    imgs.append(TRAJECTORY_DIR / dataset / 'benefit_vs_iteration.png')
-    imgs.append(TRAJECTORY_DIR / dataset / 'budget_pct_vs_metrics.png')
-    imgs.append(TRAJECTORY_DIR / dataset / 'selected_radius_vs_k.png')
-    imgs.append(TRAJECTORY_DIR / dataset / 'selected_n_density_vs_k.png')
     return [p for p in imgs if p.exists()]
 
 

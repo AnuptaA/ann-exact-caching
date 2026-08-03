@@ -18,7 +18,6 @@ import matplotlib.pyplot as plt
 #-------------------------------------------------------------------------------
 
 PERCENTILE_COLORS = {25.0: 'tab:red', 50.0: 'tab:blue', 95.0: 'tab:orange', 99.0: 'tab:green'}
-ORACLE_COLOR = 'black'
 
 def _short_label(benchmark_name: str) -> str:
     """Short label for grid cell titles and y-axis labels for nice display"""
@@ -42,7 +41,7 @@ def _grid(benchmarks: list, k_values: list, sharey: bool = True):
     )
     return fig, axes
 
-def plot_hit_rate_vs_budget(df: pd.DataFrame, out_dir: Path, oracle_df: pd.DataFrame = None) -> None:
+def plot_hit_rate_vs_budget(df: pd.DataFrame, out_dir: Path) -> None:
     for threshold in sorted(df['threshold'].unique()):
         sub = df[df['threshold'] == threshold]
         for dataset, dset_df in sub.groupby('dataset'):
@@ -57,15 +56,6 @@ def plot_hit_rate_vs_budget(df: pd.DataFrame, out_dir: Path, oracle_df: pd.DataF
                         agg = group.groupby('budget_fraction')['hit_rate'].mean().sort_index()
                         ax.plot(agg.index, agg.values, marker='o', markersize=3, label=f'p{int(pct)}',
                                 color=PERCENTILE_COLORS.get(pct))
-                    if oracle_df is not None:
-                        ocell = oracle_df[
-                            (oracle_df['dataset'] == dataset) & (oracle_df['benchmark'] == bm)
-                            & (oracle_df['K'] == K)
-                        ]
-                        oagg = ocell.groupby('budget_fraction')['oracle_hit_rate'].mean().sort_index()
-                        if not oagg.empty:
-                            ax.plot(oagg.index, oagg.values, marker='x', markersize=4,
-                                    linestyle='--', color=ORACLE_COLOR, label='union ceiling')
                     ax.set_ylim(0, 1)
                     if r == 0:
                         ax.set_title(f'K={K}')
@@ -157,9 +147,6 @@ def plot_recall_vs_hit_rate_tradeoff(df: pd.DataFrame, out_dir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('results_csv', type=str)
-    parser.add_argument('--oracle-csv', type=str, default=None,
-                         help='oracle_hit_rate.csv from compute_oracle_hit_rate.py; '
-                              'defaults to oracle_hit_rate.csv next to results_csv if present')
     parser.add_argument('--output-dir', type=str, default=None)
     args = parser.parse_args()
 
@@ -168,12 +155,7 @@ def main() -> None:
     out_dir = Path(args.output_dir) if args.output_dir else csv_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    oracle_path = Path(args.oracle_csv) if args.oracle_csv else csv_path.parent / 'oracle_hit_rate.csv'
-    oracle_df = pd.read_csv(oracle_path) if oracle_path.exists() else None
-    if oracle_df is None:
-        print(f"No oracle_hit_rate.csv found at {oracle_path} -- hit_rate_vs_budget will skip the union ceiling line")
-
-    plot_hit_rate_vs_budget(df, out_dir, oracle_df=oracle_df)
+    plot_hit_rate_vs_budget(df, out_dir)
     plot_recall_vs_budget(df, out_dir)
     plot_recall_vs_hit_rate_tradeoff(df, out_dir)
     print(f"Plots written to {out_dir}")

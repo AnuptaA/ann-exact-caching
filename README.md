@@ -2,7 +2,7 @@
 
 This repository supports research on cache management for vector databases. The central idea is to reuse exact results returned by underlying vector search systems whenever possible to reduce repeated work in top-K ANN query workloads without degrading the underlying recall of the vector search system. This work is index-agnostic and makes no assumptions about the underlying system, including what index it uses or if it even uses one at all.
 
-The project started with proposing and theoretically proving correctness guarantees for two cache hit policies, and evolved into an empirical validation and analysis of them. It is now being extended toward cache population and eviction strategies to improve the performance of these hit policies on realistic workloads workloads. The goal is to introduce practical strategies providing correctness guarantees that appoximate caching methods do not, while also avoiding online-training and user-toned knobs.
+The project started with proposing and theoretically proving correctness guarantees for two cache hit policies, and evolved into an empirical validation and analysis of them. It is now being extended toward cache population and eviction strategies to improve the performance of these hit policies on realistic workloads. The goal is to introduce practical strategies providing correctness guarantees that approximate caching methods do not, while also avoiding online-training and user-toned knobs.
 
 ## Research Artifacts
 
