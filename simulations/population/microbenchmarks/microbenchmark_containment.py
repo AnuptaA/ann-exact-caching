@@ -122,9 +122,6 @@ def _compute_rows(
             for k_test, r_t in sorted(r_t_by_k.items()):
                 if k_test >= k_cache:
                     continue
-                # Non-strict <=, matching the real CIG algorithm's boundary
-                # condition (fixed from strict < in an earlier round; this
-                # standalone script had drifted out of sync with it).
                 hit = (test_dists + r_t[:, np.newaxis] <= r_q[np.newaxis, :]).any(axis=1)
                 rows.append({
                     'benchmark': label,
@@ -167,7 +164,7 @@ def _aggregate_plots(all_data: dict, outdir: Path, label: str) -> None:
     n_palette = sns.color_palette('tab10', n_nv)
     n_color = {n: c for n, c in zip(N_VALUES, n_palette)}
 
-    # ── hit_rate_vs_n: rows=K_Cache, cols=benchmarks, lines=K_Test ───────────
+    # -- hit_rate_vs_n: rows=K_Cache, cols=benchmarks, lines=K_Test -----------
     fig, axes = plt.subplots(n_kc, n_bm, figsize=(5 * n_bm, 3.5 * n_kc),
                              sharey=True, sharex=True)
     axes = np.array(axes).reshape(n_kc, n_bm)
@@ -200,7 +197,7 @@ def _aggregate_plots(all_data: dict, outdir: Path, label: str) -> None:
     fig.savefig(outdir / 'hit_rate_vs_n.png', dpi=120)
     plt.close(fig)
 
-    # ── hit_rate_vs_k_cache: rows=n, cols=benchmarks, lines=K_Test ──────────
+    # -- hit_rate_vs_k_cache: rows=n, cols=benchmarks, lines=K_Test ----------
     fig, axes = plt.subplots(n_nv, n_bm, figsize=(5 * n_bm, 3.5 * n_nv),
                              sharey=True, sharex=True)
     axes = np.array(axes).reshape(n_nv, n_bm)
@@ -234,7 +231,7 @@ def _aggregate_plots(all_data: dict, outdir: Path, label: str) -> None:
     fig.savefig(outdir / 'hit_rate_vs_k_cache.png', dpi=120)
     plt.close(fig)
 
-    # ── budget_vs_k_cache: mean_n_base_inside vs K_Cache, lines=n ────────────
+    # -- budget_vs_k_cache: mean_n_base_inside vs K_Cache, lines=n ------------
     fig, axes = plt.subplots(1, n_bm, figsize=(5 * n_bm, 4), sharey=True)
     if n_bm == 1:
         axes = [axes]
@@ -330,7 +327,7 @@ def run_debug(
     label: str,
 ) -> tuple:
     """Run all benchmarks for this dataset and write per-candidate debug output under ts."""
-    from simulations.debug import containment_debug
+    from simulations.population.microbenchmarks import containment_debug
 
     dataset_dir = Path('simulations/debug') / ts / 'containment' / label.lower()
 
