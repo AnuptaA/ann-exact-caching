@@ -227,7 +227,20 @@ def plot_method_comparison_scatter(d: int, data: dict, out_dir: Path) -> None:
 # 4. Discrepancy vs. angle
 #-------------------------------------------------------------------------------
 
-R_GRID = np.array([0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.4, 0.8, 1.2])
+PERCENTILES = [5, 25, 50, 75, 95, 99]
+
+
+def _widest_range_r_cache(data: dict) -> np.ndarray:
+    """r_cache (pairwise sample) for whichever K has the widest
+    max-min range."""
+    best_K, best_range = None, -1.0
+    for K, parts in data.items():
+        r = parts['pairwise']['r_cache']
+        r_range = float(r.max() - r.min())
+        if r_range > best_range:
+            best_K, best_range = K, r_range
+    return data[best_K]['pairwise']['r_cache']
+
 
 def _discrepancy_curve(r: float, d: int, ratios: np.ndarray) -> tuple:
     """cap_fraction - solid_fraction at equal radii r_cache=r_test=r,
@@ -246,15 +259,17 @@ def _discrepancy_curve(r: float, d: int, ratios: np.ndarray) -> tuple:
 
 def plot_discrepancy_vs_angle(d: int, data: dict, out_dir: Path) -> None:
     """cap_fraction - solid_fraction as a function of separation, at
-    equal radii r_cache=r_test=r, swept over a fixed grid of r values
-    independent of K or any sampled data.
+    equal radii r_cache=r_test=r, swept at r = each of PERCENTILES of
+    the widest-range K's r_cache distribution.
 
     Two x-axis variants: normalized by r (reveals whether the curves
     collapse onto one shape, the small-angle-regime question) and raw
     delta (shows where the discrepancy peaks in absolute angular
     terms, which the normalized view obscures since different r have
     very different absolute scales)."""
-    colors = cm.viridis(np.linspace(0, 1, len(R_GRID)))
+    r_cache = _widest_range_r_cache(data)
+    r_values = np.percentile(r_cache, PERCENTILES)
+    colors = cm.viridis(np.linspace(0, 1, len(r_values)))
     ratios = np.linspace(0.01, 1.99, 80)
     variants = [
         ('normalized', 'delta / r (equal radii)', True),
@@ -262,15 +277,15 @@ def plot_discrepancy_vs_angle(d: int, data: dict, out_dir: Path) -> None:
     ]
     for variant_name, xlabel, normalized in variants:
         fig, ax = plt.subplots(figsize=(6, 5))
-        for r, color in zip(R_GRID, colors):
+        for pct, r, color in zip(PERCENTILES, r_values, colors):
             deltas, diffs = _discrepancy_curve(float(r), d, ratios)
             x = ratios if normalized else deltas
-            ax.plot(x, diffs, color=color, label=f'r={r:g} rad')
+            ax.plot(x, diffs, color=color, label=f'p{pct} (r={r:.4f} rad)')
         ax.axhline(0.0, color='gray', linewidth=1, linestyle='--')
         ax.set_xlabel(xlabel)
         ax.set_ylabel('Difference in Methods (Cap - Solid)')
         ax.set_title(f'{d}D: Discrepancy vs. Angular Separation ({variant_name} x-axis, deterministic sweep, equal radii)')
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=8, ncol=2)
         ax.grid(alpha=0.3)
         plt.tight_layout()
         out_path = out_dir / f'{d}d_discrepancy_vs_angle_{variant_name}.png'
@@ -281,9 +296,10 @@ def plot_discrepancy_vs_angle(d: int, data: dict, out_dir: Path) -> None:
 
 def plot_peak_discrepancy_vs_r(d: int, data: dict, out_dir: Path) -> None:
     """Peak (over delta) cap-solid discrepancy as a function of r,
-    swept over a finer log-spaced grid than R_GRID. Directly shows that
-    the peak discrepancy is flat across the small-angle regime and only
-    starts rising once r gets large."""
+    swept over a fixed log-spaced grid, independent of any sampled
+    data (unlike plot_discrepancy_vs_angle's percentile-based r
+    values). Directly shows that the peak discrepancy is flat across
+    the small-angle regime and only starts rising once r gets large."""
     fine_r = np.geomspace(0.002, 1.2, 30)
     ratios = np.linspace(0.01, 1.99, 200)
     peaks = [float(np.max(_discrepancy_curve(float(r), d, ratios)[1])) for r in fine_r]
