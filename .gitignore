@@ -244,5 +244,10 @@ simulations/**/profiles/
 # old docs
 docs/old/
 
+# weekly PDF and PNG outputs
+weekly/**/plots/
+weekly/**/pdf/
+weekly/**/results/
+
 # .DS_Store
 **/.DS_Store
