@@ -210,6 +210,7 @@ __marimo__/
 datasets/sift/*.fvecs
 datasets/sift/*.ivecs
 datasets/sift/*.bvecs
+datasets/sift/*.npy
 datasets/sift/benchmark/
 datasets/sift/sift*
 

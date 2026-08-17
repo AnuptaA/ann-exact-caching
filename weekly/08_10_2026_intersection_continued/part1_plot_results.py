@@ -244,13 +244,7 @@ def _widest_range_r_cache(data: dict) -> np.ndarray:
 def _discrepancy_curve(r: float, d: int, ratios: np.ndarray) -> tuple:
     """cap_fraction - solid_fraction at equal radii r_cache=r_test=r,
     swept over delta = ratio*r for ratio in ratios. Pure function of
-    (r, d), no sampled data involved.
-
-    A fixed (r, d) grid combined with tiny r at high d can hit
-    exact_intersection_fraction's underflow zone (both quadrature
-    integrals underflow to exactly 0, division by zero). Skipped as NaN
-    rather than crashing the whole sweep; matplotlib leaves a gap for
-    NaN in a line plot, rather than silently omitting or crashing on it."""
+    (r, d), no sampled data involved. Underflow cases skipped as NaN."""
     deltas = ratios * r
     diffs = np.full(len(deltas), np.nan)
     for i, delta in enumerate(deltas):
@@ -266,13 +260,8 @@ def _discrepancy_curve(r: float, d: int, ratios: np.ndarray) -> tuple:
 def plot_discrepancy_vs_angle(d: int, data: dict, out_dir: Path) -> None:
     """cap_fraction - solid_fraction as a function of separation, at
     equal radii r_cache=r_test=r, swept at r = each of PERCENTILES of
-    the widest-range K's r_cache distribution.
-
-    Two x-axis variants: normalized by r (reveals whether the curves
-    collapse onto one shape, the small-angle-regime question) and raw
-    delta (shows where the discrepancy peaks in absolute angular
-    terms, which the normalized view obscures since different r have
-    very different absolute scales)."""
+    the widest-range K's r_cache distribution. Two x-axis variants:
+    normalized by r, and raw delta."""
     r_cache = _widest_range_r_cache(data)
     r_values = np.percentile(r_cache, PERCENTILES)
     colors = cm.viridis(np.linspace(0, 1, len(r_values)))

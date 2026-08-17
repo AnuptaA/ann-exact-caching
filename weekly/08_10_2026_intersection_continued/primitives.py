@@ -9,7 +9,7 @@ formulas without importing production code, for cross-checking against it.
 import math
 
 import numpy as np
-from scipy.special import betainc
+from scipy.special import betainc, betaincinv
 from scipy.integrate import quad
 
 #-------------------------------------------------------------------------------
@@ -72,6 +72,78 @@ def exact_intersection_fraction(theta_1: float, theta_2: float, delta: float, d:
     )
     den, _ = quad(lambda phi: (math.sin(phi) / sin_theta2) ** (d - 2), eps, theta_2, limit=200)
     return num / den
+
+def exact_intersection_fraction_batch(theta_1: np.ndarray, theta_2: float, delta: np.ndarray, d: int,
+                                       n_nodes: int = 32) -> np.ndarray:
+    """Vectorized exact_intersection_fraction for one fixed theta_2 against
+    arrays of theta_1/delta. Fixed-order quadrature; trades precision for
+    speed."""
+    theta_1 = np.asarray(theta_1, dtype=np.float64)
+    delta = np.asarray(delta, dtype=np.float64)
+    eps = 1e-10
+    fraction = np.zeros_like(theta_1)
+
+    # fast-path masks computed before the quadrature, not applied after
+    no_overlap = delta >= theta_1 + theta_2
+    full_containment = (~no_overlap) & (delta + theta_2 <= theta_1)
+    flipped_containment = (~no_overlap) & (~full_containment) & (delta + theta_1 <= theta_2)
+    near_zero = (~no_overlap) & (~full_containment) & (~flipped_containment) & (delta < 1e-12)
+    general = ~(no_overlap | full_containment | flipped_containment | near_zero)
+
+    needs_ratio = flipped_containment | near_zero
+    if np.any(needs_ratio):
+        single_theta1 = _single_cap_fraction_arr(theta_1[needs_ratio], d)
+        single_theta2 = single_cap_fraction(theta_2, d)
+        ratio = np.where(single_theta2 > 0.0, single_theta1 / max(single_theta2, np.finfo(np.float64).tiny), 1.0)
+        fraction[flipped_containment] = ratio[flipped_containment[needs_ratio]]
+        near_zero_ratio = ratio[near_zero[needs_ratio]]
+        fraction[near_zero] = np.where(theta_1[near_zero] >= theta_2, 1.0, near_zero_ratio)
+
+    fraction[full_containment] = 1.0
+    # no_overlap entries stay 0.0 (already initialized)
+
+    if np.any(general):
+        theta_1_g = theta_1[general]
+        delta_g = delta[general]
+
+        nodes, weights = np.polynomial.legendre.leggauss(n_nodes)
+        half_width = max(theta_2 - eps, eps) / 2.0
+        phi = eps + half_width * (nodes + 1.0)  # (n_nodes,)
+        quad_weights = half_width * weights  # (n_nodes,)
+
+        sin_theta2 = math.sin(theta_2)
+        weight_factor = (np.sin(phi) / sin_theta2) ** (d - 2)  # (n_nodes,)
+        den = np.sum(weight_factor * quad_weights)
+
+        a = (d - 2) / 2.0
+        sin_phi = np.sin(phi)[:, None]  # (n_nodes, 1)
+        cos_phi = np.cos(phi)[:, None]
+        sin_delta = np.sin(delta_g)[None, :]  # (1, n_general)
+        cos_delta = np.cos(delta_g)[None, :]
+        cos_theta1 = np.cos(theta_1_g)[None, :]
+
+        cross_denom = sin_phi * sin_delta
+        cross_denom = np.where(cross_denom == 0.0, np.finfo(np.float64).tiny, cross_denom)
+        tau = (cos_theta1 - cos_phi * cos_delta) / cross_denom  # (n_nodes, n_general)
+
+        r_cross = np.arccos(np.clip(tau, -1.0, 1.0))
+        x = np.sin(r_cross) ** 2
+        ib = betainc(a, 0.5, x)
+        cross = np.where(r_cross <= math.pi / 2, 0.5 * ib, 1.0 - 0.5 * ib)
+        cross = np.where(tau <= -1.0, 1.0, cross)
+        cross = np.where(tau >= 1.0, 0.0, cross)
+
+        num = np.sum((weight_factor * quad_weights)[:, None] * cross, axis=0)  # (n_general,)
+        fraction[general] = num / den
+
+    return fraction
+
+def _single_cap_fraction_arr(theta: np.ndarray, d: int) -> np.ndarray:
+    """Vectorized single_cap_fraction."""
+    x = np.sin(theta) ** 2
+    a = (d - 1) / 2.0
+    ib = betainc(a, 0.5, x)
+    return np.where(theta <= math.pi / 2, 0.5 * ib, 1.0 - 0.5 * ib)
 
 #-------------------------------------------------------------------------------
 # Solid-ball intersection (Euclidean balls in R^d)
@@ -152,6 +224,23 @@ def sample_cap_points(pole: np.ndarray, radius: float, n_samples: int, rng: np.r
         out[filled:filled + take] = accepted[:take]
         filled += take
     return out
+
+
+def sample_cap_points_direct(pole: np.ndarray, radius: float, n_samples: int, rng: np.random.Generator) -> np.ndarray:
+    """Uniform points within angular radius (<= pi/2) of `pole` on S^{d-1}."""
+    d = pole.shape[0]
+    a = (d - 1) / 2.0
+    cap_frac = single_cap_fraction(radius, d)
+
+    v = rng.uniform(0.0, 1.0, size=n_samples)
+    x = betaincinv(a, 0.5, np.clip(2.0 * v * cap_frac, 0.0, 1.0))
+    phi = np.arcsin(np.sqrt(np.clip(x, 0.0, 1.0)))
+
+    raw = rng.standard_normal((n_samples, d))
+    raw -= np.outer(raw @ pole, pole)
+    raw /= np.linalg.norm(raw, axis=1, keepdims=True)
+
+    return np.cos(phi)[:, None] * pole[None, :] + np.sin(phi)[:, None] * raw
 
 #-------------------------------------------------------------------------------
 # Testing
@@ -463,16 +552,12 @@ if __name__ == '__main__':
               bool(np.percentile(cap_diffs, 99) < 1e-4 and cap_diffs.max() < 1e-3),
               f"p99={np.percentile(cap_diffs, 99):.2e} max={cap_diffs.max():.2e}")
 
-        # d=2 disagrees: existing conditional_cap_fraction has a betainc(a=0) discontinuity
-        # bug (a=(d-2)/2==0 only at d=2). No current impact because SIFT/ESCI never use
-        # d=2 but this should be fixed later.
+        # d=2: betainc(a=0) discontinuity, unfixed, production-irrelevant
         t1, t2, dd = 0.7576, 0.8724, 0.0958
         new_d2 = exact_intersection_fraction(t1, t2, dd, 2)
         old_d2 = existing_cap_fraction(dd / math.pi, t1 / math.pi, t2 / math.pi, 2)
         elem_d2 = elementary_d2(t1, t2, dd)
-        print(f"[INFO] d=2 known existing-code bug (betainc a=0 discontinuity, see comment): "
-              f"new={new_d2:.4f} elementary={elem_d2:.4f} existing={old_d2:.4f} "
-              f"(new/elementary agree, existing does not -- production-irrelevant, d=2 never used for SIFT/ESCI)")
+        print(f"[INFO] d=2 known bug: new={new_d2:.4f} elementary={elem_d2:.4f} existing={old_d2:.4f}")
 
         ball_diffs = []
         for _ in range(200):
