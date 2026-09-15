@@ -6,14 +6,14 @@ into a standalone PDF."""
 import sys
 from pathlib import Path
 from datetime import datetime
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 from simulations.pdf.report import PdfReportBuilder, latest_run_dir, divider, header, render_sections
 
 #-------------------------------------------------------------------------------
 
-PLOTS_BASE = Path(__file__).parent / 'plots'
-OUTPUT_BASE = Path(__file__).parent / 'pdf'
+PLOTS_BASE = Path(__file__).parent.parent / 'plots'
+OUTPUT_BASE = Path(__file__).parent.parent / 'pdf'
 DATASET_DIMS = {'sift': 128, 'esci': 384}
 
 PLOT_FILES = [

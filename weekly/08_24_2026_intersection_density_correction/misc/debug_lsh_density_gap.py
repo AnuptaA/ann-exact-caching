@@ -7,7 +7,9 @@ import sys
 import math
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent / 'common'))
+sys.path.append(str(Path(__file__).parent.parent / 'schemes'))
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 import numpy as np
 
@@ -66,7 +68,7 @@ def find_overlap_sample_point_instrumented(q, c_star, r_test, r_cache, rng,
 
 
 def main() -> None:
-    repo_root = Path(__file__).parent.parent.parent
+    repo_root = Path(__file__).parent.parent.parent.parent
     bg_path = Path(BACKGROUND_PATH)
     if not bg_path.is_absolute():
         bg_path = repo_root / bg_path

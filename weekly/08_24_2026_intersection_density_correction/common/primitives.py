@@ -592,7 +592,7 @@ if __name__ == '__main__':
 
     print("\n=== Cross-check against existing implementation ===")
     try:
-        sys.path.append(str(__import__('pathlib').Path(__file__).parent.parent.parent))
+        sys.path.append(str(__import__('pathlib').Path(__file__).parent.parent.parent.parent))
         from simulations.population.debug_intersection_calibration import (
             exact_intersection_fraction as existing_cap_fraction,
             solid_ball_intersection_fraction as existing_ball_fraction,

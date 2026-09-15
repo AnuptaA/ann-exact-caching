@@ -4,13 +4,16 @@
 cache candidate, test poles placed at controlled angular distances."""
 
 import sys
+import json
 import math
+import time
 import argparse
 from pathlib import Path
 from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
 
 import numpy as np
+from tqdm import tqdm
 
 from primitives import (
     exact_intersection_fraction,
@@ -30,7 +33,7 @@ M_PER_THETA = 50
 DIMS = [2, 3, 8, 16, 32, 64, 128, 256, 384]
 GRID_MARGIN = 1.2  # sweep out to GRID_MARGIN * 2 * r_cache, capped at pi
 
-OUT_DIR = Path(__file__).parent / 'results'
+OUT_DIR = Path(__file__).parent.parent / 'results'
 PART_DIR = 'part2'
 _RUN_TIMESTAMP = None
 
@@ -175,6 +178,20 @@ def save_dimension(d: int, pooled: dict, run_dir: Path) -> None:
         print(f"    wrote {path}")
 
 
+def _write_progress(progress_path: Path, d_idx: int, n_dims: int, start_time: float) -> None:
+    """Overwrites a small JSON progress file, readable at any instant
+    regardless of stdout buffering."""
+    tmp_path = progress_path.with_suffix('.tmp')
+    payload = {
+        'dims_done': d_idx + 1,
+        'dims_total': n_dims,
+        'elapsed_seconds': time.time() - start_time,
+        'timestamp': datetime.now().isoformat(),
+    }
+    tmp_path.write_text(json.dumps(payload))
+    tmp_path.replace(progress_path)
+
+
 def bin_count_diagnostic(d: int, pooled: dict, min_count: int = 30) -> None:
     """Prints per-K bin population counts (5% predicted-fraction
     increments) and flags sparse or empty bins."""
@@ -222,12 +239,15 @@ def main() -> None:
           f"n_background_points={args.n_background_points}, "
           f"n_theta={args.n_theta}, m_per_theta={args.m_per_theta}\n")
 
-    for d in args.dims:
+    progress_path = run_dir / 'progress.json'
+    start_time = time.time()
+    for d_idx, d in enumerate(tqdm(args.dims, desc='dims', mininterval=1.0)):
         print(f"=== d={d} ===")
         pooled = run_dimension(d, args.n_backgrounds, args.n_background_points,
                                 args.n_theta, args.m_per_theta, base_seed=args.seed)
         save_dimension(d, pooled, run_dir)
         bin_count_diagnostic(d, pooled)
+        _write_progress(progress_path, d_idx, len(args.dims), start_time)
         print()
 
     print(f"Done: {run_dir}")

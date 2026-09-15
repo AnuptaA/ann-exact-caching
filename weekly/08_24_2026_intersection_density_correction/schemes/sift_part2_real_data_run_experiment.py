@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Reruns 08_10 Part 2's controlled query sweep against a real ESCI
+"""Reruns 08_10 Part 2's controlled query sweep against a real SIFT
 anchor and corpus instead of a synthetic one."""
 
 import sys
@@ -9,7 +9,8 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent / 'common'))
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 import numpy as np
 
@@ -23,15 +24,15 @@ from density_correction_common import covered_mask
 
 #-------------------------------------------------------------------------------
 
-D = 384
-BACKGROUND_PATH = 'datasets/esci/base_vectors_50k.npy'
+D = 128
+BACKGROUND_PATH = 'datasets/sift/base_vectors_50k.npy'
 ANCHOR_SEED_BASE = 900000  # independent of the generation-critical rng stream
 UNIFORM_CORPUS_SEED = 800000  # independent of both the above
 HOME_DELTA = 1e-6  # tiny perturbation off the exact background point, avoids self-match
 
-OUT_DIR = Path(__file__).parent / 'results'
-PART_DIR = 'esci_part2_real_data'
-PART_DIR_UNIFORM = 'esci_part2_real_anchor_on_uniform'
+OUT_DIR = Path(__file__).parent.parent / 'results'
+PART_DIR = 'sift_part2_real_data'
+PART_DIR_UNIFORM = 'sift_part2_real_anchor_on_uniform'
 _RUN_TIMESTAMP = None
 
 
@@ -207,13 +208,13 @@ def main() -> None:
           f"n_background_points={args.n_background_points}, n_theta={args.n_theta}, "
           f"m_per_theta={args.m_per_theta}\n")
 
-    repo_root = Path(__file__).parent.parent.parent
+    repo_root = Path(__file__).parent.parent.parent.parent
     bg_path = Path(args.background_path)
     if not bg_path.is_absolute():
         bg_path = repo_root / bg_path
     real_background = _normalize(np.load(bg_path).astype(np.float64))
 
-    print(f"=== d={D} (ESCI real corpus + size-matched uniform corpus, same anchor/queries) ===")
+    print(f"=== d={D} (SIFT real corpus + size-matched uniform corpus, same anchor/queries) ===")
     pooled_real, pooled_uniform = run_dimension_real(D, real_background, args.n_backgrounds,
                                                        args.n_background_points, args.n_theta, args.m_per_theta,
                                                        base_seed=args.seed)

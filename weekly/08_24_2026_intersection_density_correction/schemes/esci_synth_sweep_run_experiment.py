@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Synthetic angular-separation sweep on real SIFT data: tests how
+"""Synthetic angular-separation sweep on real ESCI data: tests how
 recall tracks IF as synthetic candidates/queries move away from a
 real-corpus anchor."""
 
 import sys
+import json
+import time
 import argparse
 from pathlib import Path
 from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent / 'common'))
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 import numpy as np
 from scipy.optimize import brentq
+from tqdm import tqdm
 
 from primitives import exact_intersection_fraction, exact_intersection_fraction_batch
 from part2_uniform_baseline_run_experiment import _chord_to_angle, _bruteforce_knn
@@ -21,22 +25,41 @@ from part2_uniform_baseline_run_experiment import _chord_to_angle, _bruteforce_k
 
 K_VALUES = [25, 50, 100]
 K_MAX = max(K_VALUES)
-D = 128
+D = 384
 N_ANCHORS = 200
 N_DIRECTIONS = 10
-N_IF_BINS = 20
-IF_BIN_EDGES = np.linspace(0.0, 1.0, N_IF_BINS + 1)
-IF_BIN_CENTERS = (IF_BIN_EDGES[:-1] + IF_BIN_EDGES[1:]) / 2.0
+
+# Log-spaced IF targets: linear targets bunch almost all resulting
+# deltas near zero, since IF collapses steeply with delta in high
+# dimensions. Used both for candidate placement and test-query
+# placement. brentq convergence confirmed clean (0/520 failures)
+# against real SIFT/ESCI anchors at these targets.
+LOG_IF_TARGETS = np.array([1e-20, 1e-15, 1e-10, 1e-7, 1e-5, 1e-3, 1e-2, 0.05, 0.1, 0.25, 0.5, 0.8, 0.95])
+
+# Log-scale bins for diagnostics/plots, matching the touch-coverage test:
+# exact 0 gets its own bin, separate from the (0, 1e-20] interval.
+IF_BIN_EDGES = np.array([0.0, 1e-20, 1e-10, 1e-5, 1e-2, 1.0])
+IF_BIN_LABELS = ['0', '(0,1e-20]', '(1e-20,1e-10]', '(1e-10,1e-5]', '(1e-5,1e-2]', '(1e-2,1]']
+N_IF_BINS = len(IF_BIN_LABELS)
+
+
+def _log_bin_index(values: np.ndarray) -> np.ndarray:
+    """0 for exact zero, 1..len(IF_BIN_EDGES)-1 for the log-scale
+    ranges above, matching the touch-coverage test's convention."""
+    idx = np.zeros(len(values), dtype=np.int64)
+    for b in range(1, len(IF_BIN_EDGES)):
+        idx[values > IF_BIN_EDGES[b - 1]] = b
+    return idx
 
 HOME_DELTA = 1e-6
-CANDIDATE_TARGET_IFS = np.array([0.8, 0.5, 0.25, 0.1, 0.02])
+CANDIDATE_TARGET_IFS = LOG_IF_TARGETS
 
-BACKGROUND_PATH = 'datasets/sift/base_vectors_50k.npy'
+BACKGROUND_PATH = 'datasets/esci/base_vectors_50k.npy'
 UNIFORM_CORPUS_SEED = 800000  # independent of the generation-critical rng stream
 
-OUT_DIR = Path(__file__).parent / 'results'
-PART_DIR = 'sift_synth_sweep'
-PART_DIR_UNIFORM = 'sift_synth_sweep_on_uniform'
+OUT_DIR = Path(__file__).parent.parent / 'results'
+PART_DIR = 'esci_synth_sweep'
+PART_DIR_UNIFORM = 'esci_synth_sweep_on_uniform'
 _RUN_TIMESTAMP = None
 
 
@@ -151,7 +174,23 @@ def evaluate_test_queries(queries: np.ndarray, background: np.ndarray, candidate
     return out
 
 
-def run_all(background: np.ndarray, n_anchors: int, n_directions: int, seed: int) -> tuple:
+def _write_progress(progress_path: Path, a_id: int, n_anchors: int, start_time: float) -> None:
+    """Overwrites a small JSON progress file, readable at any instant
+    regardless of stdout buffering. tmp-then-rename avoids a reader
+    ever seeing a half-written file."""
+    tmp_path = progress_path.with_suffix('.tmp')
+    payload = {
+        'anchors_done': a_id + 1,
+        'anchors_total': n_anchors,
+        'elapsed_seconds': time.time() - start_time,
+        'timestamp': datetime.now().isoformat(),
+    }
+    tmp_path.write_text(json.dumps(payload))
+    tmp_path.replace(progress_path)
+
+
+def run_all(background: np.ndarray, n_anchors: int, n_directions: int, seed: int,
+            progress_path: Path = None) -> tuple:
     rng = np.random.default_rng(seed)
     anchor_idx = rng.choice(len(background), size=n_anchors, replace=False)
     anchors = background[anchor_idx]
@@ -173,12 +212,13 @@ def run_all(background: np.ndarray, n_anchors: int, n_directions: int, seed: int
     pooled_uniform = {K: {f: [] for f in fields} for K in K_VALUES}
 
     total_deltas = 0
-    for a_id in range(n_anchors):
+    start_time = time.time()
+    for a_id in tqdm(range(n_anchors), desc='anchors', mininterval=1.0):
         anchor = anchors[a_id]
         home_idx = int(home_indices[a_id])
         # Query placement stays calibrated to the real corpus's r_cache.
         r_cache_by_K = {K: float(cand_data_real[K]['r_cache'][home_idx]) for K in K_VALUES}
-        deltas = _anchor_delta_grid(r_cache_by_K, D, IF_BIN_CENTERS)
+        deltas = _anchor_delta_grid(r_cache_by_K, D, LOG_IF_TARGETS)
         total_deltas += len(deltas)
         if a_id == 0:
             print(f"  anchor 0: {len(deltas)} IF-targeted test-query delta values (union over K)")
@@ -197,6 +237,9 @@ def run_all(background: np.ndarray, n_anchors: int, n_directions: int, seed: int
                     pooled[K]['fraction'].append(results[K]['fraction'])
                     pooled[K]['recall'].append(results[K]['recall'])
                     pooled[K]['is_home_winner'].append(results[K]['is_home_winner'])
+
+        if progress_path is not None:
+            _write_progress(progress_path, a_id, n_anchors, start_time)
 
         if (a_id + 1) % 20 == 0 or a_id == n_anchors - 1:
             print(f"  anchor {a_id + 1}/{n_anchors}... (avg {total_deltas / (a_id + 1):.1f} test deltas/anchor so far)")
@@ -221,27 +264,27 @@ def coverage_diagnostic(pooled: dict, corpus_label: str) -> None:
     """Pre-downsampling IF coverage and is_home_winner rate by bin,
     reported before any recall/relationship analysis. Balancing
     happens at analysis time, not here."""
-    print(f"\n  Coverage diagnostic (SIFT d={D}, {corpus_label}), pre-downsampling, "
-          f"{N_IF_BINS} bins of width {1.0 / N_IF_BINS:.2f}:")
+    print(f"\n  Coverage diagnostic (ESCI d={D}, {corpus_label}), pre-downsampling, "
+          f"log-scale bins:")
     for K in K_VALUES:
         fraction = pooled[K]['fraction']
         is_home = pooled[K]['is_home_winner']
-        counts, _ = np.histogram(fraction, bins=IF_BIN_EDGES)
-        bin_idx = np.clip(np.digitize(fraction, IF_BIN_EDGES[1:-1]), 0, N_IF_BINS - 1)
+        bin_idx = _log_bin_index(fraction)
+        counts = np.array([(bin_idx == b).sum() for b in range(N_IF_BINS)])
         print(f"    K={K}: total={len(fraction)}, min bin count={counts.min()}, max bin count={counts.max()}, "
               f"overall is_home_winner rate={is_home.mean():.4f}")
-        for b in range(N_IF_BINS):
+        for b, label in enumerate(IF_BIN_LABELS):
             mask = bin_idx == b
             if mask.sum() == 0:
                 continue
-            print(f"      [{IF_BIN_EDGES[b]:.2f},{IF_BIN_EDGES[b+1]:.2f}): n={counts[b]}, "
+            print(f"      {label:>16}: n={counts[b]}, "
                   f"is_home_winner rate={is_home[mask].mean():.4f}")
 
 
 def recall_diagnostic(pooled: dict, corpus_label: str) -> None:
     """Recall-vs-IF summary, reported only after coverage is confirmed
     acceptable."""
-    print(f"\n  Recall diagnostic (SIFT d={D}, {corpus_label}):")
+    print(f"\n  Recall diagnostic (ESCI d={D}, {corpus_label}):")
     for K in K_VALUES:
         recall = pooled[K]['recall']
         print(f"    K={K}: recall range=[{recall.min():.4f}, {recall.max():.4f}], recall mean={recall.mean():.4f}")
@@ -273,13 +316,15 @@ def main() -> None:
     print(f"Run dir: {run_dir}")
     print(f"K values: {K_VALUES}, n_anchors={args.n_anchors}, n_directions={args.n_directions}\n")
 
-    repo_root = Path(__file__).parent.parent.parent
+    repo_root = Path(__file__).parent.parent.parent.parent
     bg_path = Path(args.background_path)
     if not bg_path.is_absolute():
         bg_path = repo_root / bg_path
     background = _normalize(np.load(bg_path).astype(np.float64))
 
-    pooled_real, pooled_uniform = run_all(background, args.n_anchors, args.n_directions, args.seed)
+    progress_path = run_dir / 'progress.json'
+    pooled_real, pooled_uniform = run_all(background, args.n_anchors, args.n_directions, args.seed,
+                                           progress_path=progress_path)
 
     save_results(pooled_real, run_dir, PART_DIR)
     coverage_diagnostic(pooled_real, 'real corpus')

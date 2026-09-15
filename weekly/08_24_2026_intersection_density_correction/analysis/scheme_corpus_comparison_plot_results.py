@@ -4,10 +4,12 @@
 with corpus (real, uniform), for the IF-vs-recall relationship."""
 
 import sys
+import math
 import argparse
 from pathlib import Path
 from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).parent.parent / 'common'))
 
 import numpy as np
 import matplotlib
@@ -16,10 +18,38 @@ import matplotlib.pyplot as plt
 
 #-------------------------------------------------------------------------------
 
-RESULTS_BASE = Path(__file__).parent / 'results'
-OUT_BASE = Path(__file__).parent / 'plots'
-N_IF_BINS = 20
-IF_BIN_EDGES = np.linspace(0.0, 1.0, N_IF_BINS + 1)
+RESULTS_BASE = Path(__file__).parent.parent / 'results'
+OUT_BASE = Path(__file__).parent.parent / 'plots'
+
+# Log-scale bins, matching the touch-coverage test: exact 0 gets its
+# own bin, separate from the (0, 1e-20] interval. Linear [0,1] bins
+# collapse almost all rows into the first bin, since IF collapses
+# steeply with delta in high dimensions (confirmed directly this
+# session, for both Scheme A and Scheme B).
+IF_BIN_EDGES = np.array([0.0, 1e-20, 1e-10, 1e-5, 1e-2, 1.0])
+IF_BIN_LABELS = ['0', '(0,1e-20]', '(1e-20,1e-10]', '(1e-10,1e-5]', '(1e-5,1e-2]', '(1e-2,1]']
+N_IF_BINS = len(IF_BIN_LABELS)
+
+
+def _log_bin_index(values: np.ndarray) -> np.ndarray:
+    """0 for exact zero, 1..len(IF_BIN_EDGES)-1 for the log-scale ranges above."""
+    idx = np.zeros(len(values), dtype=np.int64)
+    for b in range(1, len(IF_BIN_EDGES)):
+        idx[values > IF_BIN_EDGES[b - 1]] = b
+    return idx
+
+
+def _log_bin_centers() -> np.ndarray:
+    """Representative x-position per bin, for symlog plotting. Bin 0
+    (exact zero) plots at 0; bin 1's lower edge is 0 (geometric mean
+    undefined), so it uses half its upper edge instead."""
+    centers = np.zeros(N_IF_BINS)
+    centers[1] = IF_BIN_EDGES[1] / 2.0
+    for b in range(2, N_IF_BINS):
+        centers[b] = math.sqrt(IF_BIN_EDGES[b - 1] * IF_BIN_EDGES[b])
+    return centers
+
+
 DATASET_DIMS = {'sift': 128, 'esci': 384}
 SHARED_K_VALUES = [25, 50, 100]  # present in both schemes' saved output
 
@@ -53,7 +83,7 @@ def load_cell(run_dir: Path, part_dir: str, d: int, k_values: list, fraction_fie
 def balance_by_if_bin(fraction: np.ndarray, recall: np.ndarray, rng: np.random.Generator) -> tuple:
     finite = np.isfinite(fraction) & np.isfinite(recall)
     fraction, recall = fraction[finite], recall[finite]
-    bin_idx = np.clip(np.digitize(fraction, IF_BIN_EDGES[1:-1]), 0, N_IF_BINS - 1)
+    bin_idx = _log_bin_index(fraction)
     raw_counts = np.array([np.sum(bin_idx == b) for b in range(N_IF_BINS)])
     nonzero = raw_counts[raw_counts > 0]
     n_per_bin = int(nonzero.min()) if len(nonzero) else 0
@@ -88,11 +118,11 @@ def _concordance_correlation_coefficient(x: np.ndarray, y: np.ndarray) -> float:
 
 
 def _fixed_bin_stats(x: np.ndarray, y: np.ndarray):
-    centers = (IF_BIN_EDGES[:-1] + IF_BIN_EDGES[1:]) / 2.0
+    centers = _log_bin_centers()
     means = np.full(N_IF_BINS, np.nan)
     sems = np.full(N_IF_BINS, np.nan)
     counts = np.zeros(N_IF_BINS, dtype=int)
-    idx = np.clip(np.digitize(x, IF_BIN_EDGES[1:-1]), 0, N_IF_BINS - 1)
+    idx = _log_bin_index(x)
     for b in range(N_IF_BINS):
         mask = idx == b
         counts[b] = mask.sum()

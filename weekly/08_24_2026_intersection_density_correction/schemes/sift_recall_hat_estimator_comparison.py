@@ -2,13 +2,30 @@
 #-------------------------------------------------------------------------------
 """Compares IF against two LSH-based recall_hat = K/N_q_hat estimators
 (raw and exclusion-corrected) as predictors of true recall, SIFT only,
-K in {25, 50}, real and uniform corpora."""
+K in {25, 50}, real and uniform corpora.
+
+Superseded by the per_cache_query_recall_hat / per_test_query_recall_hat
+comparison (see sift_scheme_a/b_recall_hat_run_experiment.py) - kept for
+history only, not part of that design.
+
+Note: both estimators here use r_q_proxy = max distance from the query to
+the winning candidate's own K response members - the same radius later
+diagnosed as structurally biased (order-statistic skew, see
+misc/debug_recall_hat_calibration_bias.py). "Exclusion-corrected" only
+reduced estimation *variance* at that fixed (already-biased) radius, by
+not re-estimating the K response points already known to lie inside it
+and only estimating the count beyond them - it never addressed the
+radius-choice bias itself. That's a separate concern from
+per_test_query_recall_hat's fix, which changes which radius is used at
+all rather than how precisely a given radius's count is estimated."""
 
 import sys
 import argparse
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent / 'common'))
+sys.path.append(str(Path(__file__).parent.parent / 'analysis'))
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 import math
 import numpy as np
@@ -36,7 +53,7 @@ N_ANCHORS_FAST = 25
 N_DIRECTIONS_FAST = 5
 SEED = 42
 
-PLOTS_DIR = Path(__file__).parent / 'plots' / 'recall_hat_estimator'
+PLOTS_DIR = Path(__file__).parent.parent / 'plots' / 'recall_hat_estimator'
 
 #-------------------------------------------------------------------------------
 
@@ -216,7 +233,7 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=SEED)
     args = parser.parse_args()
 
-    repo_root = Path(__file__).parent.parent.parent
+    repo_root = Path(__file__).parent.parent.parent.parent
     bg_path = repo_root / sw.BACKGROUND_PATH
     background = sw._normalize(np.load(bg_path).astype(np.float64))
     uniform_rng = np.random.default_rng(sw.UNIFORM_CORPUS_SEED)

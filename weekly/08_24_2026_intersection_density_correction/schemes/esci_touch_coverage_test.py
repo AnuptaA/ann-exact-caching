@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """Tests whether binary cap-touch (IF > 0) alone predicts recall on
-real ESCI data, using true offline radii."""
+real ESCI data, using true offline radii.
+
+Note: "IF" here is computed with the query-side radius as the brute-force
+ground-truth K-NN radius, deliberately - this test isolates the
+geometric touch/IF relationship from radius-estimation noise, a
+different question from the rest of this pipeline. Elsewhere (Scheme A,
+Scheme B, setup (a)), "IF" now always means the estimated-radius (r_hat_q*)
+version after the oracle-radius confound diagnosed this session - do not
+treat this file's IF values as directly comparable to those."""
 
 import sys
 import argparse
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent / 'common'))
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 import numpy as np
 import matplotlib
@@ -33,8 +42,8 @@ N_CANDIDATES = 2000  # real queries used as cache entries/candidates
 N_TEST_QUERIES = 5000  # real queries used as test queries; disjoint from the candidates
 SEED = 42
 
-OUT_DIR = Path(__file__).parent / 'results' / 'touch_coverage'
-PLOTS_DIR = Path(__file__).parent / 'plots' / 'touch_coverage'
+OUT_DIR = Path(__file__).parent.parent / 'results' / 'touch_coverage'
+PLOTS_DIR = Path(__file__).parent.parent / 'plots' / 'touch_coverage'
 
 #-------------------------------------------------------------------------------
 
@@ -110,7 +119,7 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=SEED)
     args = parser.parse_args()
 
-    repo_root = Path(__file__).parent.parent.parent
+    repo_root = Path(__file__).parent.parent.parent.parent
     bg_path = repo_root / BACKGROUND_PATH
     background = _normalize(np.load(bg_path).astype(np.float64))
 

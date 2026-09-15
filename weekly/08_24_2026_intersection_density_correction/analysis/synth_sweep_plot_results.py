@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).parent.parent / 'common'))
 
 import numpy as np
 import matplotlib
@@ -16,8 +17,8 @@ import matplotlib.pyplot as plt
 
 #-------------------------------------------------------------------------------
 
-RESULTS_BASE = Path(__file__).parent / 'results'
-OUT_BASE = Path(__file__).parent / 'plots'
+RESULTS_BASE = Path(__file__).parent.parent / 'results'
+OUT_BASE = Path(__file__).parent.parent / 'plots'
 K_VALUES = [25, 50, 100]
 DATASET_DIMS = {'sift': 128, 'esci': 384}
 N_IF_BINS = 20

@@ -8,7 +8,8 @@ import math
 import argparse
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.append(str(Path(__file__).parent.parent / 'common'))
+sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 import numpy as np
 
@@ -69,9 +70,11 @@ def main() -> None:
     parser.add_argument('--part1-only', action='store_true')
     parser.add_argument('--diagnostic-rows', type=int, default=0,
                          help='if >0, only process this many rows per (K, corpus) for Part 2 (diagnostic mode)')
+    parser.add_argument('--n-theta', type=int, default=N_THETA, dest='n_theta',
+                         help='delta-grid resolution (default matches the module-level N_THETA)')
     args = parser.parse_args()
 
-    repo_root = Path(__file__).parent.parent.parent
+    repo_root = Path(__file__).parent.parent.parent.parent
     bg_path = Path(args.background_path)
     if not bg_path.is_absolute():
         bg_path = repo_root / bg_path
@@ -94,12 +97,12 @@ def main() -> None:
                                                         np.random.default_rng(999), D)
 
     part1_summary = {}
-    part2_rows = {corpus: {K: {'corrected_recall': [], 'if_value': [], 'true_recall': []}
+    part2_rows = {corpus: {K: {'corrected_recall': [], 'if_value': [], 'true_recall': [], 'delta': []}
                             for K in K_VALUES} for corpus in corpora}
 
     for bg_id in range(N_BACKGROUNDS):
         print(f"  background {bg_id + 1}/{N_BACKGROUNDS}...")
-        gen = regenerate_background_trial(D, bg_id, N_BACKGROUND_POINTS, N_THETA, M_PER_THETA,
+        gen = regenerate_background_trial(D, bg_id, N_BACKGROUND_POINTS, args.n_theta, M_PER_THETA,
                                            seed=args.seed + bg_id)
         real_anchor = gen['real_anchor']
 
@@ -134,16 +137,19 @@ def main() -> None:
                         key = (corpus_name, K)
                         part1_summary.setdefault(key, []).append(abs(corrected_exact - true_recall))
 
-                        # Part 2 (skip once diagnostic cap reached, if set)
-                        if args.part1_only:
+                        # delta/if_value/true_recall are cheap and always recorded,
+                        # independent of the part1_only flag (which only skips the
+                        # LSH-based corrected_recall estimator below).
+                        if args.diagnostic_rows and len(part2_rows[corpus_name][K]['if_value']) >= args.diagnostic_rows:
                             continue
-                        if args.diagnostic_rows and len(part2_rows[corpus_name][K]['corrected_recall']) >= args.diagnostic_rows:
+                        part2_rows[corpus_name][K]['delta'].append(delta)
+                        part2_rows[corpus_name][K]['if_value'].append(if_value)
+                        part2_rows[corpus_name][K]['true_recall'].append(true_recall)
+                        if args.part1_only:
                             continue
                         corrected_est = compute_corrected_recall_estimated(
                             lsh_tables[corpus_name], q, real_anchor, r_test, r_cache, if_value, est_rng)
                         part2_rows[corpus_name][K]['corrected_recall'].append(corrected_est)
-                        part2_rows[corpus_name][K]['if_value'].append(if_value)
-                        part2_rows[corpus_name][K]['true_recall'].append(true_recall)
 
     print("\n  Part 1 (independent sanity check), max/mean |corrected_recall - recall|"
           " (excluding IF=0 rows, where the density ratio is undefined by construction, not a deviation):")
@@ -170,13 +176,13 @@ def main() -> None:
                       f"{finite.max() if len(finite) else float('nan'):.4f}], "
                       f"mean={finite.mean() if len(finite) else float('nan'):.4f}")
 
-        out_dir = Path(__file__).parent / 'results' / 'density_correction'
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for corpus_name in corpora:
-            for K in K_VALUES:
-                path = out_dir / f'sift_scheme_a_{corpus_name}_K{K}.npz'
-                np.savez_compressed(path, **{k: np.array(v) for k, v in part2_rows[corpus_name][K].items()})
-                print(f"    wrote {path}")
+    out_dir = Path(__file__).parent.parent / 'results' / 'density_correction'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for corpus_name in corpora:
+        for K in K_VALUES:
+            path = out_dir / f'sift_scheme_a_{corpus_name}_K{K}.npz'
+            np.savez_compressed(path, **{k: np.array(v) for k, v in part2_rows[corpus_name][K].items()})
+            print(f"    wrote {path}")
 
     print("\nDone.")
 
