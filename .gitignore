@@ -244,5 +244,11 @@ simulations/**/profiles/
 # old docs
 docs/old/
 
+# Weekly-branch experiment outputs (regenerable from each branch's own scripts;
+# never tracked historically, formalized here so it stops showing as untracked clutter)
+weekly/*/results/
+weekly/*/plots/
+weekly/*/pdf/
+
 # .DS_Store
 **/.DS_Store
