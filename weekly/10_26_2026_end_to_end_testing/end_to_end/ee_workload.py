@@ -101,9 +101,35 @@ def _local_copies(anchor: np.ndarray, count: int, rng: np.random.Generator, max_
         out[i], angles[i] = q, realized * 180.0
     return out, angles
 
+def coincides_with_base(vectors: np.ndarray, base: np.ndarray, tol: float = 1e-9, chunk: int = 500) -> np.ndarray:
+    """Boolean mask of vectors whose angular distance to the nearest base vector is at most tol."""
+    out = np.empty(len(vectors), dtype=bool)
+    for s in range(0, len(vectors), chunk):
+        nn = np.arccos(np.clip((vectors[s:s + chunk] @ base.T).max(axis=1), -1, 1)) / np.pi
+        out[s:s + chunk] = nn <= tol
+    return out
+
+def _draw_random(pool: np.ndarray, eligible: np.ndarray, count: int, rng: np.random.Generator,
+                 base: np.ndarray = None) -> np.ndarray:
+    """First `count` entries of a seeded permutation of eligible pool indices, skipping queries that coincide with
+    a base vector (the next entry of the same permutation is taken instead)."""
+    perm = rng.permutation(eligible)
+    if base is None:
+        return perm[:count]
+    kept, start = [], 0
+    while sum(len(k) for k in kept) < count and start < len(perm):
+        block = perm[start:start + max(count, 500)]
+        kept.append(block[~coincides_with_base(pool[block], base)])
+        start += len(block)
+    pick = np.concatenate(kept)[:count]
+    if len(pick) < count:
+        raise ValueError(f"not enough pool queries distinct from the base: {len(pick)} of {count}")
+    return pick
+
 def build_queries(pool: np.ndarray, seed: int, lam: float, n: int, per_anchor: int,
-                  max_angle_deg: float = cfg.MAX_ANGLE_DEG, lam_index: int = None) -> dict:
-    """Train and test queries (train first by anchor, then random). Raises if the pool is too small."""
+                  max_angle_deg: float = cfg.MAX_ANGLE_DEG, lam_index: int = None, base: np.ndarray = None) -> dict:
+    """Train and test queries (train first by anchor, then random). Raises if the pool is too small.
+    With `base`, random queries equal to a base vector are skipped."""
     A = int(round(lam * n / per_anchor))
     n_local = A * per_anchor
     n_random = n - n_local
@@ -127,7 +153,7 @@ def build_queries(pool: np.ndarray, seed: int, lam: float, n: int, per_anchor: i
             raise ValueError(f"official pool too small: {len(eligible)} eligible queries for {2 * n_random} random "
                              f"train and test queries (seed {seed}, lambda {lam})")
         idx = lam_index if lam_index is not None else int(round(lam * 100))
-        pick = np.random.default_rng([seed, 13, idx]).permutation(eligible)[:2 * n_random]
+        pick = _draw_random(pool, eligible, 2 * n_random, np.random.default_rng([seed, 13, idx]), base)
         train_parts.append(pool[pick[:n_random]])
         test_parts.append(pool[pick[n_random:]])
         tr_anchor += [-1] * n_random
@@ -158,7 +184,7 @@ def check_queries(train: np.ndarray, test: np.ndarray, base: np.ndarray, tol: fl
 def build_workload(dataset: str, base: np.ndarray, pool: np.ndarray, seed: int, lam: float, n: int = cfg.N_QUERIES,
                    K: int = cfg.K, per_anchor: int = cfg.QUERIES_PER_ANCHOR, prefix_len: int = cfg.PREFIX_LEN,
                    max_angle_deg: float = cfg.MAX_ANGLE_DEG) -> Workload:
-    q = build_queries(pool, seed, lam, n, per_anchor, max_angle_deg)
+    q = build_queries(pool, seed, lam, n, per_anchor, max_angle_deg, base=base)
     check = check_queries(q["train"], q["test"], base)
     LOG.info(f"{dataset} seed {seed} lambda {lam}: {q['n_anchors']} anchors, min distance to base "
              f"{check['min_dist_to_base']:.4g}, min query distance {check['min_query_distance']:.4g}")

@@ -69,6 +69,23 @@ def test_train_test_disjoint_and_random_queries_exclude_anchors():
     both = np.vstack([w.train, w.test])
     assert len(np.unique(np.round(both, 12), axis=0)) == len(both)
 
+def test_base_coinciding_queries_are_skipped_in_the_same_permutation():
+    b, p = fixture()
+    plain = ew.build_queries(p, 3, 0.0, 100, PER_ANCHOR)
+    same = ew.build_queries(p, 3, 0.0, 100, PER_ANCHOR, base=b)
+    assert np.array_equal(same["random_source"], plain["random_source"])
+    drawn = plain["random_source"]
+    bad = drawn[[0, 5, 17]]
+    p2 = p.copy()
+    p2[bad] = b[:3]
+    bad = bad[ew.coincides_with_base(p2[bad], b)]  # float rounding can leave a copy at distance ~1e-8
+    assert len(bad) >= 1
+    skip = ew.build_queries(p2, 3, 0.0, 100, PER_ANCHOR, base=b)
+    expected = [i for i in np.random.default_rng([3, 13, 0]).permutation(np.arange(N_POOL)) if i not in set(bad)][:200]
+    assert skip["random_source"].tolist() == expected
+    assert not set(bad) & set(skip["random_source"].tolist())
+    assert not ew.coincides_with_base(p[drawn[:20]], b).any()
+
 def test_pool_too_small_raises_instead_of_resampling():
     b, p = fixture()
     try:
