@@ -36,8 +36,8 @@ for _d in (OUT_DIR, UNIT_DIR, STEP_DIR):
 
 M_GRID = (0.5, 1.0, 1.5)
 ROWS_PER_UNIT = len(cfg.BUDGETS) * len(cfg.TARGETS) * (3 * 7 + 4) * len(hp.POLICIES)
-# Per dataset regime list: the diffuse regime is included only where the 10% budget binds (SIFT, not ESCI).
-REGIMES = {"sift": ["lam0", "lam0.5", "lam1", "diffuse"], "esci": ["lam0", "lam0.5", "lam1"]}
+# Regimes per dataset. ESCI diffuse was added after the first pass of the grid (its 10% budget saturates).
+REGIMES = {"sift": ["lam0", "lam0.5", "lam1", "diffuse"], "esci": ["lam0", "lam0.5", "lam1", "diffuse"]}
 STEP_SCORES = ("SEL2", "SEL5")
 
 def unit_name(ds: str, regime: str, seed: int) -> str:
