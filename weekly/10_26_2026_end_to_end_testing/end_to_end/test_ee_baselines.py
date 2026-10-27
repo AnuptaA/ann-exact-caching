@@ -56,6 +56,22 @@ def test_popularity_pool_ties_and_leave_one_out():
             o2 = sorted(ids[c2 > 0].tolist(), key=lambda v: (-c2[v], v))[:budget]
             assert pool.train_true_counts[q] == len(set(w.train_top_ids[q].tolist()) & set(o2)), (budget, q)
 
+def test_popularity_lsh_train_counts_match_brute_force_and_pools_carry_incidence():
+    base, w = workload(1)
+    budget = 40
+    r_hat = w.theta_train * 1.3
+    got = eb.popularity_lsh_train_counts(w, budget, r_hat, base, N_BASE)
+    ids = np.arange(N_BASE)
+    for q in (0, 9, 33, 70):
+        rest = np.delete(w.train_top_ids, q, axis=0)
+        c2 = np.bincount(rest.ravel(), minlength=N_BASE)
+        pool_q = sorted(ids[c2 > 0].tolist(), key=lambda v: (-c2[v], v))[:budget]
+        dist = np.arccos(np.clip(base[pool_q] @ w.train[q], -1, 1)) / np.pi
+        assert got[q] == int((dist <= r_hat[q]).sum()), q
+    own_inc, _ = ep.make_incidence(w, "own")
+    assert eb.random_own(w, budget, 0, own_inc).inc is own_inc
+    assert eb.threshold_baseline(w, budget, N_BASE).inc is not None
+
 def test_random_own_budget_provenance_and_nothing_fits_at_end():
     base, w = workload(2)
     inc, _ = ep.make_incidence(w, "own", n_vec=N_BASE)

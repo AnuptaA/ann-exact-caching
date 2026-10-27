@@ -63,6 +63,10 @@ def config_bytes(L: int, m: int, d: int, n_labeled: int) -> int:
     """Codes (L tables of m bits per labeled point) + float64 labels + the +/-1 hyperplanes as bits."""
     return int(n_labeled * (L * m // 8 + 8) + L * m * d // 8)
 
+def cache_bytes(pool_size: int, d: int) -> int:
+    """Cached pool vectors stored as float32."""
+    return int(pool_size * d * 4)
+
 #-------------------------------------------------------------------------------
 
 def bench_unit(w, base: np.ndarray, db_theta: np.ndarray, seed: int, pools: dict, configs=cfg.CONFIGS, nus=NUS,

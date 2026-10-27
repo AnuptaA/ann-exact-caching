@@ -32,6 +32,7 @@ class Pool:
     train_true_counts: np.ndarray   # (n,) recall counts of the train queries (leave-group-out / leave-one-out)
     selected: np.ndarray = None     # candidate ids when the pool was built from candidates
     n_selected: int = 0
+    inc: ei.Incidence = None        # incidence the candidate ids refer to
 
 #-------------------------------------------------------------------------------
 
@@ -46,6 +47,26 @@ def popularity_order(counts: np.ndarray) -> np.ndarray:
     ids = np.flatnonzero(counts > 0)
     return ids[np.lexsort((ids, -counts[ids]))]
 
+def _loo_pool(counts: np.ndarray, head: np.ndarray, own: np.ndarray, budget: int) -> np.ndarray:
+    """Popularity pool rebuilt without the query's own top-K set."""
+    c = counts[head] - np.isin(head, own)
+    keep = c > 0
+    h, cq = head[keep], c[keep]
+    return h[np.lexsort((h, -cq))][:budget]
+
+def popularity_lsh_train_counts(w, budget: int, r_hat: np.ndarray, base: np.ndarray, n_db: int = cfg.N_DB) -> np.ndarray:
+    """LSH-arm estimated recall counts of the train queries on the Popularity pool: pool vectors within r_hat[q] of query q,
+    with the pool rebuilt without q's own top-K set."""
+    from utils.base.distance_metrics import pairwise_angular_distance
+    counts = np.bincount(w.train_top_ids.ravel(), minlength=n_db).astype(np.int64)
+    order = popularity_order(counts)
+    head = order[:budget + 2 * w.K]
+    out = np.empty(w.n, dtype=np.int64)
+    for q in range(w.n):
+        pool_q = _loo_pool(counts, head, w.train_top_ids[q], budget)
+        out[q] = int((pairwise_angular_distance(w.train[q:q + 1], base[pool_q])[0] <= r_hat[q]).sum())
+    return out
+
 def popularity(w, budget: int, n_db: int = cfg.N_DB) -> Pool:
     """The `budget` vectors contained in the most train top-K sets (ties by id); train counts are leave-one-out."""
     top = w.train_top_ids
@@ -58,12 +79,7 @@ def popularity(w, budget: int, n_db: int = cfg.N_DB) -> Pool:
     head = order[:budget + 2 * w.K]
     loo = np.empty(w.n, dtype=np.int64)
     for q in range(w.n):
-        own = top[q]
-        c = counts[head] - np.isin(head, own)
-        keep = c > 0
-        h, cq = head[keep], c[keep]
-        pool_q = h[np.lexsort((h, -cq))][:budget]
-        loo[q] = np.isin(own, pool_q).sum()
+        loo[q] = np.isin(top[q], _loo_pool(counts, head, top[q], budget)).sum()
     return Pool("popularity", mask, loo)
 
 #-------------------------------------------------------------------------------
@@ -88,7 +104,7 @@ def random_own(w, budget: int, seed: int, own_inc: ei.Incidence = None, own_idx:
             else:
                 still.append(c)
         remaining = still
-    return Pool("random_own", run.in_pool.copy(), run.covered.astype(np.int64), np.array(run.picks), len(run.picks))
+    return Pool("random_own", run.in_pool.copy(), run.covered.astype(np.int64), np.array(run.picks), len(run.picks), own_inc)
 
 #-------------------------------------------------------------------------------
 # threshold_baseline
@@ -150,13 +166,13 @@ def threshold_baseline(w, budget: int, n_db: int = cfg.N_DB) -> Pool:
     inc = ei.Incidence(w.n, w.K, n_db, w.train_top_ids.astype(np.int32), cptr, cvec, gptr, gq, cands["source"])
     run = ei.replay(inc, ei.build_index(inc), picks)
     assert run.pool_size <= budget
-    return Pool("threshold_baseline", run.in_pool.copy(), run.covered.astype(np.int64), picks, len(picks))
+    return Pool("threshold_baseline", run.in_pool.copy(), run.covered.astype(np.int64), picks, len(picks), inc)
 
 #-------------------------------------------------------------------------------
 
-def pool_from_result(name: str, result: ei.Result) -> Pool:
+def pool_from_result(name: str, result: ei.Result, inc: ei.Incidence = None) -> Pool:
     """Wrap a greedy result (train counts are the leave-group-out slot counters)."""
-    return Pool(name, result.pool_mask, result.covered.astype(np.int64), result.selected, len(result.selected))
+    return Pool(name, result.pool_mask, result.covered.astype(np.int64), result.selected, len(result.selected), inc)
 
 def test_true_counts(w, pool: Pool) -> np.ndarray:
     return est.true_recall_counts(pool.pool_mask, w.test_top_ids)

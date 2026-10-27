@@ -94,7 +94,7 @@ def stream_metrics(hits: np.ndarray, true_counts: np.ndarray, T: float, K: int =
     good = hits & (np.asarray(true_counts) * 2 >= K)  # hits whose true recall is at least 0.5
     out = dict(n=n, hits=int(hits.sum()), hit_rate=hits.mean(), hit_rate_recall_ge_half=good.mean(),
                achieved_recall=cum[-1] / (U * n),
-               y_min=(cum / (U * t)).min(), frac_below_T=below.mean(),
+               y_min=(cum / (U * t)).min(), y_min_minus_T=(cum / (U * t)).min() - T, frac_below_T=below.mean(),
                frac_below_T_after_burn_in=below[burn_in:].mean() if n > burn_in else np.nan,
                one_minus_T=1.0 - T)
     if hits.any():
@@ -134,6 +134,7 @@ def evaluate_pool(seed: int, T: float, test_est_counts: np.ndarray, test_true_co
             row.update(learned_cap_units=cap, train_hit_fraction=float(train_hits.mean()))
         if not oracle_arm:
             err = (np.asarray(test_est_counts) - np.asarray(test_true_counts)) / K
-            row.update(est_signed_error=float(err.mean()), est_mae=float(np.abs(err).mean()))
+            row.update(est_signed_error=float(err.mean()), est_mae=float(np.abs(err).mean()),
+                       over_rate=float((err > 0.05 + 1e-12).mean()))
         rows.append(row)
     return rows
