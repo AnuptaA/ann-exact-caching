@@ -222,6 +222,23 @@ datasets/esci/*.npy
 datasets/esci/*.npz
 datasets/esci/esci_c*/
 
+# SIFT raw downloads (TEXMEX corpus)
+datasets/sift/raw_sift1m/
+datasets/sift/raw_siftsmall/
+
+# Raw vector / dataset files anywhere
+*.fvecs
+*.ivecs
+*.bvecs
+*.parquet
+
+# Generated experiment outputs (keep the curated summary figures)
+simulations/approximate_hits/results/*
+!simulations/approximate_hits/results/summary/
+simulations/radius_estimation/results/
+simulations/radius_estimation/results_sift/
+simulations/radius_estimation/results_sift1m/
+
 # Simulation outputs
 simulations/esci/raw/
 simulations/esci/processed/
@@ -236,3 +253,5 @@ simulations/synthetic/processed/
 
 # .DS_Store
 **/.DS_Store
+# Aker (Oh et al., PVLDB 2026) workloads and SPACEV1B query files
+datasets/aker/

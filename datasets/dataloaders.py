@@ -40,6 +40,26 @@ def load_fvecs(filepath: str) -> np.ndarray:
 
 #-------------------------------------------------------------------------------
 
+def load_fvecs_fast(filepath: str, max_n: Optional[int] = None) -> np.ndarray:
+    """
+    Vectorized fvecs reader. Same output as load_fvecs.
+
+    Args:
+        filepath: Path to fvecs file
+        max_n: Read at most this many vectors (all if None)
+
+    Returns:
+        Numpy array of shape (n_vectors, vector_dim)
+    """
+    with open(filepath, "rb") as f:
+        dim = int(np.fromfile(f, dtype=np.int32, count=1)[0])
+    row = dim + 1
+    count = -1 if max_n is None else max_n * row
+    raw = np.fromfile(filepath, dtype=np.int32, count=count).reshape(-1, row)
+    return np.ascontiguousarray(raw[:, 1:].view(np.float32))
+
+#-------------------------------------------------------------------------------
+
 def load_ivecs(filepath: str) -> np.ndarray:
     """
     Load ivecs file and return as numpy array.
