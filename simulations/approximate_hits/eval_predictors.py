@@ -242,17 +242,8 @@ def evaluate_state(state, scorers, delta):
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("run_dir")
-    ap.add_argument("--targets", type=float, nargs="+", default=[0.9, 0.95])
-    ap.add_argument("--sizes", type=float, nargs="+", default=[0.01, 0.05, 0.10, 0.30])
-    ap.add_argument("--n-each", type=int, default=20000)
-    ap.add_argument("--delta", type=float, default=0.05)
-    ap.add_argument("--workers", type=int, default=8)
-    args = ap.parse_args()
-    run_dir = Path(args.run_dir)
-
+def setup_run(run_dir: Path, n_each: int):
+    """Load a run's splits, exact neighbors and entry tables into ecal._G."""
     run_cfg = json.loads((run_dir / "results.json").read_text())["config"]
     cand_top = pre_topk = None
     if "trace" in run_cfg:
@@ -264,7 +255,7 @@ def main():
         pre_topk = {s: t["topk"][s] for s in SPLITS}
         cand_top = t["cand_top"]
     else:
-        data, cfg, db, cand_q, sets = load_splits(run_dir, args.n_each)
+        data, cfg, db, cand_q, sets = load_splits(run_dir, n_each)
     logger.info(f"{run_dir.name}: " + ", ".join(
         f"{k}={len(v[0])} distinct ({int(v[1].sum())} requests)" for k, v in sets.items()))
     cached_ids, radius, _, _ = build_entry_tables(cand_q, db, cfg.k_values, 1,
@@ -273,6 +264,21 @@ def main():
         name: exact_topk(q, db, cfg.k) for name, (q, _) in sets.items()}
     ecal._G.update(k=cfg.k, k_values=cfg.k_values, db=db, cand_q=cand_q, sets=sets,
                    topk=topk, cached_ids=cached_ids, radius=radius)
+    return data, cfg
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("run_dir")
+    ap.add_argument("--targets", type=float, nargs="+", default=[0.9, 0.95])
+    ap.add_argument("--sizes", type=float, nargs="+", default=[0.01, 0.05, 0.10, 0.30])
+    ap.add_argument("--n-each", type=int, default=20000)
+    ap.add_argument("--delta", type=float, default=0.05)
+    ap.add_argument("--workers", type=int, default=8)
+    args = ap.parse_args()
+    run_dir = Path(args.run_dir)
+
+    data, cfg = setup_run(run_dir, args.n_each)
 
     tasks = []
     for res in data["results"]:

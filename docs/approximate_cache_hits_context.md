@@ -350,6 +350,79 @@ hits dominate (Fig. 9). Aker also populates online and reports recall rather
 than a guaranteed retention target, so its hit ratios are not directly
 comparable to ours.
 
+## 5j. Aker's hit rule on our offline caches
+
+Code: `eval_aker_thresholds.py` (writes `aker_thresholds[_ceiling].json`),
+`summarize_aker_thresholds.py`. Same greedy caches (T = 0.9), only the hit rule
+changes: Aker's per-entry tau (init minD / 4, x1.1 on equality hits, x0.25 on
+approximate hits, cap minD; aliases for repeated approximate-hit queries; one
+representative per cached query, nearest representative only). No insertion
+or eviction. Cold = test requests only; warm = fit + dev + cal replayed first.
+Ceiling = static rule d < minD (loosest Aker allows).
+
+Hit % (mean union retention over hits) at 1% cache:
+- SPACEV 0.3: ours 10.9 (0.92); Aker cold 1.3 (0.97); ceiling 22.2 (0.54)
+- SPACEV 0.6: ours 22.4 (0.91); Aker 2.8 (0.99); ceiling 33.2 (0.65)
+- SPACEV 0.99: ours 58.7 (0.91); Aker 16.0 (1.00); ceiling 61.9 (0.82)
+- TriviaQA 0.3: ours 27.7 (0.91); Aker 4.1 (0.96); ceiling 93.6 (0.55)
+- TriviaQA 0.6: ours 44.7 (0.90); Aker 8.2 (0.98); ceiling 94.2 (0.62)
+- TriviaQA 0.99: ours 82.3 (0.90); Aker 36.9 (1.00); ceiling 95.9 (0.81)
+- spacev-real: Aker 0 hits; ceiling 0 hits
+
+Aker's rule is far more conservative than needed (retention 0.94-1.00) and
+gets 4-10x fewer hits; most of its hits are equality hits. Warm-up lowers its
+hit rate further: approximate hits shrink tau 4x and only equality hits grow
+it back, which are rare with few representatives (Aker's own cache inserts on
+every miss, so it has many more). The static ceiling gets more hits but
+retention falls to 0.2-0.85. The rule has no target knob and no guarantee.
+
+Cache dependence of our admission: features are cache-relative (any cache),
+the per-state GBT is fit on one cache, gbt_pooled on the 8 nested checkpoints
+of one greedy run (log cache size feature), entry-history features are tied
+to specific entries, and lambda is calibrated per cache state; the guarantee
+holds only for the cache it was calibrated on.
+
+## 5k. Does a calibrated threshold transfer across caches?
+
+Code: `eval_threshold_transfer.py` (writes `threshold_transfer.json`),
+`summarize_threshold_transfer.py` (add `--matrices` for per-run matrices).
+`eval_predictors.setup_run` was extracted so both scripts share features,
+GBT and lambda selection. For one run, build a cache family: nested size
+checkpoints, caches selected for other targets, and the base cache with a
+fraction of entries replaced by random unselected candidates of the same K.
+For every ordered pair (source A -> destination B), admission target T = 0.9:
+- frozen: A's GBT and A's lambda, applied to B's test queries
+- recal: A's GBT, lambda recalibrated on B's cal queries
+- native: B's own GBT and lambda (the diagonal)
+Features on B are always computed against B, as an online system could from
+stored backend results. Ran all 7 Aker traces + ESCI 1M.
+
+Off-diagonal pairs with realized test retention below T - 0.01 (worst gap):
+                      frozen            recal
+- larger cache:       0% (best case)    0%
+- smaller cache:      33-67% (-0.33)    0%
+- other-target cache: 6-39% (-0.12)     0%
+- entries replaced:   10-36% (-0.13)    0%
+
+Conclusions:
+- lambda does NOT transfer. A frozen lambda is only safe moving to a LARGER
+  cache (a strict superset retains at least as much), consistent with it being
+  calibrated to one cache. Moving to a smaller, perturbed, or differently
+  targeted cache violates the guarantee up to 2/3 of the time, worst -0.33.
+- The GBT (score function) DOES transfer. After recalibrating only lambda on
+  the destination's cal queries, the guarantee holds on every pair (worst
+  +0.000) at a median 0.95-1.00 of native hit rate. So the expensive part
+  (fitting the predictor) can be reused; only the scalar lambda must be
+  refreshed as the cache changes.
+- Implication for online population / eviction: keep the predictor, recalibrate
+  lambda whenever the cache changes materially (cheap: recompute retention of
+  recent queries against the current cache from stored exact results). Still
+  needs an unbiased calibration sample (misses and insertion-driving queries
+  are biased) -> audit sampling (C7). ESCI 1M frozen is the worst larger-cache
+  case (sources as small as 1% transferred up to 5-10%): the score scale from a
+  tiny cache is miscalibrated for a much bigger one, so even the superset
+  direction violates unless lambda is recalibrated.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes

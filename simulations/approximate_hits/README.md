@@ -34,6 +34,10 @@ training queries whose exact neighbors are known.
      by repeated calibration draws.
    - `eval_radius_baselines.py`: LSH / global-mean radius estimation vs direct
      retention prediction, end to end (`.venv`).
+   - `eval_aker_thresholds.py`: replays Aker's density-aware per-entry
+     threshold rule on our offline caches (trace runs).
+   - `eval_threshold_transfer.py`: does a calibrated threshold transfer across
+     caches (size / target / perturbation)? Needs `.venv`.
 3. **Summaries and figures.** `summarize*.py`, `plot_*.py`,
    `make_summary_figures.py` (writes `results/summary/`, including
    `fig4_aker.png` for the Aker traces).
