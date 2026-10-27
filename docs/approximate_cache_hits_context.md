@@ -313,6 +313,43 @@ with k at fixed N, but k/N alone does not explain it (k = 1 at 50k, k/N =
 specific vectors must be cached, and nearby queries share their first few
 neighbors far more than their 10th.
 
+## 5i. Aker workloads (10M databases, k = 10, cache up to 5%)
+
+Code: `run_e2e_oracle_trace.py`; runs in `results/batch_aker/`. Time-ordered
+splits of each ~100k-request trace: cand 8%, score 32%, fit / dev / cal / test
+15% each. spacev-real: SPACEV1B historical query log for all training splits,
+official 29,316-query set as test. Exact neighbors (blocked top-k, verified
+against brute force) saved per run in `topk.npz`.
+
+Hit % at 0.1 / 1 / 5% cache, T = 0.9, oracle best case -> guaranteed (dev-best
+predictor, GBT in all runs):
+- SPACEV Aker Zipf 0.3: 4.7 / 14.2 / 25.7 -> 3.2 / 10.9 / 20.9
+- SPACEV Aker Zipf 0.6: 12.9 / 25.4 / 36.8 -> 10.8 / 22.4 / 33.0
+- SPACEV Aker Zipf 0.99: 49.6 / 59.9 / 67.1 -> 48.8 / 58.7 / 64.9
+- TriviaQA/SPHERE Zipf 0.3: 7.2 / 39.7 / 87.3 -> 2.9 / 27.7 / 79.2
+- TriviaQA/SPHERE Zipf 0.6: 17.0 / 52.4 / 91.1 -> 14.9 / 44.7 / 85.7
+- TriviaQA/SPHERE Zipf 0.99: 61.7 / 84.8 / 100 -> 60.9 / 82.3 / 100
+Guarantee held on all Aker traces (worst realized test retention - T:
+-0.002, within test noise).
+
+spacev-real: oracle hits ~0 on the official test queries, and the guarantee
+FAILED (realized retention up to 0.68 below T). Cause: distribution shift.
+Official queries are farther from the log (median nearest-log-query distance
+134 vs 99 within the log); with a cache built from the log, 7.4% of
+calibration (log) queries reach retention >= 0.9 vs 0.0% of test queries.
+Calibration assumes future queries resemble calibration queries; under shift
+it gives no protection. Motivates audit sampling (C7) / drift detection.
+
+Figure: `results/summary/fig4_aker.png` (red x = realized test retention
+below T).
+
+Comparison with the Aker paper: Aker never evaluates a historical-log ->
+official-query split. Its lowest-locality "uniform" workload replays the
+unmodified SPACEV / TriviaQA queries, where repeated queries make equality
+hits dominate (Fig. 9). Aker also populates online and reports recall rather
+than a guaranteed retention target, so its hit ratios are not directly
+comparable to ours.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes

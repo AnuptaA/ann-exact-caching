@@ -35,7 +35,8 @@ training queries whose exact neighbors are known.
    - `eval_radius_baselines.py`: LSH / global-mean radius estimation vs direct
      retention prediction, end to end (`.venv`).
 3. **Summaries and figures.** `summarize*.py`, `plot_*.py`,
-   `make_summary_figures.py` (writes `results/summary/`).
+   `make_summary_figures.py` (writes `results/summary/`, including
+   `fig4_aker.png` for the Aker traces).
    `run_eval_queue.py` runs an evaluation script on run directories as their
    greedy results appear.
 
