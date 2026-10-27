@@ -45,6 +45,10 @@ LAMBDA_NAMES = {0.0: "no", 0.5: "some", 1.0: "high"}
 SEEDS = (0, 1, 2, 3, 4)
 BENCH_SEEDS = (100, 101, 102)  # LSH mini-benchmark only, never reported results
 
+# LSH arm: (L tables, m bits per table); the first three use rows [0, 512) of the 2048-row hyperplane matrix
+CONFIGS = [(1, 512), (4, 128), (8, 64), (1, 2048), (4, 512), (8, 256), (16, 128)]
+NU_GRID = (1, 2, 4, 8, 16, 32)
+
 # Regimes: the lambda mixture (50 train and 50 test copies per anchor) and the diffuse regime outside it
 # (500 anchors, 5 copies each), identified by (lambda, copies per anchor).
 REGIME_SPECS = {"lam0": (0.0, 50), "lam0.5": (0.5, 50), "lam1": (1.0, 50), "diffuse": (1.0, 5)}

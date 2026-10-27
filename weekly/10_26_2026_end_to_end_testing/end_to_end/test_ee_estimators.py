@@ -106,6 +106,20 @@ def test_matches_rt_engine_table_values_for_plain_mean():
             ours = est.LSHStore(W, L, m, labeled, labels).estimate(queries, nu)
             assert np.allclose(ours, rt_vals, rtol=1e-12), (L, m, nu)
 
+def test_estimate_multi_equals_single_nu_with_and_without_leave_one_out():
+    base, w = fixture(7)
+    W = make_hyperplanes(7, D)
+    labeled = np.vstack([w.train, base[:50]])
+    labels = np.concatenate([w.theta_train, np.linspace(0.15, 0.45, 50)])
+    nus = [1, 2, 4, 8, 16, 32]
+    for L, m in ((1, 8), (4, 16), (3, 32)):
+        store = est.LSHStore(W, L, m, labeled, labels)
+        multi = store.estimate_multi(w.test, nus, chunk=7)
+        multi_loo = store.estimate_multi(w.train, nus, own=np.arange(len(w.train)), chunk=11)
+        for j, nu in enumerate(nus):
+            assert np.allclose(multi[j], store.estimate(w.test, nu), rtol=1e-12, atol=0)
+            assert np.allclose(multi_loo[j], store.estimate(w.train, nu, own=np.arange(len(w.train))), rtol=1e-12, atol=0)
+
 def test_oracle_estimated_recall_equals_count_within_theta():
     base, w = fixture(3)
     rng = np.random.default_rng(9)

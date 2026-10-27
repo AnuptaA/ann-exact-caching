@@ -91,6 +91,30 @@ def table_value(store: TableStore, W: np.ndarray, queries: np.ndarray, nu: int, 
     assert (cc[ar, cut] > 0).all(), "empty neighborhood"
     return cs[ar, cut] / cc[ar, cut]
 
+def table_values(store: TableStore, W: np.ndarray, queries: np.ndarray, nus: list, own: np.ndarray = None) -> np.ndarray:
+    """Table values for several nu at once, (len(nus), rows): one Hamming pass, one histogram, many cutoffs."""
+    row_lo, m = store.rows
+    q_codes = sign_codes(queries, W[row_lo:row_lo + m]).astype(np.float32)
+    n_rows = len(queries)
+    ham = np.rint((m - q_codes @ store.codes_pm.T) * 0.5).astype(np.int64)
+    idx = (ham + (np.arange(n_rows, dtype=np.int64) * (m + 1))[:, None]).ravel()
+    cnt = np.bincount(idx, weights=np.broadcast_to(store.counts, ham.shape).ravel(), minlength=n_rows * (m + 1))
+    sm = np.bincount(idx, weights=np.broadcast_to(store.sums, ham.shape).ravel(), minlength=n_rows * (m + 1))
+    cnt, sm = cnt.reshape(n_rows, m + 1), sm.reshape(n_rows, m + 1)
+    if own is not None:
+        rows = np.flatnonzero(own >= 0)
+        assert (ham[rows, store.inverse[own[rows]]] == 0).all()
+        cnt[rows, 0] -= 1
+        sm[rows, 0] -= store.labels[own[rows]]
+    cc, cs = np.cumsum(cnt, axis=1), np.cumsum(sm, axis=1)
+    ar = np.arange(n_rows)
+    out = np.empty((len(nus), n_rows))
+    for j, nu in enumerate(nus):
+        cut = np.minimum((cc < nu).sum(axis=1), m)
+        assert (cc[ar, cut] > 0).all(), "empty neighborhood"
+        out[j] = cs[ar, cut] / cc[ar, cut]
+    return out
+
 class LSHStore:
     """L tables of m bits over one labeled set. Test queries are never inserted."""
 
@@ -99,6 +123,16 @@ class LSHStore:
         self.W, self.L, self.m = W, L, m
         self.labels = np.asarray(labels, dtype=np.float64)
         self.tables = [build_table(W, labeled, self.labels, t * m, m) for t in range(L)]
+
+    def estimate_multi(self, queries: np.ndarray, nus: list, own: np.ndarray = None, chunk: int = 250) -> np.ndarray:
+        """r_hat for several nu at once, (len(nus), n_queries); equals `estimate` per nu."""
+        out = np.empty((len(nus), len(queries)))
+        for s in range(0, len(queries), chunk):
+            e = min(len(queries), s + chunk)
+            own_c = None if own is None else own[s:e]
+            vals = np.stack([table_values(t, self.W, queries[s:e], nus, own_c) for t in self.tables])
+            out[:, s:e] = vals.mean(axis=0)
+        return out
 
     def estimate(self, queries: np.ndarray, nu: int, own: np.ndarray = None, chunk: int = 500) -> np.ndarray:
         out = np.empty(len(queries))
