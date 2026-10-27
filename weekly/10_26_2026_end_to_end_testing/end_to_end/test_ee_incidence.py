@@ -179,6 +179,30 @@ def test_incremental_engine_equals_slow_reference_on_random_instances():
                 checked += 1
     assert checked == 24 * 2 * 5
 
+def test_fill_phase_equals_reference_and_extends_the_main_pool():
+    rng = np.random.default_rng(3)
+    extended = 0
+    for trial in range(16):
+        inc = random_instance(rng, with_cnt0=trial % 2 == 1)
+        idx = ei.build_index(inc)
+        for T in (0.8, 0.9):
+            for score in ("SEL2", "SEL5"):
+                budget = int(rng.integers(10, 40))
+                base = ei.greedy(inc, idx, score, T, budget)
+                filled = ei.greedy(inc, idx, score, T, budget, fill_score="SEL3")
+                ref = ei.greedy_reference(inc, score, T, budget, fill_score="SEL3")
+                assert filled.selected.tolist() == ref["selected"].tolist(), (trial, T, score)
+                assert filled.steps["gain"].tolist() == ref["gains"].tolist()
+                assert filled.selected[:len(base.selected)].tolist() == base.selected.tolist()   # main phase unchanged
+                assert filled.n_main_picks == len(base.selected) and filled.pool_after_main == base.pool_size
+                assert filled.pool_size >= base.pool_size and filled.pool_size <= budget
+                assert (np.flatnonzero(base.pool_mask) == np.flatnonzero(base.pool_mask & filled.pool_mask)).all()
+                assert (filled.steps["phase"][:len(base.selected)] == 0).all() and (filled.steps["phase"][len(base.selected):] == 1).all()
+                if not base.stalled:
+                    assert filled.selected.tolist() == base.selected.tolist()   # nothing left to spend
+                extended += int(filled.pool_size > base.pool_size)
+    assert extended > 5
+
 def test_leave_group_out_recall_matches_set_definition():
     rng = np.random.default_rng(1)
     inc = random_instance(rng)

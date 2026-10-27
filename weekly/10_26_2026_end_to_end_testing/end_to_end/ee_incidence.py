@@ -349,37 +349,52 @@ def replay_h_star(inc: Incidence, idx: Index, order: tuple, T: float) -> int:
     return run.h_star()
 
 def greedy(inc: Incidence, idx: Index, score: str, T: float, budget: int, h0: int = None,
-           max_steps: int = None) -> Result:
-    """Exact incremental greedy. SEL4 needs h0; SEL5 takes h0 from the current h* before every purchase."""
+           max_steps: int = None, fill_score: str = None) -> Result:
+    """Exact incremental greedy. SEL4 needs h0; SEL5 takes h0 from the current h* before every purchase.
+    With fill_score the run continues after the main phase stalls, spending the remaining budget by that score's gain
+    per cost (a diagnostic variant, not part of the main grid); `steps["phase"]` is 0 for the main phase, 1 for the fill."""
     assert score in SCORES and (score != "SEL4" or h0 is not None)
+    assert fill_score is None or fill_score in SCORES
     t0 = time.time()
     run = _Run(inc, idx, T)
-    log = dict(cand=[], gain=[], cost=[], h_before=[], h_after=[], n_positive=[], pool_size=[])
-    while max_steps is None or len(run.picks) < max_steps:
-        budget_left = budget - run.pool_size
-        h_now = run.h_star()
-        run.compute_gains(score, budget_left, h0)
-        best = int(_pick(run.gains, run.cost, run.alive, budget_left))
-        if best < 0:
-            break
-        g, c_best = int(run.gains[best]), int(run.cost[best])
-        n_pos = int((run.gains > 0).sum())
-        added = run.apply(best)
-        assert added == c_best, "cost bookkeeping drifted"
-        for key, val in zip(log, (best, g, c_best, h_now, run.h_star(), n_pos, run.pool_size)):
-            log[key].append(val)
+    log = dict(cand=[], gain=[], cost=[], h_before=[], h_after=[], n_positive=[], pool_size=[], phase=[])
+    n_main = 0
+    for phase, phase_score in enumerate((score, fill_score)):
+        if phase_score is None:
+            continue
+        phase_h0 = h0 if phase == 0 else None
+        assert phase_score != "SEL4" or phase_h0 is not None
+        while max_steps is None or len(run.picks) < max_steps:
+            budget_left = budget - run.pool_size
+            h_now = run.h_star()
+            run.compute_gains(phase_score, budget_left, phase_h0)
+            best = int(_pick(run.gains, run.cost, run.alive, budget_left))
+            if best < 0:
+                break
+            g, c_best = int(run.gains[best]), int(run.cost[best])
+            n_pos = int((run.gains > 0).sum())
+            added = run.apply(best)
+            assert added == c_best, "cost bookkeeping drifted"
+            for key, val in zip(log, (best, g, c_best, h_now, run.h_star(), n_pos, run.pool_size, phase)):
+                log[key].append(val)
+        if phase == 0:
+            n_main = len(run.picks)
+            pool_after_main = run.pool_size
     picks = np.array(run.picks, dtype=np.int64)
     src = inc.cand_source[picks] if len(picks) else np.empty(0, np.int32)
-    return Result(selected=picks, pool_mask=run.in_pool, covered=run.covered.copy(), h_star=run.h_star(),
-                  pool_size=run.pool_size, stalled=(budget - run.pool_size) > 0, unused_budget=budget - run.pool_size,
-                  n_distinct_sources=int(len(np.unique(src[src >= 0]))),
-                  steps={k: np.array(v) for k, v in log.items()}, seconds=time.time() - t0)
+    res = Result(selected=picks, pool_mask=run.in_pool, covered=run.covered.copy(), h_star=run.h_star(),
+                 pool_size=run.pool_size, stalled=(budget - run.pool_size) > 0, unused_budget=budget - run.pool_size,
+                 n_distinct_sources=int(len(np.unique(src[src >= 0]))), steps={k: np.array(v) for k, v in log.items()},
+                 seconds=time.time() - t0)
+    res.n_main_picks, res.pool_after_main = n_main, pool_after_main
+    return res
 
 #-------------------------------------------------------------------------------
 # Slow independent reference (small instances only)
 
-def greedy_reference(inc: Incidence, score: str, T: float, budget: int, h0: int = None) -> dict:
-    """Straightforward recomputation of every candidate's gain from scratch each step, with exact fractions."""
+def greedy_reference(inc: Incidence, score: str, T: float, budget: int, h0: int = None, fill_score: str = None) -> dict:
+    """Straightforward recomputation of every candidate's gain from scratch each step, with exact fractions.
+    With fill_score a second phase continues from the final state of the main phase."""
     n, K = inc.n, inc.K
     S_t, thr = slack_tenths(T, n, K), K - cover_threshold(T, K)
     cnt = np.zeros((n, K), np.int64) if inc.cnt0 is None else inc.cnt0.astype(np.int64).copy()
@@ -396,47 +411,50 @@ def greedy_reference(inc: Incidence, score: str, T: float, budget: int, h0: int 
     def hstar(def_sorted):
         return int((np.cumsum(def_sorted) <= S_t).sum())
 
-    def value(cn, h0_fixed):
+    def value(cn, h0_fixed, sc):
         d = deficits(cn)
-        if score == "SEL1":
+        if sc == "SEL1":
             return int((d <= thr).sum())
-        if score == "SEL2":
+        if sc == "SEL2":
             return hstar(d)
-        if score == "SEL3":
+        if sc == "SEL3":
             return int((cn > 0).sum())
         return -int(d[:h0_fixed].sum())
 
     pool, alive, picks, gains_log = set(), set(range(inc.n_cand)), [], []
-    while True:
-        h0_fixed = hstar(deficits(cnt)) if score == "SEL5" else h0
-        now = value(cnt, h0_fixed)
-        best, best_key = None, None
-        for c in sorted(alive):
-            cost = len(R[c] - pool)
-            if cost > budget - len(pool):
-                continue
-            cn = cnt.copy()
-            for v in R[c]:
+    for phase, sc in enumerate((score, fill_score)):
+        if sc is None:
+            continue
+        while True:
+            h0_fixed = hstar(deficits(cnt)) if sc == "SEL5" else (h0 if phase == 0 else None)
+            now = value(cnt, h0_fixed, sc)
+            best, best_key = None, None
+            for c in sorted(alive):
+                cost = len(R[c] - pool)
+                if cost > budget - len(pool):
+                    continue
+                cn = cnt.copy()
+                for v in R[c]:
+                    for q, j in slots_of.get(v, []):
+                        if q not in G[c]:
+                            cn[q, j] += 1
+                gain = value(cn, h0_fixed, sc) - now
+                if gain <= 0:
+                    continue
+                util = Fraction(10 ** 18) if cost == 0 else Fraction(gain, cost)
+                key = (util, -cost, -c)
+                if best_key is None or key > best_key:
+                    best, best_key, best_gain = c, key, gain
+            if best is None:
+                break
+            for v in R[best]:
                 for q, j in slots_of.get(v, []):
-                    if q not in G[c]:
-                        cn[q, j] += 1
-            gain = value(cn, h0_fixed) - now
-            if gain <= 0:
-                continue
-            util = Fraction(10 ** 18) if cost == 0 else Fraction(gain, cost)
-            key = (util, -cost, -c)
-            if best_key is None or key > best_key:
-                best, best_key, best_gain = c, key, gain
-        if best is None:
-            break
-        for v in R[best]:
-            for q, j in slots_of.get(v, []):
-                if q not in G[best]:
-                    cnt[q, j] += 1
-        pool |= R[best]
-        alive.discard(best)
-        picks.append(best)
-        gains_log.append(best_gain)
+                    if q not in G[best]:
+                        cnt[q, j] += 1
+            pool |= R[best]
+            alive.discard(best)
+            picks.append(best)
+            gains_log.append(best_gain)
     return dict(selected=np.array(picks, dtype=np.int64), gains=np.array(gains_log), pool=pool,
                 covered=(cnt > 0).sum(axis=1), h_star=hstar(deficits(cnt)))
 
