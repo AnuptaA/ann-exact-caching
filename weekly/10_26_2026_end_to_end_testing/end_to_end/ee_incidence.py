@@ -335,6 +335,13 @@ def score_gains(inc: Incidence, idx: Index, score: str, T: float, h0: int = None
     run.compute_gains(score, budget - run.pool_size, h0)
     return run.gains.copy(), run.cost.copy()
 
+def replay(inc: Incidence, idx: Index, order, T: float = 0.9) -> _Run:
+    """State reached by buying the given candidates in order (used for baseline pools that need leave-group-out recall)."""
+    run = _Run(inc, idx, T)
+    for c in order:
+        run.apply(int(c))
+    return run
+
 def replay_h_star(inc: Incidence, idx: Index, order: tuple, T: float) -> int:
     run = _Run(inc, idx, T)
     for c in order:
