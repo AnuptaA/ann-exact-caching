@@ -45,10 +45,15 @@ LAMBDA_NAMES = {0.0: "no", 0.5: "some", 1.0: "high"}
 SEEDS = (0, 1, 2, 3, 4)
 BENCH_SEEDS = (100, 101, 102)  # LSH mini-benchmark only, never reported results
 
+# Regimes: the lambda mixture (50 train and 50 test copies per anchor) and the diffuse regime outside it
+# (500 anchors, 5 copies each), identified by (lambda, copies per anchor).
+REGIME_SPECS = {"lam0": (0.0, 50), "lam0.5": (0.5, 50), "lam1": (1.0, 50), "diffuse": (1.0, 5)}
+
 QUERIES_PER_ANCHOR = 50
 MAX_ANGLE_DEG = 10.0
 CANDIDATE_MAX_SET = 5000  # candidates with more than this many vectors are dropped
 PREFIX_LEN = CANDIDATE_MAX_SET + 1  # sorted nearest-vector prefix kept per train query
+FLOOR_UNITS = 10  # HP3f floor: estimated recall >= 0.5, i.e. 10 units of 0.05 (est count >= 5 of 10)
 GROUP_UNION_MAX_I = 20
 BALL_MAX_I = 20
 BURN_IN = 100
@@ -80,3 +85,9 @@ def slack_units(T: float, n: int) -> int:
 def per_step_slack_units(T: float) -> int:
     """Slack per stream step (1 - T) in units of 0.05 recall (4, 2, 1)."""
     return UNITS_PER_RECALL - target_units(T)
+
+def regime_tag(lam: float, per_anchor: int = QUERIES_PER_ANCHOR) -> str:
+    """Regime name used in file names: lam0, lam0.5, lam1 for the mixture, diffuse (500 x 5) outside it."""
+    if per_anchor == QUERIES_PER_ANCHOR:
+        return f"lam{lam:g}"
+    return "diffuse" if (lam, per_anchor) == REGIME_SPECS["diffuse"] else f"lam{lam:g}_pa{per_anchor}"

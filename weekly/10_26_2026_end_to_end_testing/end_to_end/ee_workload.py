@@ -180,8 +180,8 @@ CACHE_FIELDS = ["train", "test", "train_anchor", "test_anchor", "train_angle_deg
                 "train_top_ids", "train_top_dist", "test_top_ids", "test_top_dist"]
 
 def cache_path(dataset: str, seed: int, lam: float, n: int = cfg.N_QUERIES, K: int = cfg.K,
-               directory: Path = cfg.GROUND_TRUTH_DIR) -> Path:
-    return Path(directory) / f"{dataset}_lam{lam:g}_seed{seed}_n{n}_K{K}.npz"
+               directory: Path = cfg.GROUND_TRUTH_DIR, per_anchor: int = cfg.QUERIES_PER_ANCHOR) -> Path:
+    return Path(directory) / f"{dataset}_{cfg.regime_tag(lam, per_anchor)}_seed{seed}_n{n}_K{K}.npz"
 
 def save_workload(w: Workload, path: Path) -> None:
     path = Path(path)
@@ -220,12 +220,13 @@ def dedupe_pool(pool: np.ndarray) -> tuple:
     return pool[keep], keep
 
 def get_workload(dataset: str, seed: int, lam: float, base: np.ndarray = None, pool: np.ndarray = None,
-                 n: int = cfg.N_QUERIES, K: int = cfg.K, directory: Path = cfg.GROUND_TRUTH_DIR) -> Workload:
+                 n: int = cfg.N_QUERIES, K: int = cfg.K, directory: Path = cfg.GROUND_TRUTH_DIR,
+                 per_anchor: int = cfg.QUERIES_PER_ANCHOR) -> Workload:
     """Load the cached workload, or build it from the dataset's base and de-duplicated official query pool and
     cache it. `anchor_source` indexes the original (not de-duplicated) official pool."""
     base = load_base_pool(dataset) if base is None else base
     assert len(base) == cfg.N_DB, f"{dataset}: expected {cfg.N_DB} base vectors, got {len(base)}"
-    path = cache_path(dataset, seed, lam, n, K, directory)
+    path = cache_path(dataset, seed, lam, n, K, directory, per_anchor)
     if path.exists():
         w = load_workload(path, base)
         assert (w.dataset, w.seed, w.lam, w.n, w.K) == (dataset, seed, lam, n, K), f"{path.name}: stale cache"
@@ -235,7 +236,7 @@ def get_workload(dataset: str, seed: int, lam: float, base: np.ndarray = None, p
     if len(unique_pool) < len(pool):
         LOG.warning(f"{dataset}: official pool has {len(pool) - len(unique_pool)} duplicate vectors of {len(pool)}; "
                     f"drawing from the {len(unique_pool)} distinct ones")
-    w = build_workload(dataset, base, unique_pool, seed, lam, n, K)
+    w = build_workload(dataset, base, unique_pool, seed, lam, n, K, per_anchor)
     w.anchor_source = kept[w.anchor_source]
     save_workload(w, path)
     return w

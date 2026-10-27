@@ -35,11 +35,12 @@ def test_no_cache_hit_rate_floor_and_zero_recall_hits():
     n = 400
     zeros = np.zeros(n, dtype=np.int64)
     rows = hp.evaluate_pool(0, 0.9, zeros, zeros, zeros, zeros, K, oracle_arm=True)
-    hp1, hp2, hp3 = rows
+    hp1, hp2, hp3, hp3f = rows
     assert hp1["hits"] == 0 and np.isclose(hp1["achieved_recall"], 1.0)
     assert hp2["hits"] == 40 and np.isclose(hp2["hit_rate"], 0.1) and np.isclose(hp2["frac_hits_zero_recall"], 1.0)
     assert np.isclose(hp2["achieved_recall"], 0.9) and hp2["frac_below_T"] == 0
     assert hp3["hits"] == 40 and hp3["learned_cap_units"] == 20
+    assert hp3f["hits"] == 0 and np.isclose(hp3f["achieved_recall"], 1.0)  # the floor refuses every zero-recall query
 
 def test_popularity_pool_ties_and_leave_one_out():
     base, w = workload(1)

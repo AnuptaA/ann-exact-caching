@@ -43,6 +43,17 @@ def test_regime_counts_and_anchor_nesting():
     assert np.array_equal(w5.train[:2 * PER_ANCHOR], w1.train[:2 * PER_ANCHOR])
     assert np.array_equal(w5.test[:2 * PER_ANCHOR], w1.test[:2 * PER_ANCHOR])
 
+def test_diffuse_regime_counts_and_cache_names():
+    b, p = fixture()
+    w = ew.build_workload("sift", b, p, 2, 1.0, n=N, K=K, per_anchor=5, prefix_len=PREFIX)
+    assert w.n_anchors == 40 and (w.train_anchor >= 0).all() and (w.test_anchor >= 0).all()
+    assert np.bincount(w.train_anchor).tolist() == [5] * 40 == np.bincount(w.test_anchor).tolist()
+    assert set(w.train_anchor.tolist()) == set(w.test_anchor.tolist())
+    assert cfg.regime_tag(0.0) == "lam0" and cfg.regime_tag(0.5) == "lam0.5" and cfg.regime_tag(1.0) == "lam1"
+    assert cfg.regime_tag(1.0, 5) == "diffuse" and cfg.regime_tag(0.5, 5) == "lam0.5_pa5"
+    assert ew.cache_path("sift", 0, 1.0, 2500, 10, Path("x"), 5).name == "sift_diffuse_seed0_n2500_K10.npz"
+    assert ew.cache_path("sift", 0, 0.5, 2500, 10, Path("x")).name == "sift_lam0.5_seed0_n2500_K10.npz"
+
 def test_train_test_disjoint_and_random_queries_exclude_anchors():
     b, p = fixture()
     for lam in (0.0, 0.5):

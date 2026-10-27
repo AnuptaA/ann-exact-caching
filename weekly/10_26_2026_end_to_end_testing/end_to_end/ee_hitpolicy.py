@@ -13,6 +13,7 @@ import numpy as np
 import ee_config as cfg
 
 U = cfg.UNITS_PER_RECALL
+POLICIES = ("HP1", "HP2", "HP3", "HP3f")
 
 #-------------------------------------------------------------------------------
 # Units
@@ -57,20 +58,22 @@ def learn_cap(train_est_units: np.ndarray, T: float) -> int:
 
 def run_policy(policy: str, est_units: np.ndarray, T: float, cap_units: int = None) -> np.ndarray:
     """Boolean hit array. HP1: est >= T. HP2: cumdef + a <= t (1 - T) with cumdef the accounting deficits of past hits.
-    HP3: HP2 and d <= cap."""
+    HP3: HP2 and d <= cap. HP3f: HP3 and est >= 0.5 (floor of FLOOR_UNITS units)."""
     est_units = np.asarray(est_units, dtype=np.int64)
     T_u, step = cfg.target_units(T), cfg.per_step_slack_units(T)
     if policy == "HP1":
         return est_units >= T_u
-    assert policy in ("HP2", "HP3")
-    if policy == "HP3":
-        assert cap_units is not None, "HP3 needs a cap"
+    assert policy in ("HP2", "HP3", "HP3f")
+    if policy in ("HP3", "HP3f"):
+        assert cap_units is not None, "HP3 and HP3f need a cap"
+    floor = cfg.FLOOR_UNITS if policy == "HP3f" else None
     d, a = deficits(est_units)
     hits = np.zeros(len(est_units), dtype=bool)
     cumdef = 0
     for t in range(1, len(est_units) + 1):
         i = t - 1
-        if cumdef + a[i] <= t * step and (policy == "HP2" or d[i] <= cap_units):
+        if cumdef + a[i] <= t * step and (policy == "HP2" or d[i] <= cap_units) and \
+                (floor is None or est_units[i] >= floor):
             hits[i] = True
             cumdef += int(a[i])
     return hits
@@ -88,15 +91,17 @@ def stream_metrics(hits: np.ndarray, true_counts: np.ndarray, T: float, K: int =
     t = np.arange(1, n + 1)
     below = cum < cfg.target_units(T) * t  # exact: Y_t < T
     hit_recall = np.asarray(true_counts)[hits] / K
-    out = dict(n=n, hits=int(hits.sum()), hit_rate=hits.mean(), achieved_recall=cum[-1] / (U * n),
+    good = hits & (np.asarray(true_counts) * 2 >= K)  # hits whose true recall is at least 0.5
+    out = dict(n=n, hits=int(hits.sum()), hit_rate=hits.mean(), hit_rate_recall_ge_half=good.mean(),
+               achieved_recall=cum[-1] / (U * n),
                y_min=(cum / (U * t)).min(), frac_below_T=below.mean(),
                frac_below_T_after_burn_in=below[burn_in:].mean() if n > burn_in else np.nan,
                one_minus_T=1.0 - T)
     if hits.any():
-        out.update(mean_hit_recall=hit_recall.mean(), p10_hit_recall=float(np.percentile(hit_recall, 10)),
+        out.update(mean_true_recall_of_hits=hit_recall.mean(), mean_hit_recall=hit_recall.mean(), p10_hit_recall=float(np.percentile(hit_recall, 10)),
                    frac_hits_below_half=(hit_recall < 0.5).mean(), frac_hits_zero_recall=(hit_recall == 0).mean())
     else:
-        out.update(mean_hit_recall=np.nan, p10_hit_recall=np.nan, frac_hits_below_half=np.nan,
+        out.update(mean_true_recall_of_hits=np.nan, mean_hit_recall=np.nan, p10_hit_recall=np.nan, frac_hits_below_half=np.nan,
                    frac_hits_zero_recall=np.nan)
     return out
 
@@ -118,14 +123,14 @@ def evaluate_pool(seed: int, T: float, test_est_counts: np.ndarray, test_true_co
     hs_arm = hindsight_count(counts_to_units(test_est_counts, K), T) / n_test
     hs_oracle = hindsight_count(counts_to_units(test_true_counts, K), T) / n_test
     rows = []
-    for policy in ("HP1", "HP2", "HP3"):
-        hits = run_policy(policy, est_u, T, cap if policy == "HP3" else None)
+    for policy in POLICIES:
+        hits = run_policy(policy, est_u, T, cap if policy in ("HP3", "HP3f") else None)
         row = stream_metrics(hits, true_c, T, K)
         row.update(policy=policy, T=T, hindsight_hit_rate_oracle=hs_oracle,
                    hindsight_hit_rate_lsh=np.nan if oracle_arm else hs_arm, learned_cap_units=np.nan,
                    train_hit_fraction=np.nan, test_hit_fraction=row["hit_rate"])
-        if policy == "HP3":
-            train_hits = run_policy("HP3", train_est_u[r_order], T, cap)
+        if policy in ("HP3", "HP3f"):
+            train_hits = run_policy(policy, train_est_u[r_order], T, cap)
             row.update(learned_cap_units=cap, train_hit_fraction=float(train_hits.mean()))
         if not oracle_arm:
             err = (np.asarray(test_est_counts) - np.asarray(test_true_counts)) / K

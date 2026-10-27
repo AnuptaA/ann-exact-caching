@@ -111,6 +111,31 @@ def test_delivered_recall_and_running_metrics_exact():
     none = hp.stream_metrics(np.zeros(4, dtype=bool), true, 0.8)
     assert np.isnan(none["mean_hit_recall"]) and np.isclose(none["achieved_recall"], 1.0)
 
+def test_hp3f_adds_the_estimated_recall_floor():
+    # T = 0.8: slack 4 units per step. Six perfect estimates, then est 0.3 (d = 14 units): HP3 serves it, HP3f refuses
+    est = units(*([10] * 6 + [3, 5, 4]))
+    assert hp.run_policy("HP3", est, 0.8, 20).tolist()[6:] == [True, True, True]
+    f = hp.run_policy("HP3f", est, 0.8, 20)
+    assert f.tolist()[6:] == [False, True, False]        # est 0.5 (10 units) passes the floor, 0.3 and 0.4 do not
+    assert (f <= hp.run_policy("HP3", est, 0.8, 20)).all()
+    # the floor does not change the cap rule: a query above the floor but with d > cap is still refused
+    assert not hp.run_policy("HP3f", units(*([10] * 6 + [6])), 0.8, 6)[6]   # est 0.6 passes the floor, d = 8 > cap 6
+    try:
+        hp.run_policy("HP3f", est, 0.8)
+        raise RuntimeError("expected AssertionError")
+    except AssertionError:
+        pass
+
+def test_secondary_metrics_hit_rate_with_recall_at_least_half():
+    true = np.array([10, 6, 0, 5, 4])
+    hits = np.array([True, True, True, True, False])
+    m = hp.stream_metrics(hits, true, 0.8, burn_in=1)
+    assert np.isclose(m["hit_rate"], 0.8) and np.isclose(m["hit_rate_recall_ge_half"], 0.6)   # counts 10, 6, 5 qualify
+    assert np.isclose(m["mean_true_recall_of_hits"], (1.0 + 0.6 + 0.0 + 0.5) / 4)
+    assert m["mean_true_recall_of_hits"] == m["mean_hit_recall"]
+    none = hp.stream_metrics(np.zeros(5, dtype=bool), true, 0.8)
+    assert none["hit_rate_recall_ge_half"] == 0 and np.isnan(none["mean_true_recall_of_hits"])
+
 def test_stream_order_is_seeded_permutation():
     a, b, c = hp.stream_order(3, 50), hp.stream_order(3, 50), hp.stream_order(4, 50)
     assert np.array_equal(a, b) and not np.array_equal(a, c) and sorted(a.tolist()) == list(range(50))
@@ -123,7 +148,7 @@ def test_evaluate_pool_rows_and_proxy_gap_logging():
     true_r = rng.integers(0, 11, n)
     est_r = np.clip(true_r + rng.integers(-1, 3, n), 0, 14)
     rows = hp.evaluate_pool(1, 0.9, est_t, true_t, est_r, true_r, oracle_arm=False)
-    assert [r["policy"] for r in rows] == ["HP1", "HP2", "HP3"]
+    assert [r["policy"] for r in rows] == ["HP1", "HP2", "HP3", "HP3f"]
     hp3 = rows[2]
     assert np.isfinite(hp3["learned_cap_units"]) and 0.0 <= hp3["train_hit_fraction"] <= 1.0
     assert hp3["test_hit_fraction"] == hp3["hit_rate"] and np.isnan(rows[0]["learned_cap_units"])
@@ -133,6 +158,9 @@ def test_evaluate_pool_rows_and_proxy_gap_logging():
     oracle = hp.evaluate_pool(1, 0.9, true_t, true_t, true_r, true_r, oracle_arm=True)
     assert np.isnan(oracle[0]["hindsight_hit_rate_lsh"]) and "est_mae" not in oracle[0]
     assert oracle[1]["hit_rate"] <= oracle[1]["hindsight_hit_rate_oracle"] + 1e-12
+    hp3f = rows[3]
+    assert hp3f["learned_cap_units"] == hp3["learned_cap_units"] and np.isfinite(hp3f["train_hit_fraction"])
+    assert hp3f["hindsight_hit_rate_oracle"] == hp3["hindsight_hit_rate_oracle"]  # hindsight unchanged
 
 #-------------------------------------------------------------------------------
 
