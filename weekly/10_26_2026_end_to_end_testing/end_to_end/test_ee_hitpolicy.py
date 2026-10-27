@@ -73,6 +73,22 @@ def test_learn_cap_and_hindsight_on_toy_train_set():
     assert hp.learn_cap(units(1, 1, 1), 0.95) == 0  # nothing fits, cap is 0
     assert hp.learn_cap(units(10, 10, 10), 0.95) == 0
 
+def test_cap_is_floored_at_zero_and_sums_use_clipped_deficits():
+    # every train query overestimated: all accepted, the largest accepted d is negative, the cap is floored at 0
+    over = units(12, 13, 11, 15)
+    assert hp.deficits(over)[0].max() < 0 and hp.learn_cap(over, 0.9) == 0
+    # overestimated queries rank first by unclipped d but add nothing to the running sum (clipped a = 0)
+    est = units(*([15] * 6 + [9] * 3 + [5] * 3))  # d = -10 x 6, 2 x 3, 10 x 3; n = 12, T = 0.9: slack 24 units
+    d, a = hp.deficits(est)
+    assert hp.learn_cap(est, 0.9) == 10         # running a: 0 x 6, 2, 4, 6, 16 (<= 24) accepted, then 26 (> 24) stops
+    assert hp.learn_cap(est, 0.95) == 2         # slack 12 units, 6 + 10 > 12 for the 10s
+    # negative deficits must not buy room for larger ones
+    est2 = units(*([20] * 5 + [4] * 5))         # d = -20 x 5, 12 x 5; n = 10, T = 0.9: slack 20 units
+    assert hp.learn_cap(est2, 0.9) == 12        # one d = 12 fits (12 <= 20), two do not (24 > 20)
+    assert (hp.deficits(est2)[1][:5] == 0).all()
+    # the stream gives no credit for overestimation either
+    assert hp.run_policy("HP3", est2, 0.9, 12).sum() == 5 + 1 + 0
+
 def test_hp3_uses_unclipped_deficit_for_cap_and_learned_cap_limits_hits():
     est = est_from_deficits(0, 6, 2, 6, 0)
     all_hp2 = hp.run_policy("HP2", est, 0.8)

@@ -44,12 +44,13 @@ def hindsight_count(est_units: np.ndarray, T: float) -> int:
     return largest_prefix(a[order], cfg.slack_units(T, len(d)))
 
 def learn_cap(train_est_units: np.ndarray, T: float) -> int:
-    """HP3 cap in units: sort train deficits ascending, accept while the running (clipped) sum stays within
-    n_train (1 - T), cap = largest accepted unclipped deficit, 0 if none are accepted."""
+    """HP3 cap in units: rank train queries by the unclipped deficit d ascending, accept while the running sum of the
+    clipped deficit a = max(0, d) stays within n_train (1 - T), cap = max(0, largest accepted d). The cap is floored
+    at 0, also when every accepted query is overestimated (d < 0) or none is accepted."""
     d, a = deficits(train_est_units)
     order = np.argsort(d, kind="stable")
     h = largest_prefix(a[order], cfg.slack_units(T, len(d)))
-    return int(d[order][h - 1]) if h > 0 else 0
+    return max(0, int(d[order][h - 1])) if h > 0 else 0
 
 #-------------------------------------------------------------------------------
 # Policies over a stream (queries already in stream order)
