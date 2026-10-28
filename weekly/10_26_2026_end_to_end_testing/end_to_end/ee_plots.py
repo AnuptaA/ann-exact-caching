@@ -48,19 +48,20 @@ GREY = "#8A8A8A"
 POLICY_COLORS = {"HP1": "#CC79A7", "HP2": "#D55E00", "HP3": "#332288", "HP3f": "#44AA99"}
 TRIPLETS = (("T1", "HP1", "ball+SEL1", "Ball SEL1"), ("T2", "HP3", "group_union+SEL2", "Group Union SEL2"),
             ("T3", "HP3", "own+SEL5", "Own SEL5"), ("T4", "HP3", "ball+SEL3", "Ball SEL3"),
-            ("T5", "HP3", "group_union+SEL4(m=1.0)", "Group Union SEL4 (m = 1.0)"))
+            ("T5", "HP3", "group_union+SEL4(m=1.0)", "Group Union SEL4 ($m$ = 1.0)"))
 POOLS_B = (("group_union+SEL2", "Group Union SEL2", "#0072B2"), ("own+SEL5", "Own SEL5", "#D55E00"),
-           ("group_union+SEL4(m=1.0)", "Group Union SEL4 (m = 1.0)", "#009E73"), ("ball+SEL3", "Ball SEL3", "#CC79A7"),
+           ("group_union+SEL4(m=1.0)", "Group Union SEL4 ($m$ = 1.0)", "#009E73"), ("ball+SEL3", "Ball SEL3", "#CC79A7"),
            ("popularity", "Popularity", "#E69F00"), ("random_own", "Random Own", "#56B4E9"),
            ("threshold_baseline", "threshold_baseline", "#8C564B"), ("no_cache", "No cache", "#000000"))
 DATASET_LABEL = {"sift": "SIFT", "esci": "ESCI"}
-REGIME_LABEL = {"lam0": "lambda = 0", "lam0.5": "lambda = 0.5", "lam1": "lambda = 1.0",
-                "diffuse": "diffuse (500 anchors x 5 copies)"}
-REGIME_SHORT = {"lam0": "lambda = 0", "lam0.5": "lambda = 0.5", "lam1": "lambda = 1.0", "diffuse": "diffuse"}
+REGIME_LABEL = {"lam0": r"$\lambda$ = 0", "lam0.5": r"$\lambda$ = 0.5", "lam1": r"$\lambda$ = 1.0",
+                "diffuse": r"diffuse (500 anchors $\times$ 5 copies)"}
+REGIME_SHORT = {"lam0": r"$\lambda$ = 0", "lam0.5": r"$\lambda$ = 0.5", "lam1": r"$\lambda$ = 1.0", "diffuse": "diffuse"}
 MAIN_REGIMES = ("lam0", "lam0.5", "diffuse")
 SANITY_REGIMES = ("lam1",)
 HIT_METRICS = (("hit_rate", "Hit rate", "hit"), ("hit_rate_recall_ge_half", "Quality hit rate (true recall >= 0.5)", "quality"))
-SEEDS_NOTE = "mean +/- 1 sd over seeds 0-4"
+LAM1_SUFFIX = r", $\lambda$ = 1.0"
+SEEDS_NOTE = r"mean $\pm$ 1 sd over seeds 0-4"
 
 @dataclass
 class Slide:
@@ -147,7 +148,7 @@ def arm_handles(budgets: bool = True, floor: str = None) -> list:
         handles += [Line2D([], [], color=BUDGET_COLORS[b], label=BUDGET_LABELS[b]) for b in BUDGET_COLORS]
     handles += [Line2D([], [], color="black", linestyle="-", label="oracle arm"),
                 Line2D([], [], color="black", linestyle="--", label="LSH arm")]
-    handles += [Line2D([], [], color=GREY, marker=m, linestyle="", markersize=6, label=f"T = {T}") for T, m in T_MARKERS.items()]
+    handles += [Line2D([], [], color=GREY, marker=m, linestyle="", markersize=6, label=rf"$T$ = {T}") for T, m in T_MARKERS.items()]
     if floor:
         handles.append(Line2D([], [], color=GREY, linestyle="-.", label=floor))
     return handles
@@ -155,12 +156,12 @@ def arm_handles(budgets: bool = True, floor: str = None) -> list:
 #-------------------------------------------------------------------------------
 # A. Main figures: five triplet panels (2 x 3 grid, the sixth cell holds the legend)
 
-TRIPLET_TEXT = "T1 HP1 Ball SEL1; T2 HP3 Group Union SEL2; T3 HP3 Own SEL5; T4 HP3 Ball SEL3; T5 HP3 Group Union SEL4 (m = 1.0)"
+TRIPLET_TEXT = "T1 HP1 Ball SEL1; T2 HP3 Group Union SEL2; T3 HP3 Own SEL5; T4 HP3 Ball SEL3; T5 HP3 Group Union SEL4 ($m$ = 1.0)"
 
 def slide_a(data: Data, ds: str, regime: str, kind: str, metric: str, metric_label: str, tag: str, sanity: bool) -> Slide:
     hit_name = "quality hit rate (true recall >= 0.5)" if tag == "quality" else "hit rate"
-    titles = {"hit_vs_T": f"{metric_label} against target recall T", "Y_vs_T": "Achieved recall Y against target recall T",
-              "Y_vs_hit": f"Achieved recall Y against {hit_name}"}
+    titles = {"hit_vs_T": f"{metric_label} against target recall $T$", "Y_vs_T": "Achieved recall $Y$ against target recall $T$",
+              "Y_vs_hit": f"Achieved recall $Y$ against {hit_name}"}
     sub = [f"{DATASET_LABEL[ds]}, {REGIME_LABEL[regime]}. Panels: {TRIPLET_TEXT}.",
            f"Oracle arm solid, LSH arm dashed, one color per budget, {SEEDS_NOTE}"
            + (" (error bars)." if kind == "Y_vs_hit" else ".")]
@@ -185,21 +186,21 @@ def slide_a(data: Data, ds: str, regime: str, kind: str, metric: str, metric_lab
         if kind == "hit_vs_T":
             ax.plot(tt, 1 - tt, color=GREY, linestyle="-.", linewidth=1)
             set_t_axis(ax)
-            ax.set_xlabel("target recall T")
+            ax.set_xlabel("target recall $T$")
             ax.set_ylabel("quality hit rate" if tag == "quality" else "hit rate")
         elif kind == "Y_vs_T":
             ax.plot(tt, tt, color=GREY, linestyle="-.", linewidth=1)
             set_t_axis(ax)
-            ax.set_xlabel("target recall T")
-            ax.set_ylabel("achieved recall Y")
+            ax.set_xlabel("target recall $T$")
+            ax.set_ylabel("achieved recall $Y$")
         else:
             if metric == "hit_rate":
                 ax.plot(1 - tt, tt, color=GREY, linestyle="-.", linewidth=1)
             ax.set_xlabel("quality hit rate" if tag == "quality" else "hit rate")
-            ax.set_ylabel("achieved recall Y")
+            ax.set_ylabel("achieved recall $Y$")
         ax.set_title(f"{tid} {policy}\n{pool_label}", fontsize=MIN_FONT, color=PRIMARY_TEXT)
-    floor = {"hit_vs_T": "hit rate = 1 - T (floor)", "Y_vs_T": "Y = T",
-             "Y_vs_hit": "(1 - T, T): no-cache point" if metric == "hit_rate" else None}[kind]
+    floor = {"hit_vs_T": "hit rate = $1-T$ (floor)", "Y_vs_T": "$Y=T$",
+             "Y_vs_hit": "($1-T$, $T$): no-cache point" if metric == "hit_rate" else None}[kind]
     legend_ax = axes.ravel()[5]
     legend_ax.axis("off")
     legend_ax.legend(handles=arm_handles(floor=floor), loc="center", frameon=False, fontsize=MIN_FONT)
@@ -230,7 +231,7 @@ def does_not_bind(data: Data, ds: str, regime: str) -> bool:
 
 def slide_b(data: Data, ds: str, regime: str, sanity: bool) -> Slide:
     binds = not does_not_bind(data, ds, regime)
-    sub = [f"{DATASET_LABEL[ds]}, {REGIME_LABEL[regime]}. Policy HP3, T = 0.9, mean over seeds 0-4. Dotted lines: hindsight of the "
+    sub = [f"{DATASET_LABEL[ds]}, {REGIME_LABEL[regime]}. Policy HP3, $T$ = 0.9, mean over seeds 0-4. Dotted lines: hindsight of the "
            "same pool (in the LSH panel it uses the LSH estimates)."]
     if not binds:
         sub.append("Grey band: the 10% budget does not bind (oracle Group Union SEL2 leaves budget unused or gains under 0.01 "
@@ -253,7 +254,7 @@ def slide_b(data: Data, ds: str, regime: str, sanity: bool) -> Slide:
         ax.set_ylim(-0.02, 1.03)
         ax.set_xlabel("cache budget")
         ax.set_title(title, fontsize=MIN_FONT, color=PRIMARY_TEXT)
-    axes[0, 0].set_ylabel("HP3 hit rate at T = 0.9")
+    axes[0, 0].set_ylabel("HP3 hit rate at $T$ = 0.9")
     handles = [Line2D([], [], color=c, marker="o", markersize=5, label=l) for _, l, c in POOLS_B]
     handles.append(Line2D([], [], color=GREY, linestyle=":", label="hindsight (dotted)"))
     bottom_legend(fig, handles, 3)
@@ -287,7 +288,7 @@ def slide_c(data: Data, ds: str, sanity: bool) -> Slide:
                     ax.plot(tt, [data.value(arm, ds, regime, pool, "HP3", B, T, col) for T in TS], color="black", linestyle=ls,
                             linewidth=1.2)
             set_t_axis(ax)
-            ax.set_xlabel("target recall T")
+            ax.set_xlabel("target recall $T$")
             ax.set_ylabel(label)
             if i == 0:
                 ax.set_title(REGIME_SHORT[regime], fontsize=MIN_FONT, color=PRIMARY_TEXT)
@@ -295,10 +296,10 @@ def slide_c(data: Data, ds: str, sanity: bool) -> Slide:
     handles += [Line2D([], [], color="black", linestyle="-", label="oracle arm"), Line2D([], [], color="black", linestyle="--", label="LSH arm"),
                 Line2D([], [], color="black", linestyle=":", label="hindsight, oracle"),
                 Line2D([], [], color="black", linestyle=(0, (1, 3)), label="hindsight, LSH")]
-    handles += [Line2D([], [], color=GREY, marker=m, linestyle="", markersize=6, label=f"T = {T}") for T, m in T_MARKERS.items()]
+    handles += [Line2D([], [], color=GREY, marker=m, linestyle="", markersize=6, label=rf"$T$ = {T}") for T, m in T_MARKERS.items()]
     bottom_legend(fig, handles, 5)
     return Slide(fig, "C_policy", f"C_{ds}_{'lam1' if sanity else 'main'}_policies",
-                 f"{DATASET_LABEL[ds]}{', lambda = 1.0' if sanity else ''}: hit policy comparison", sanity,
+                 f"{DATASET_LABEL[ds]}{LAM1_SUFFIX if sanity else ''}: hit policy comparison", sanity,
                  "columns: regimes; row 1 y: hit rate, row 2 y: mean true recall of hits; x: T; series: 4 policies x arm, hindsight dotted")
 
 def slides_c(data: Data, sanity: bool):
@@ -316,7 +317,7 @@ def slide_d(data: Data, pool: str, pool_label: str, metric: str, metric_label: s
     fig = plt.figure(figsize=PAGE_SIZE)
     top = draw_header(fig, f"LSH minus oracle gap in {metric_label}", wrap_lines(sub))
     axes = fig.subplots(1, 3, sharey=True)
-    fig.subplots_adjust(left=0.13, right=0.9, top=top, bottom=0.12, wspace=0.12)
+    fig.subplots_adjust(left=0.2, right=0.9, top=top, bottom=0.12, wspace=0.12)
     for ax, T in zip(axes, TS):
         m = np.array([[data.value("lsh", ds, r, pool, "HP3", b, T, metric) for b in cfg.BUDGETS] for ds, r in rows])
         im = ax.imshow(m, cmap="RdBu", vmin=-0.3, vmax=0.3, aspect="auto")
@@ -327,14 +328,14 @@ def slide_d(data: Data, pool: str, pool_label: str, metric: str, metric_label: s
         ax.set_xticks(range(3))
         ax.set_xticklabels(["1%", "5%", "10%"])
         ax.set_yticks(range(len(rows)))
-        ax.set_yticklabels([f"{DATASET_LABEL[ds]} {REGIME_SHORT[r]}" for ds, r in rows])
+        ax.set_yticklabels([f"{DATASET_LABEL[ds]}, {REGIME_SHORT[r]}" for ds, r in rows])
         ax.set_xlabel("cache budget")
-        ax.set_title(f"T = {T}", fontsize=MIN_FONT, color=PRIMARY_TEXT)
+        ax.set_title(rf"$T$ = {T}", fontsize=MIN_FONT, color=PRIMARY_TEXT)
         for s in ax.spines.values():
             s.set_visible(False)
     fig.colorbar(im, cax=fig.add_axes([0.92, 0.2, 0.012, 0.5]), label="LSH minus oracle")
     return Slide(fig, "D_gap", f"D_gap_{pool.split('+')[0]}_{tag}{'_lam1' if sanity else ''}",
-                 f"Gap heatmap, {pool_label}, {metric_label}{', lambda = 1.0' if sanity else ''}", sanity,
+                 f"Gap heatmap, {pool_label}, {metric_label}{LAM1_SUFFIX if sanity else ''}", sanity,
                  f"3 panels (T); rows: dataset x regime; columns: budget; color and text: gap in {metric_label}")
 
 def slides_d(data: Data, sanity: bool):
@@ -346,9 +347,9 @@ def slides_d(data: Data, sanity: bool):
 # E. LSH safety (two slides per dataset and pool: rows 1-2 and rows 3-4)
 
 T_SHADES = {0.8: "#9ecae1", 0.9: "#4292c6", 0.95: "#08519c"}
-SAFETY_ROWS = (("final_gap", "final achieved Y minus T"), ("frac_below_T", "fraction of steps with Y_t < T"),
+SAFETY_ROWS = (("final_gap", "final achieved $Y-T$"), ("frac_below_T", "share of steps with $Y_t<T$"),
                ("frac_below_T_after_burn_in", "same, after the first 100 queries"),
-               ("ymin", "min running Y_t minus T\n(bar: worst seed, dot: mean)"))
+               ("ymin", "min running $Y_t-T$\n(bar: worst seed, dot: mean)"))
 
 def safety_values(data: Data, ds: str, regime: str, pool: str, policies: list, B: int, T: float, key: str) -> tuple:
     def get(p, col):
@@ -364,7 +365,7 @@ def slide_e(data: Data, ds: str, pool: str, pool_label: str, part: int, sanity: 
     regimes = regimes_for(sanity)
     rows = SAFETY_ROWS[:2] if part == 1 else SAFETY_ROWS[2:]
     sub = [f"{DATASET_LABEL[ds]}, LSH arm, pool {pool_label} at the 5% budget. Bars: mean over seeds 0-4 with sd "
-           "(worst of the 5 seeds for the minimum).", "Columns: regimes. x: policy. One bar per T."]
+           "(worst of the 5 seeds for the minimum).", "Columns: regimes. x: policy. One bar per $T$."]
     fig, axes = new_figure(f"LSH safety ({part} of 2)", sub, 2, len(regimes), legend_rows=1, hspace=0.45, wspace=0.28)
     policies, B, w = list(POLICY_COLORS), cfg.BUDGETS[1], 0.26
     for j, regime in enumerate(regimes):
@@ -378,16 +379,21 @@ def slide_e(data: Data, ds: str, pool: str, pool_label: str, part: int, sanity: 
                     ax.scatter(xs, [data.value("lsh", ds, regime, pool, p, B, T, "y_min_minus_T") for p in policies], color="black",
                                s=10, zorder=5)
             ax.axhline(0, color=GREY, linewidth=0.8)
+            if key.startswith("frac"):
+                ax.set_ylim(0, 1.05)
+                if all(max(safety_values(data, ds, regime, pool, policies, B, T, key)[0]) < 1e-9 for T in TS):
+                    ax.text(0.5, 0.5, "no step below $T$\nin any policy or $T$", transform=ax.transAxes, ha="center", va="center",
+                            fontsize=MIN_FONT, color=GREY)
             ax.set_xticks(range(len(policies)))
             ax.set_xticklabels(policies)
             if j == 0:
                 ax.set_ylabel(label)
             if i == 0:
                 ax.set_title(REGIME_SHORT[regime], fontsize=MIN_FONT, color=PRIMARY_TEXT)
-    bottom_legend(fig, [Patch(color=T_SHADES[T], label=f"T = {T}") for T in TS] +
+    bottom_legend(fig, [Patch(color=T_SHADES[T], label=rf"$T$ = {T}") for T in TS] +
                   [Line2D([], [], color="black", marker="o", linestyle="", markersize=4, label="mean over seeds (minimum row)")], 4)
     return Slide(fig, "E_safety", f"E_{ds}_{pool.split('+')[0]}_part{part}{'_lam1' if sanity else ''}",
-                 f"{DATASET_LABEL[ds]}, {pool_label}: LSH safety, part {part}{', lambda = 1.0' if sanity else ''}", sanity,
+                 f"{DATASET_LABEL[ds]}, {pool_label}: LSH safety, part {part}{LAM1_SUFFIX if sanity else ''}", sanity,
                  "columns: regimes; rows: " + ", ".join(r[1].replace("\n", " ") for r in rows) + "; x: policy; bars: T")
 
 def slides_e(data: Data, sanity: bool):
@@ -405,23 +411,23 @@ def slides_f(_data: Data, sanity: bool):
     for ds, regime, pool, label in cells:
         if (regime == "lam1") != sanity:
             continue
-        sub = [f"{DATASET_LABEL[ds]}, {REGIME_LABEL[regime]}, pool {label} at the 5% budget, policy HP3, T = 0.9, seed 0.",
-               "Replayed for this cell. Marker: minimum of Y_t. Dotted vertical line: end of the 100 query burn-in."]
-        fig, axes = new_figure("Running achieved recall Y_t", sub, 1, 1, left=0.1)
+        sub = [f"{DATASET_LABEL[ds]}, {REGIME_LABEL[regime]}, pool {label} at the 5% budget, policy HP3, $T$ = 0.9, seed 0.",
+               "Replayed for this cell. Marker: minimum of $Y_t$. Dotted vertical line: end of the 100 query burn-in."]
+        fig, axes = new_figure("Running achieved recall $Y_t$", sub, 1, 1, left=0.1)
         ax = axes[0, 0]
         t = np.arange(1, len(z[f"{ds}|{regime}|{pool}|oracle"]) + 1)
         for arm, ls, name in (("oracle", "-", "oracle arm"), ("lsh", "--", "LSH arm")):
             y = z[f"{ds}|{regime}|{pool}|{arm}"]
             ax.plot(t, y, color=BUDGET_COLORS[2500], linestyle=ls, linewidth=1.6, label=name)
             ax.scatter([y.argmin() + 1], [y.min()], color=BUDGET_COLORS[2500], s=34, zorder=5, edgecolor="black", linewidth=0.7)
-        ax.axhline(0.9, color=GREY, linestyle="-.", linewidth=1, label="T = 0.9")
+        ax.axhline(0.9, color=GREY, linestyle="-.", linewidth=1, label=r"$T$ = 0.9")
         ax.axvline(cfg.BURN_IN, color=GREY, linestyle=":", linewidth=1, label="end of burn-in (100)")
         ax.set_xscale("log")
-        ax.set_xlabel("stream position t")
-        ax.set_ylabel("running Y_t")
+        ax.set_xlabel("stream position $t$")
+        ax.set_ylabel("running $Y_t$")
         ax.legend(frameon=False, loc="upper right")
         yield Slide(fig, "F_paths", f"F_{ds}_{regime}_{pool.split('+')[0]}_paths",
-                    f"{DATASET_LABEL[ds]}, {REGIME_SHORT[regime]}, {label}: running Y_t", sanity,
+                    f"{DATASET_LABEL[ds]}, {REGIME_SHORT[regime]}, {label}: running $Y_t$", sanity,
                     "x: stream position t (log), y: running Y_t; series: oracle, LSH, T line, burn-in line")
 
 #-------------------------------------------------------------------------------
@@ -439,9 +445,9 @@ def slide_g_errors(rows: pd.DataFrame, sanity: bool) -> Slide:
     metrics = (("mean_signed_error", "signed error"), ("mae", "absolute error"), ("over_rate", "over rate"))
     pool_colors = {"popularity": "#E69F00", "group_union_sel2": "#0072B2"}
     pool_labels = {"popularity": "Popularity 5% pool", "group_union_sel2": "Group Union SEL2 5% pool"}
-    sub = ["Stage E benchmark, chosen configuration (SIFT L=16 m=128 nu=2 S=10,000; ESCI L=8 m=64 nu=4 S=10,000).",
+    sub = [r"Stage E benchmark, chosen configuration (SIFT $L$ = 16, $m$ = 128, $\nu$ = 2, $S$ = 10,000; ESCI $L$ = 8, $m$ = 64, $\nu$ = 4, $S$ = 10,000).",
            "Signed error: estimated minus true recall. Over rate: share of test queries overestimated by more than 0.05. "
-           "Mean +/- 1 sd over seeds 100-102."]
+           r"Mean $\pm$ 1 sd over seeds 100-102."]
     fig, axes = new_figure("Recall estimation error of the LSH arm", sub, 2, 3, legend_rows=1, hspace=0.5, wspace=0.35)
     for i, ds in enumerate(cfg.DATASETS):
         for j, (metric, label) in enumerate(metrics):
@@ -457,13 +463,13 @@ def slide_g_errors(rows: pd.DataFrame, sanity: bool) -> Slide:
             ax.set_title(f"{DATASET_LABEL[ds]}: {label}", fontsize=MIN_FONT, color=PRIMARY_TEXT)
     bottom_legend(fig, [Patch(color=c, label=pool_labels[p]) for p, c in pool_colors.items()], 2)
     return Slide(fig, "G_estimator", f"G_estimator_errors{'_lam1' if sanity else ''}",
-                 f"Estimator error by regime{', lambda = 1.0' if sanity else ''}", sanity,
+                 f"Estimator error by regime{LAM1_SUFFIX if sanity else ''}", sanity,
                  "2 rows (datasets) x 3 columns (signed error, absolute error, over rate); x: regime; bars: reference pool")
 
 def slide_g_bytes() -> Slide:
     chosen = json.loads((lb.OUT_DIR / "chosen_config.json").read_text())["config"]
     dims = {"sift": 128, "esci": 384}
-    sub = ["Structure: codes (L x m bits per labeled point) + float64 labels + hyperplane bits, labeled points = 2,500 train + "
+    sub = [r"Structure: codes ($L$ $\times$ $m$ bits per labeled point) + float64 labels + hyperplane bits, labeled points = 2,500 train + "
            "10,000 sampled database vectors.", "Cache: pool vectors stored as float32. Chosen configuration per dataset."]
     fig, axes = new_figure("LSH structure bytes against cache bytes", sub, 1, 2, wspace=0.28, left=0.1)
     for ax, ds in zip(axes[0], cfg.DATASETS):
@@ -491,7 +497,7 @@ def slides_g(_data: Data, sanity: bool):
 
 SECTIONS = (("A", "Main figures: five triplets", slides_a), ("B", "Population comparison", slides_b),
             ("C", "Hit policy comparison", slides_c), ("D", "LSH minus oracle gap", slides_d),
-            ("E", "LSH safety", slides_e), ("F", "Running Y_t paths", slides_f), ("G", "Estimator error and bytes", slides_g))
+            ("E", "LSH safety", slides_e), ("F", "Running $Y_t$ paths", slides_f), ("G", "Estimator error and bytes", slides_g))
 
 def save_png(slide: Slide) -> Path:
     sub = Path("sanity") / slide.group if slide.sanity else Path(slide.group)
