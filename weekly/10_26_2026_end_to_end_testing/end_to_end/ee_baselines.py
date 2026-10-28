@@ -41,7 +41,6 @@ def no_cache(w, n_db: int = cfg.N_DB) -> Pool:
 
 #-------------------------------------------------------------------------------
 # Popularity
-
 def popularity_order(counts: np.ndarray) -> np.ndarray:
     """Vectors with count >= 1 by decreasing count, ties by id."""
     ids = np.flatnonzero(counts > 0)
