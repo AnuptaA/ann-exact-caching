@@ -423,6 +423,150 @@ Conclusions:
   tiny cache is miscalibrated for a much bigger one, so even the superset
   direction violates unless lambda is recalibrated.
 
+## 5l. Radius-based scores, prediction targets, and where the gap comes from
+
+Scripts (all `.venv`): `eval_radius_scores.py`, `eval_radius_models.py`,
+`eval_focused.py`, `eval_gap.py`. ESCI 50k unless noted, k = 10, T = 0.9;
+"hit" = calibrated test hit rate (normal_fixed), all met T.
+
+- Bucket / past-query radius scores (count cached vectors within plausible
+  radii): bucket expected retention + calibration reaches ~50-75% of the GBT
+  on ESCI, 0 on TriviaQA (no discrimination). Nearest-past-query radius is
+  overconfident (score 0.985 -> actual 0.80). Triangle-inequality bound from
+  a past query: valid, useful only on near-duplicate traces.
+- Good hits are mostly "cache holds the full true top-k" (6.6-29.7% of ESCI
+  test queries at 1-30% cache); then true radius = k-th nearest cached
+  distance exactly. Ranking at the top matters, not average accuracy: a
+  query-only radius model was the most accurate and got 0 calibrated hits.
+- Targets: retention, radius, ratio (true radius / k-th nearest cached
+  distance, <= 1). With the same cache features all are within a few points;
+  retention >= ratio >= radius. Reweighting / LambdaRank: no gain for
+  retention; helps ratio / radius only at k = 1 and tiny caches.
+- Gap decomposition (best cutoff chosen on test): ~75-80% of the gap to the
+  oracle is ordering (missing information), the calibration margin is 1-3
+  points. True database density (20th / 50th neighbor distance; a cheat)
+  closes ~60-80% of the gap (ESCI 10%: 21.7 -> 28.2, oracle 30.9).
+- Stored distance profiles of nearby entries: no gain. The nearest cached
+  center is ~0.8-1.0x the query's 50th-neighbor distance away; estimate
+  error (8-15% ESCI, ~2% TriviaQA) exceeds the signal's spread across queries.
+- Uniform random sample of the database as probe features: <= +2 points;
+  sees intruders mostly when they are plentiful (easy cases); about
+  break-even once its memory is charged.
+- Targeted shell sample (fraction p of the uncached vectors at ranks K+1..500
+  around each cached entry, known from its backend answer): ESCI 10% cache
+  21.7 -> 25.3 / 26.0 / 27.3 at p = 5 / 10 / 25% (+3.4 / 6.8 / 16.7% memory);
+  30%: 49.1 -> 57.1 at p = 25% (cheat 58.3). TriviaQA 1%: 44.7 -> 50.0
+  (+2.0% memory). Memory-fair (base measured at 2 / 15 / 20% cache): at full
+  vector cost the shell sample loses or ties everywhere.
+
+TODO (do not forget): store shell / sample vectors COMPRESSED (int8, PQ,
+dimension reduction). They only feed coarse distance counts, never answers.
+Break-even needs only ~1.2-1.3x compression at 10-30% cache (~3x at 1%); at 8x
+the shell sample would net ~+3 points at 10% cache (arithmetic, untested).
+Also: shells stop at rank 500 only because candidate generation fetched
+top-500; larger shells (and rank-dependent sampling rates) are untested.
+
+## 5m. Feature reset: per-ball stats + shell sample only
+
+Dropped the original 20-feature model as a baseline (an unprincipled mix).
+We now compare the oracle against models built only from:
+- per-ball stats for the n best-fitting balls (one ball per cached past
+  query, its largest K; ranked by fit = relative offset + relative size, the
+  worst-case "neighborhood fits inside the ball" test): relative offset =
+  offset / ball radius, relative size = neighborhood radius / ball radius;
+- the shell sample (fraction p of the uncached vectors at ranks K+1..R around
+  each ball, b-bit quantized).
+Scripts: `eval_core.py` (knobs n, p, R, b), `eval_simple.py` (model types),
+`eval_shell_ablation.py`; diagram `plot_feature_diagram.py`.
+
+ESCI 50k, k = 10, T = 0.9 (calibrated hit rate at 1 / 5 / 10 / 30% cache;
+oracle 12.4 / 22.3 / 30.9 / 63.9):
+- n: 1 -> 3 balls helps (0.2-3 points); beyond 3 adds <= ~1 point.
+- Compression: 8- and 4-bit match uncompressed; 2-bit loses 0-2 points.
+  p = 25%, 4-bit costs +0.5 / 1.5 / 2.1 / 2.1% of the database.
+- Model type: logistic and linear regression match the GBT within noise; a
+  no-fitting rule (fewest sampled intruders, then best fit) is 1-3 points
+  behind. No evidence of complex interactions.
+- Uncalibrated: admitting iff predicted retention >= T is safe on test
+  (realized 0.967-0.981) but gets ~60-70% of the calibrated hit rate, since
+  calibration targets the average over hits, not each query.
+
+DECISION: model inputs = 7 features: relative offset and relative size for
+each of the 3 best-fitting balls, plus the intruder count (sampled uncached
+points inside the neighborhood). Logistic regression on 3 balls + intruder
+count: 10.9 / 18.6 / 26.7 / 55.7, vs 11.2 / 19.7 / 27.6 / 56.5 with all 8
+shell features. Accepted ~1 point for a much simpler feature set.
+FUTURE (only if absolutely necessary): add back shell features, e.g. counts
+within 1.1x / 1.25x the neighborhood radius or the nearest sampled distances.
+
+Sanity checks (ESCI 50k, 7-feature logistic): test 10k queries (s.e. of hit
+rate 0.3-0.5 points); exact duplicates of cache-center queries 0.02%,
+within 0.5x the query's radius 2.4%; mean retention over ALL test queries
+0.15 / 0.40 / 0.70 at 1 / 10 / 30% (admit-everything fails T = 0.9);
+training on shuffled labels or random scores -> ~0 hits; best ball's
+relative offset alone gets ~half the hits; on test queries excluding
+near-duplicates the model keeps the same share of the oracle (~87-88%).
+Note: best_cutoff_rate cannot split tied scores, so on true retention
+(values 0, 0.1, ...) it underestimates the oracle; the recorded greedy
+oracle equals the optimal tie-splitting oracle.
+Caveats that make the setup easier than deployment: test, calibration and
+cache-population queries come from the same distribution (spacev-real shows
+shift breaks the guarantee); the cache is chosen offline with oracle
+knowledge; the oracle is "best admission for this cache", not a better cache.
+
+Generalization (`eval_generalize.py`, ESCI 50k, T = 0.9):
+- Across caches (sizes 1-30%, a T = 0.7 cache, 30% of entries replaced): a
+  model fit on any one cache, with lambda recalibrated on the destination,
+  is within ~1 point of the native model (worst: 1% -> 30%, 50.2 vs 55.7);
+  realized retention >= 0.901 everywhere. Frozen lambda fails (0.83-0.88 on
+  some pairs). One pooled model + one shared lambda also fails (0.888 on the
+  T = 0.7 cache). => model transfers, lambda must be per cache state.
+- Across k (one cache, labels at k = 1, 10, 50, 100): the k = 10 model with
+  lambda recalibrated per k matches the native per-k models within ~1 point
+  at every k. A pooled model (log k input) is 0.5-1.2 points worse. One shared
+  lambda across k fails (0.85-0.87 at k = 50 / 100, over-conservative at k = 1).
+  => one model for all k, lambda per k. Share of oracle: k = 1 ~67-84%,
+  k = 10-100 ~85-91%.
+Also tried (`eval_features_v2.py`): a geometric "region probe" (share of
+random data-shaped probe points on the neighborhood boundary outside every
+ball). Useless in high dimensions: ~100% uncovered for good and bad queries
+alike; the shell sample's intruder count measures the uncovered region with
+real points instead. Old 20-feature ablation: `eval_ablation.py`.
+TriviaQA (`batch_aker/triviaqa-aker-0.6`): 7 features 15.0 / 46.7 / 86.7 at
+0.1 / 1 / 5% cache vs all 8 shell features 16.1 / 49.1 / 87.9 (oracle 17.0 /
+52.4 / 91.1); +0.07-0.25% memory; logistic = GBT; 2-bit hurts more than on
+ESCI (-6 points at 1%), 4-bit is free.
+
+## 5n. Cost of recalibration (analysis, not yet measured)
+
+Calibration needs a set of n recent queries (we used 20k) with features
+computed against the CURRENT cache and their true retention against the
+current cache. lambda itself is a sort over n scores (milliseconds). The
+model does not need refitting when the cache or k changes (5m).
+- New cache state (insert / evict): no backend calls. Keep each calibration
+  query's backend answer (top-k_max ids). Recompute retention = fraction of
+  the stored ids now cached (set lookups) and features against the new cache
+  (one cache-side feature computation per query, like serving it). Cost ~ n
+  cache lookups.
+- Different k: free if answers were stored at k_max (retention at any k <=
+  k_max from the same ids); calibrate lambda per k.
+- Ongoing requirement: calibration queries must be an unbiased sample of the
+  workload, so a random fraction of hits (not just misses) must also go to
+  the backend (audit sampling). Steady cost = audit rate x backend queries.
+- Workload shift: old calibration queries no longer represent the workload;
+  need ~n fresh queries with backend answers (normal top-k searches, not
+  scans of the whole dataset). With a sliding audit window this happens
+  continuously; the hard part is detecting shift quickly (spacev-real). The
+  model may also need refitting (cross-workload transfer is untested).
+- Data shift (inserts / deletes): stored answers go stale. Either re-run the
+  n calibration queries on the backend, or update incrementally (each
+  inserted vector: compare to the n stored queries' k-th distances; each
+  deleted vector: drop it and fetch a replacement, cheaper if top-(k + delta)
+  is stored). The cache itself also goes stale (balls stop being complete;
+  shell samples too), which is a bigger problem than recalibration and needs
+  a refresh mechanism (cf. Aker).
+Untested: how hit rate degrades with smaller n (larger safety margin).
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes

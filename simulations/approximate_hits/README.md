@@ -38,9 +38,23 @@ training queries whose exact neighbors are known.
      threshold rule on our offline caches (trace runs).
    - `eval_threshold_transfer.py`: does a calibrated threshold transfer across
      caches (size / target / perturbation)? Needs `.venv`.
+   - Current model (7 inputs: relative offset and relative size for the 3
+     best-fitting cache balls, plus the intruder count from a shell sample of
+     uncached vectors just outside each ball), all `.venv`:
+     - `eval_core.py`: oracle vs ball stats / shell sample, with knobs (number
+       of balls, sample fraction, shell radius, bits per dimension).
+     - `eval_simple.py`: GBT vs linear / logistic / no-fitting scores.
+     - `eval_shell_ablation.py`: which shell features matter; uncalibrated
+       model quality.
+     - `eval_generalize.py`: transfer across cache states and across k.
+   - Exploratory (radius prediction, training focus, gap decomposition,
+     samples, older feature sets): `eval_radius_scores.py`,
+     `eval_radius_models.py`, `eval_focused.py`, `eval_gap.py`,
+     `eval_ablation.py`, `eval_features_v2.py`.
 3. **Summaries and figures.** `summarize*.py`, `plot_*.py`,
    `make_summary_figures.py` (writes `results/summary/`, including
-   `fig4_aker.png` for the Aker traces).
+   `fig4_aker.png` for the Aker traces), `plot_feature_diagram.py` (2-D
+   illustration of the 7 model inputs, `results/summary/feature_diagram.png`).
    `run_eval_queue.py` runs an evaluation script on run directories as their
    greedy results appear.
 
