@@ -27,7 +27,6 @@ from utils.base.knn import exact_topk
 
 logger = logging.getLogger(__name__)
 
-ESCI = Path("datasets/esci/data_vectors")
 
 #-------------------------------------------------------------------------------
 
@@ -58,6 +57,7 @@ def main():
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--out", type=str, default="simulations/approximate_hits/results/online/esci1m")
     ap.add_argument("--n-db", type=int, default=1000000)
+    ap.add_argument("--esci-dir", type=str, default="datasets/esci/data_vectors")
     ap.add_argument("--R", type=int, default=500)
     ap.add_argument("--n-clusters", type=int, default=20)
     ap.add_argument("--seed", type=int, default=42)
@@ -67,7 +67,7 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(args.seed)
-    q = np.load(ESCI / "esci_queries.npy").astype(np.float32)
+    q = np.load(Path(args.esci_dir) / "esci_queries.npy").astype(np.float32)
 
     if not (out / "clusters.npy").exists():
         from sklearn.cluster import MiniBatchKMeans
@@ -83,7 +83,7 @@ def main():
         logger.info(f"shift stream: phase A {int((phase == 0).sum())}, B {int((phase == 1).sum())}")
 
     if not (out / f"top{args.R}.npy").exists():
-        db = np.load(ESCI / f"esci_db{args.n_db}_s{args.seed}.npy").astype(np.float32)
+        db = np.load(Path(args.esci_dir) / f"esci_db{args.n_db}_s{args.seed}.npy").astype(np.float32)
         logger.info(f"exact top-{args.R} for {len(q)} queries over {len(db)} vectors...")
         ids = exact_topk(q, db, args.R).astype(np.int32)
         np.save(out / f"top{args.R}.npy", ids)

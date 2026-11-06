@@ -82,7 +82,6 @@ from utils.cache.calibration import hoeffding_upper, select, threshold_grid
 
 logger = logging.getLogger(__name__)
 
-ESCI = Path("datasets/esci/data_vectors")
 EPS = 1e-12
 CHUNK = 1024
 
@@ -325,8 +324,8 @@ class Sim:
 
 
 def load(prep, args):
-    db = np.load(ESCI / f"esci_db{args.n_db}_s42.npy").astype(np.float32)
-    q = np.load(ESCI / "esci_queries.npy").astype(np.float32)
+    db = np.load(Path(args.esci_dir) / f"esci_db{args.n_db}_s42.npy").astype(np.float32)
+    q = np.load(Path(args.esci_dir) / "esci_queries.npy").astype(np.float32)
     top = np.load(Path(prep) / f"top{args.R}.npy")
     draw = np.random.default_rng(1).random(len(db))
     streams = np.load(Path(prep) / "streams.npz")
@@ -341,6 +340,7 @@ def main():
                                          "qvcache"], required=True)
     ap.add_argument("--stream", choices=["random", "shift"], default="shift")
     ap.add_argument("--n-db", type=int, default=1000000)
+    ap.add_argument("--esci-dir", type=str, default="datasets/esci/data_vectors")
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--target", type=float, default=0.9)
     ap.add_argument("--delta", type=float, default=0.05)

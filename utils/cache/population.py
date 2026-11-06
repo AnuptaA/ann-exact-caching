@@ -25,6 +25,8 @@ from typing import List, Optional
 
 import numpy as np
 
+from utils.cache.parallel import worker_pool
+
 EPS = 1e-9
 
 #-------------------------------------------------------------------------------
@@ -340,3 +342,98 @@ def hits_of_entries(D, entries, score, score_w, k, target):
     counts = cached[D["top"][score, :k]].sum(axis=1)
     hist = np.bincount(counts, weights=score_w, minlength=k + 1).astype(np.int64)
     return int(hits_from_histograms(hist, target, k)[0])
+
+
+def run_target(target, cand_vectors, score_topk, test_topk, n_db, k,
+               max_size, checkpoints_abs, score_weights=None, test_weights=None,
+               test_sequence=None, template=None):
+    """Greedy population for one target; evaluates on test queries.
+
+    score_weights / test_weights: multiplicities of distinct queries.
+    test_sequence: test access order as indices into test_topk (for the online
+    policy); defaults to each distinct test query once, in order.
+    template: optional unstepped GreedyPopulator built from the same inputs;
+    cloned instead of rebuilding (shares large arrays across forked workers).
+    """
+    if template is not None:
+        pop = template.clone_for_target(target)
+    else:
+        pop = GreedyPopulator(cand_vectors, score_topk, n_db, k, target,
+                              eval_topk=test_topk, score_weights=score_weights,
+                              eval_weights=test_weights)
+    n_test = int(pop.eval.weights.sum())
+    n_score = int(pop.score.weights.sum())
+
+    def snapshot(counts):
+        hist = pop.eval.histogram()
+        h, kept = hits_from_histograms(hist, target, k)
+        seq_counts = counts if test_sequence is None else counts[test_sequence]
+        h_on, kept_on = online_hits(seq_counts, target, k)
+        n_seq = len(seq_counts)
+        hit_rate = int(h) / n_test
+        retained = int(kept) / (k * n_test)
+        hit_rate_on = h_on / n_seq
+        retained_on = kept_on / (k * n_seq)
+        return {
+            "cache_size": pop.cache_size,
+            "cache_frac": pop.cache_size / n_db,
+            "test_hit_rate": hit_rate,
+            "test_retained_rate": retained,
+            # all queries, misses counted as retention 1
+            "test_effective_retention": 1.0 - hit_rate + retained,
+            "test_hit_rate_online": hit_rate_on,
+            "test_retained_rate_online": retained_on,
+            "test_effective_retention_online": 1.0 - hit_rate_on + retained_on,
+            "train_hit_rate": pop.score_hits / n_score,
+            "n_entries": len(pop.selected),
+        }
+
+    curve = []  # every step: size, best-case test hits, train hits
+    points = []
+    next_cp = 0
+    prev_counts = pop.eval.counts.copy()
+    prev_snapshot = snapshot(prev_counts)
+    while True:
+        rec = pop.step(max_size)
+        if rec is None:
+            break
+        # checkpoints crossed by this step: record the state just before it
+        while next_cp < len(checkpoints_abs) and pop.cache_size > checkpoints_abs[next_cp]:
+            p = dict(prev_snapshot)
+            p["checkpoint"] = checkpoints_abs[next_cp] / n_db
+            points.append(p)
+            next_cp += 1
+        prev_counts = pop.eval.counts.copy()
+        prev_snapshot = snapshot(prev_counts)
+        curve.append([pop.cache_size, prev_snapshot["test_hit_rate"],
+                      prev_snapshot["train_hit_rate"]])
+    final = dict(prev_snapshot)
+    final["checkpoint"] = None
+    points.append(final)  # final state (budget reached or greedy stopped)
+    return {"target": target, "points": points, "curve": curve,
+            "selected": [int(j) for j in pop.selected],
+            "n_pairs": pop.n_pairs, "n_triples": pop.n_triples}
+
+
+def _target_worker(target, inputs):
+    return run_target(target, **inputs)
+
+
+def run_targets(targets, workers, *, cand_vectors, score_topk, test_topk, n_db, k, max_size,
+                checkpoints_abs, score_weights=None, test_weights=None, test_sequence=None):
+    """Greedy population for each target (results in the order of targets).
+
+    With workers > 1 the targets run in forked workers that share one
+    precomputed index (an unstepped populator cloned per target).
+    """
+    inputs = dict(cand_vectors=cand_vectors, score_topk=score_topk, test_topk=test_topk,
+                  n_db=n_db, k=k, max_size=max_size, checkpoints_abs=checkpoints_abs,
+                  score_weights=score_weights, test_weights=test_weights,
+                  test_sequence=test_sequence)
+    if workers > 1 and len(targets) > 1:
+        inputs["template"] = GreedyPopulator(cand_vectors, score_topk, n_db, k, 1.0,
+                                             eval_topk=test_topk, score_weights=score_weights,
+                                             eval_weights=test_weights)
+    with worker_pool(_target_worker, workers, len(targets), inputs=inputs) as pool:
+        return pool.map(targets)
+

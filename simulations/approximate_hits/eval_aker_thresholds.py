@@ -3,7 +3,7 @@
 """
 Aker's density-aware per-entry thresholds on our offline-selected caches.
 
-For each saved trace run (run_e2e_oracle_trace.py) and cache checkpoint of the
+For each saved trace run (populate trace) and cache checkpoint of the
 greedy cache for --target, replay requests in time order with Aker's hit rule
 (Aker paper, Sec. 4.3-4.4) instead of our calibrated admission:
 
@@ -43,7 +43,7 @@ from utils.cache.metrics import result_for_target
 from utils.base.logs import setup_logging
 
 from utils.base.knn import fetch_rows, pairwise_dist, sq_norms
-from utils.cache.workloads import AKER, WORKLOADS, TRACE_SPLITS
+from utils.cache.workloads import PATHS, TRACE_SPLITS, WORKLOADS
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def load_run(run_dir: Path):
     bounds = {s: tuple(int(x) for x in z[f"bounds_{s}"]) for s in TRACE_SPLITS}
     lo, hi = bounds["cand"]
     cand_gid = np.unique(z["inv"][lo:hi])  # as split_view: sorted distinct ids
-    db = np.load(AKER / WORKLOADS[cfg["trace"]]["base"], mmap_mode="r")
+    db = np.load(PATHS.aker / WORKLOADS[cfg["trace"]]["base"], mmap_mode="r")
     return {"data": data, "cfg": cfg, "uniq": z["uniq"], "inv": z["inv"],
             "topk": z["topk"][:, :cfg["k"]], "cand_top": z["cand_top"],
             "bounds": bounds, "cand_gid": cand_gid, "db": db}

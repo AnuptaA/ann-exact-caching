@@ -41,10 +41,10 @@ esci-prepare:
 # -- Populate and evaluate --------------------------------------------------
 
 populate-esci:
-	$(PY) $(AH)/run_e2e_oracle_sift.py --dataset esci --out $(RUN)
+	$(PY) -m simulations.approximate_hits populate esci --out $(RUN)
 
 populate-sift:
-	$(PY) $(AH)/run_e2e_oracle_sift.py --dataset sift --out $(RUN)
+	$(PY) -m simulations.approximate_hits populate sift --out $(RUN)
 
 eval-core:
 	$(PY) $(AH)/eval_core.py $(RUN)

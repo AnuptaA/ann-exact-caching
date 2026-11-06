@@ -18,8 +18,18 @@ from utils.cache.entries import build_entry_tables
 
 logger = logging.getLogger(__name__)
 
-SIFT1M_DIR = Path("datasets/sift/raw_sift1m/sift")
-AKER = Path("datasets/aker")
+
+
+@dataclass
+class DataPaths:
+    """Where the raw data lives; the command line can override it (see cli.py)."""
+    sift: Path = Path("datasets/sift/raw_sift1m/sift")
+    aker: Path = Path("datasets/aker")
+    esci: Path = Path("datasets/esci/data_vectors")
+
+
+PATHS = DataPaths()
+
 EVAL_SPLITS = ("fit", "dev", "cal", "test")
 SCORE_SPLITS = ("fit", "cal", "test")
 TRACE_SPLITS = ("cand", "score", "fit", "dev", "cal", "test")
@@ -56,9 +66,9 @@ def load_inputs(args):
     rng = np.random.default_rng(args.seed)
     if args.dataset == "sift":
         logger.info("Loading SIFT1M...")
-        base = load_fvecs_fast(str(SIFT1M_DIR / "sift_base.fvecs"))
-        learn = load_fvecs_fast(str(SIFT1M_DIR / "sift_learn.fvecs"))
-        test = load_fvecs_fast(str(SIFT1M_DIR / "sift_query.fvecs"))
+        base = load_fvecs_fast(str(PATHS.sift / "sift_base.fvecs"))
+        learn = load_fvecs_fast(str(PATHS.sift / "sift_learn.fvecs"))
+        test = load_fvecs_fast(str(PATHS.sift / "sift_query.fvecs"))
         if args.n_test > len(test):
             raise ValueError(f"n_test={args.n_test} exceeds the {len(test)} SIFT queries")
         test = test[:args.n_test]
@@ -138,12 +148,12 @@ def build_inputs(args):
     Returns a dict with db, the workload, deduplicated candidate / scoring /
     test variant ids, their weights, the test access order, and stats.
     """
-    # same database subsample as run_e2e_oracle_sift.py for the same seed
+    # same database subsample as load_inputs for the same seed
     rng = np.random.default_rng(args.seed)
     logger.info("Loading SIFT1M...")
-    sift_base = load_fvecs_fast(str(SIFT1M_DIR / "sift_base.fvecs"))
+    sift_base = load_fvecs_fast(str(PATHS.sift / "sift_base.fvecs"))
     db = sift_base[rng.choice(len(sift_base), size=args.n_db, replace=False)]
-    base_queries = load_fvecs_fast(str(SIFT1M_DIR / "sift_query.fvecs"))
+    base_queries = load_fvecs_fast(str(PATHS.sift / "sift_query.fvecs"))
 
     wl = SimZipfWorkload(base_queries, args.group_size, args.zipf, args.method,
                          args.lambda_max, args.noise_rel, args.seed)
@@ -180,7 +190,7 @@ def _load_vectors(path: Path) -> np.ndarray:
 
 def load_base(name: str) -> np.ndarray:
     """Database vectors: int8 kept as is; floating data as float32."""
-    arr = np.load(AKER / WORKLOADS[name]["base"], mmap_mode="r")
+    arr = np.load(PATHS.aker / WORKLOADS[name]["base"], mmap_mode="r")
     if np.issubdtype(arr.dtype, np.integer):
         return np.ascontiguousarray(arr)
     out = np.empty(arr.shape, dtype=np.float32)
@@ -211,7 +221,7 @@ def split_boundaries(name: str, parts) -> dict:
 
 def build_trace(name: str):
     """Requests (in order) as indices into globally distinct vectors."""
-    parts = [_load_vectors(AKER / p) for p in WORKLOADS[name]["trace"]]
+    parts = [_load_vectors(PATHS.aker / p) for p in WORKLOADS[name]["trace"]]
     seq = np.concatenate(parts)
     uniq, inv = np.unique(seq, axis=0, return_inverse=True)
     inv = inv.reshape(-1)

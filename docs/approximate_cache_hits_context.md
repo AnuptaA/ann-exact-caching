@@ -134,7 +134,7 @@ top-k vectors per new cached vector.
 ## 5c. End-to-end oracle results on SIFT (first run)
 
 Code: `simulations/approximate_hits/` (`utils/cache/population.py`,
-`run_e2e_oracle_sift.py`); tests in `tests/approximate_hits/`.
+`populate.py`); tests in `tests/approximate_hits/`.
 Setup: 50k SIFT1M base subsample, 5k candidate-generating + 5k scoring learn
 queries, 10k official test queries, k = 10, candidate K in
 {10, 20, 50, 100, 200, 500}, true radius (oracle), best-case admission.
@@ -315,7 +315,7 @@ neighbors far more than their 10th.
 
 ## 5i. Aker workloads (10M databases, k = 10, cache up to 5%)
 
-Code: `run_e2e_oracle_trace.py`; runs in `results/batch_aker/`. Time-ordered
+Code: `populate.py trace`; runs in `results/batch_aker/`. Time-ordered
 splits of each ~100k-request trace: cand 8%, score 32%, fit / dev / cal / test
 15% each. spacev-real: SPACEV1B historical query log for all training splits,
 official 29,316-query set as test. Exact neighbors (blocked top-k, verified

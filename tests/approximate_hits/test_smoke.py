@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Wiring smoke test: every driver runs end to end on a tiny fake ESCI directory.
+"""Wiring smoke test: every driver runs end to end on tiny fake inputs.
 
-Checks that paths, argument names and file hand-offs work; it does not check numbers.
+Fake ESCI vectors, SIFT fvecs files and an Aker trace are written to tmp
+directories; the test checks that paths, argument names and file hand-offs
+work for all three workloads, not that the numbers are right.
 """
 
 import json
@@ -11,27 +13,11 @@ import numpy as np
 import pytest
 
 from simulations.approximate_hits import (
-    eval_calibrated, eval_calibration_methods, eval_certificates, eval_core, eval_final,
-    eval_generalize, eval_predictors, eval_shell_ablation, eval_shell_budget, eval_shell_size,
-    eval_simple, eval_threshold_transfer, run_e2e_oracle_sift,
+    cli, eval_aker_thresholds, eval_calibrated, eval_calibration_methods, eval_certificates,
+    eval_core, eval_final, eval_generalize, eval_predictors, eval_shell_ablation,
+    eval_shell_budget, eval_shell_size, eval_simple, eval_threshold_transfer,
 )
-
-
-@pytest.fixture(scope="module")
-def run_dir(tmp_path_factory):
-    root = tmp_path_factory.mktemp("esci")
-    rng = np.random.default_rng(0)
-    centers = rng.standard_normal((6, 8)) * 2
-    np.save(root / "esci_db2000_s42.npy",
-            (centers[rng.integers(0, 6, 2000)] + rng.standard_normal((2000, 8))).astype(np.float32))
-    np.save(root / "esci_queries.npy",
-            (centers[rng.integers(0, 6, 1500)] + rng.standard_normal((1500, 8))).astype(np.float32))
-    out = root / "run"
-    run(run_e2e_oracle_sift.main, "--dataset", "esci", "--esci-dir", str(root), "--n-db", "2000",
-        "--n-cand-queries", "120", "--n-score-queries", "120", "--n-test", "100", "--k", "5",
-        "--k-values", "5", "50", "500", "--targets", "0.7", "0.9", "--checkpoints", "0.05", "0.1",
-        "--max-frac", "0.2", "--workers", "1", "--out", str(out))
-    return out
+from utils.cache import workloads
 
 
 def run(main, *argv):
@@ -43,10 +29,87 @@ def run(main, *argv):
         sys.argv = old
 
 
-def test_populate_wrote_results(run_dir):
-    data = json.loads((run_dir / "results.json").read_text())
-    assert {r["target"] for r in data["results"]} == {0.7, 0.9}
-    assert all(r["points"] for r in data["results"])
+def populate(*argv):
+    cli.main(["populate", *map(str, argv)])
+
+
+def _write_fvecs(path, arr):
+    arr = np.asarray(arr, dtype=np.float32)
+    rows = np.hstack([np.full((len(arr), 1), arr.shape[1], dtype=np.int32).view(np.float32), arr])
+    path.write_bytes(rows.tobytes())
+
+
+@pytest.fixture(scope="module")
+def esci_run(tmp_path_factory):
+    root = tmp_path_factory.mktemp("esci")
+    rng = np.random.default_rng(0)
+    centers = rng.standard_normal((6, 8)) * 2
+    np.save(root / "esci_db2000_s42.npy",
+            (centers[rng.integers(0, 6, 2000)] + rng.standard_normal((2000, 8))).astype(np.float32))
+    np.save(root / "esci_queries.npy",
+            (centers[rng.integers(0, 6, 1500)] + rng.standard_normal((1500, 8))).astype(np.float32))
+    out = root / "run"
+    populate("esci", "--esci-dir", root, "--n-db", 2000, "--n-cand-queries", 120,
+             "--n-score-queries", 120, "--n-test", 100, "--k", 5, "--k-values", 5, 50, 500,
+             "--targets", 0.7, 0.9, "--checkpoints", 0.05, 0.1, "--max-frac", 0.2,
+             "--workers", 1, "--out", out)
+    return out
+
+
+@pytest.fixture(scope="module")
+def synthetic_run(tmp_path_factory):
+    root = tmp_path_factory.mktemp("sift")
+    rng = np.random.default_rng(1)
+    for name, n in (("sift_base", 400), ("sift_learn", 200), ("sift_query", 60)):
+        _write_fvecs(root / f"{name}.fvecs", rng.standard_normal((n, 8)))
+    old = workloads.PATHS.sift
+    workloads.PATHS.sift = root
+    out = root / "run"
+    try:
+        populate("synthetic", "--n-db", 300, "--group-size", 5, "--n-cand-requests", 60,
+                 "--n-score-requests", 120, "--n-test-requests", 120, "--k", 3,
+                 "--k-values", 5, 20, 50, "--targets", 0.7, 0.9, "--checkpoints", 0.1, 0.2,
+                 "--max-frac", 0.3, "--workers", 1, "--out", out)
+        populate("sift", "--n-db", 300, "--n-cand-queries", 60, "--n-score-queries", 60,
+                 "--n-test", 40, "--k", 3, "--k-values", 5, 20, "--targets", 0.8,
+                 "--checkpoints", 0.1, "--max-frac", 0.3, "--out", root / "run_sift")
+    except BaseException:
+        workloads.PATHS.sift = old
+        raise
+    yield out
+    workloads.PATHS.sift = old
+
+
+@pytest.fixture(scope="module")
+def trace_run(tmp_path_factory):
+    root = tmp_path_factory.mktemp("aker")
+    rng = np.random.default_rng(2)
+    np.save(root / "spacev-10m.npy", rng.integers(-50, 50, size=(300, 6)).astype(np.int8))
+    pool = rng.integers(-50, 50, size=(60, 6)).astype(np.int8)
+    np.save(root / "spacev-sim-100k-0.3.npy", pool[rng.integers(0, 60, 800)])
+    old = workloads.PATHS.aker
+    workloads.PATHS.aker = root
+    out = root / "run"
+    try:
+        populate("trace", "--trace", "spacev-aker-0.3", "--k", 3, "--k-values", 5, 20,
+                 "--targets", 0.7, 0.9, "--checkpoints", 0.1, 0.2, "--max-frac", 0.3,
+                 "--workers", 1, "--out", out)
+    except BaseException:
+        workloads.PATHS.aker = old
+        raise
+    yield out
+    workloads.PATHS.aker = old
+
+
+def test_populate_wrote_results_for_every_workload(esci_run, synthetic_run, trace_run):
+    for d, extra in ((esci_run, None), (synthetic_run, "workload_stats"), (trace_run, None)):
+        data = json.loads((d / "results.json").read_text())
+        assert {r["target"] for r in data["results"]} == {0.7, 0.9}
+        assert all(r["points"] for r in data["results"])
+        assert (d / "hit_rate_vs_cache_size_linear.png").exists()
+        assert extra is None or extra in data
+    assert (trace_run / "topk.npz").exists()
+    assert (synthetic_run.parent / "run_sift" / "results.json").exists()
 
 
 @pytest.mark.parametrize("name,main,args,output", [
@@ -65,8 +128,8 @@ def test_populate_wrote_results(run_dir):
     ("gen_caches", eval_generalize.main, ["--mode", "caches", "--sizes", "0.1", "--base-size", "0.1",
                                           "--other-target", "0.7", "--n-each", "60"],
      "generalize_caches.json"),
-    ("gen_k", eval_generalize.main, ["--mode", "k", "--ks", "1", "5", "--source-k", "5", "--n-each", "60"],
-     "generalize_k.json"),
+    ("gen_k", eval_generalize.main, ["--mode", "k", "--ks", "1", "5", "--source-k", "5",
+                                     "--n-each", "60"], "generalize_k.json"),
     ("certificates", eval_certificates.main, ["--profile-sizes", "10", "--workers", "1"],
      "certificates.json"),
     ("calibrated", eval_calibrated.main, ["--n-fit", "60", "--n-calib", "60", "--workers", "1",
@@ -81,6 +144,43 @@ def test_populate_wrote_results(run_dir):
      ["--targets", "0.9", "--sizes", "0.1", "--n-fit", "60", "--n-cal", "40", "--trials", "2",
       "--n-pool-requests", "200", "--workers", "1"], "calibration_methods.json"),
 ])
-def test_driver_runs_and_writes_its_output(run_dir, name, main, args, output):
-    run(main, run_dir, *args)
-    assert json.loads((run_dir / output).read_text())
+def test_esci_run_through_every_evaluator(esci_run, name, main, args, output):
+    run(main, esci_run, *args)
+    assert json.loads((esci_run / output).read_text())
+
+
+@pytest.mark.parametrize("name,main,args,output", [
+    ("simple", eval_simple.main, ["--sizes", "0.2", "--n-each", "40", "--R", "50", "--workers", "1"],
+     "simple.json"),
+    ("certificates", eval_certificates.main, ["--profile-sizes", "10", "--workers", "1"],
+     "certificates.json"),
+    ("calibrated", eval_calibrated.main, ["--n-fit", "40", "--n-calib", "40", "--workers", "1",
+                                          "--targets", "0.9"], "calibrated.json"),
+    ("predictors", eval_predictors.main, ["--targets", "0.9", "--sizes", "0.2", "--n-each", "40",
+                                          "--workers", "1"], "predictors.json"),
+    ("calibration_methods", eval_calibration_methods.main,
+     ["--targets", "0.9", "--sizes", "0.2", "--n-fit", "40", "--n-cal", "30", "--trials", "2",
+      "--n-pool-requests", "100", "--workers", "1"], "calibration_methods.json"),
+])
+def test_synthetic_run_through_the_zipf_branches(synthetic_run, name, main, args, output):
+    run(main, synthetic_run, *args)
+    assert json.loads((synthetic_run / output).read_text())
+
+
+@pytest.mark.parametrize("name,main,args,output", [
+    ("simple", eval_simple.main, ["--sizes", "0.2", "--R", "20", "--workers", "1"], "simple.json"),
+    ("calibrated", eval_calibrated.main, ["--workers", "1", "--targets", "0.9"], "calibrated.json"),
+    ("predictors", eval_predictors.main, ["--targets", "0.9", "--sizes", "0.2", "--workers", "1"],
+     "predictors.json"),
+    ("aker", eval_aker_thresholds.main, ["--target", "0.9"], "aker_thresholds.json"),
+])
+def test_trace_run_through_the_trace_branches(trace_run, name, main, args, output):
+    run(main, trace_run, *args)
+    assert json.loads((trace_run / output).read_text())
+
+
+def test_every_command_group_has_help():
+    for group in cli.GROUPS:
+        with pytest.raises(SystemExit) as e:
+            cli.main([group, "--help"])
+        assert e.value.code == 0

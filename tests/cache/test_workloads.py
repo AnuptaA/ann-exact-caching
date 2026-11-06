@@ -106,7 +106,7 @@ def _fake_aker(tmp_path, monkeypatch, n_req=400, n_distinct=40, d=6, n_base=50):
     trace = pool[rng.integers(0, n_distinct, n_req)]
     np.save(tmp_path / "spacev-10m.npy", base)
     np.save(tmp_path / "spacev-sim-100k-0.3.npy", trace)
-    monkeypatch.setattr(wl, "AKER", tmp_path)
+    monkeypatch.setattr(wl.PATHS, "aker", tmp_path)
     return base, trace
 
 
