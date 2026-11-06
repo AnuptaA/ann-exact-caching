@@ -425,8 +425,8 @@ Conclusions:
 
 ## 5l. Radius-based scores, prediction targets, and where the gap comes from
 
-Scripts (all `.venv`): `eval_radius_scores.py`, `eval_radius_models.py`,
-`eval_focused.py`, `eval_gap.py`. ESCI 50k unless noted, k = 10, T = 0.9;
+Scripts (removed in cleanup; see git tag `archive/pre-modularization`):
+`eval_radius_scores.py`, `eval_radius_models.py`, `eval_focused.py`, `eval_gap.py`. ESCI 50k unless noted, k = 10, T = 0.9;
 "hit" = calibrated test hit rate (normal_fixed), all met T.
 
 - Bucket / past-query radius scores (count cached vectors within plausible
@@ -527,7 +527,7 @@ Generalization (`eval_generalize.py`, ESCI 50k, T = 0.9):
   lambda across k fails (0.85-0.87 at k = 50 / 100, over-conservative at k = 1).
   => one model for all k, lambda per k. Share of oracle: k = 1 ~67-84%,
   k = 10-100 ~85-91%.
-Also tried (`eval_features_v2.py`): a geometric "region probe" (share of
+Also tried (`eval_features_v2.py`, removed; see tag `archive/pre-modularization`): a geometric "region probe" (share of
 random data-shaped probe points on the neighborhood boundary outside every
 ball). Useless in high dimensions: ~100% uncovered for good and bad queries
 alike; the shell sample's intruder count measures the uncovered region with

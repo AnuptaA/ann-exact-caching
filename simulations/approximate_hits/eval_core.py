@@ -46,11 +46,12 @@ import numpy as np
 
 from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_predictors as epred
-from simulations.approximate_hits.eval_ablation import _gbt
+from utils.cache.models import gbt_regressor
 from utils.base.knn import fetch_rows
 from utils.base.knn import pairwise_dist, sq_norms
-from simulations.approximate_hits.eval_gap import best_cutoff_rate, entry_kmax
-from simulations.approximate_hits.eval_radius_scores import cached_knn
+from utils.cache.entries import entry_kmax
+from utils.cache.metrics import best_cutoff_rate
+from utils.base.knn import knn_dists
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -90,7 +91,7 @@ def configs():
 
 def balls_of(entries):
     """One ball per cached past query (its largest K): centers, radii."""
-    cand, K = entry_kmax(entries)
+    cand, K = entry_kmax(entries, ecal._G["k_values"])
     n_kv = len(ecal._G["k_values"])
     t = np.array([ecal._G["k_values"].index(int(k)) for k in K])
     rad = ecal._G["radius"][cand * n_kv + t]
@@ -202,7 +203,7 @@ def eval_state(task):
     sets, topk = ecal._G["sets"], ecal._G["topk"]
     y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in ("fit", "cal", "test")}
     w = {sp: sets[sp][1].astype(np.float64) for sp in ("fit", "cal", "test")}
-    nr = {sp: np.maximum(cached_knn(sets[sp][0], st)[:, k - 1], EPS)
+    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], EPS)
           for sp in ("fit", "cal", "test")}
     ball_cache, shell_cache = {}, {}
     out = {"cache_frac": point["cache_frac"], "n_balls": len(bl["r"]),
@@ -227,7 +228,7 @@ def eval_state(task):
             for sp in blocks:
                 blocks[sp].append(feats[sp])
         X = {sp: np.hstack(blocks[sp]) for sp in blocks}
-        g = _gbt(0).fit(X["fit"], y["fit"], sample_weight=w["fit"])
+        g = gbt_regressor(0).fit(X["fit"], y["fit"], sample_weight=w["fit"])
         s = {sp: g.predict(X[sp]) for sp in blocks}
         lam = select(DEFAULT_METHOD, s["cal"][ci], y["cal"][ci], threshold_grid(s["fit"]),
                      target, 0.05)

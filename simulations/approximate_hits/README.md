@@ -45,10 +45,9 @@ training queries whose exact neighbors are known.
      - `eval_shell_ablation.py`: which shell features matter; uncalibrated
        model quality.
      - `eval_generalize.py`: transfer across cache states and across k.
-   - Exploratory (radius prediction, training focus, gap decomposition,
-     samples, older feature sets): `eval_radius_scores.py`,
-     `eval_radius_models.py`, `eval_focused.py`, `eval_gap.py`,
-     `eval_ablation.py`, `eval_features_v2.py`.
+   - Earlier exploratory scripts (radius prediction, training focus, gap
+     decomposition, older feature sets) were removed; they are in git tag
+     `archive/pre-modularization`.
    - Final model at scale: `eval_final.py` (every checkpoint, memory-fair
      baseline, calibration-size sweep), `eval_shell_size.py` (larger shells,
      calibration-size study), `eval_shell_budget.py` (cache / shell split of a

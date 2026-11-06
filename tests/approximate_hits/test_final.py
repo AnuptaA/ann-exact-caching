@@ -12,12 +12,6 @@ from simulations.approximate_hits import eval_final as ef
 from utils.cache.calibration import threshold_grid
 
 
-def test_interp_log():
-    assert np.isclose(ef.interp_log([0.01, 0.1], [0.1, 0.3], 10 ** -1.5), 0.2)
-    assert ef.interp_log([0.01, 0.1], [0.1, 0.3], 0.2) is None
-    assert ef.interp_log([0.1, 0.01], [0.3, 0.1], 0.01) == 0.1   # unsorted input
-
-
 def test_admit_and_none_lambda():
     s, y = np.array([0.9, 0.5, 0.1]), np.array([1.0, 0.8, 0.0])
     assert ef.admit(0.4, s, y) == (2 / 3, 0.9)

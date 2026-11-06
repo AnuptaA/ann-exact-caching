@@ -40,7 +40,7 @@ from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_core as ec
 from simulations.approximate_hits import eval_predictors as epred
 from utils.base.knn import pairwise_dist
-from simulations.approximate_hits.eval_threshold_transfer import perturbed
+from utils.cache.entries import perturbed
 from utils.base.knn import exact_topk
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,

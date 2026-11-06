@@ -33,9 +33,9 @@ import numpy as np
 from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_core as ec
 from simulations.approximate_hits import eval_predictors as epred
-from simulations.approximate_hits.eval_ablation import _gbt
-from simulations.approximate_hits.eval_gap import best_cutoff_rate
-from simulations.approximate_hits.eval_radius_scores import cached_knn
+from utils.cache.models import gbt_regressor
+from utils.cache.metrics import best_cutoff_rate
+from utils.base.knn import knn_dists
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -98,7 +98,7 @@ def scores(B, S, y, w):
     from sklearn.linear_model import Ridge
     X = {sp: np.hstack([B[sp], S[sp]]) for sp in SPLITS}
     out = {}
-    g = _gbt(0).fit(X["fit"], y, sample_weight=w)
+    g = gbt_regressor(0).fit(X["fit"], y, sample_weight=w)
     out["gbt"] = {sp: g.predict(X[sp]) for sp in SPLITS}
     h = HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, max_depth=2,
                                       early_stopping=True, validation_fraction=0.1,
@@ -131,7 +131,7 @@ def eval_state(task):
     sets, topk = ecal._G["sets"], ecal._G["topk"]
     y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SPLITS}
     w = {sp: sets[sp][1].astype(np.float64) for sp in SPLITS}
-    nr = {sp: np.maximum(cached_knn(sets[sp][0], st)[:, k - 1], 1e-12) for sp in SPLITS}
+    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SPLITS}
     B = {sp: np.nan_to_num(ec.ball_features(sets[sp][0], nr[sp], bl, N_BALLS), nan=POOR_FIT)
          for sp in SPLITS}
     samp = ec.shell_sample(bl, st["in_cache"], args.p, args.R, args.b)

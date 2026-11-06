@@ -34,7 +34,8 @@ from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_core as ec
 from simulations.approximate_hits import eval_predictors as epred
 from simulations.approximate_hits import eval_simple as es
-from simulations.approximate_hits.eval_radius_scores import cached_knn
+from utils.base.knn import knn_dists
+from utils.cache.metrics import interp_log
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -78,16 +79,6 @@ def calibration_sweep(s_cal, y_cal, grid, s_test, y_test, target, ns, draws, rng
     return out
 
 
-def interp_log(xs, ys, x):
-    """Interpolate ys in log(x); None outside the measured range."""
-    xs, ys = np.asarray(xs), np.asarray(ys)
-    o = np.argsort(xs)
-    xs, ys = xs[o], ys[o]
-    if x < xs[0] or x > xs[-1] * 1.001:
-        return None
-    return float(np.interp(np.log(x), np.log(xs), ys))
-
-
 def eval_point(task):
     target, point, entries = task
     args = _R["args"]
@@ -99,7 +90,7 @@ def eval_point(task):
     sets, topk = ecal._G["sets"], ecal._G["topk"]
     y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SPLITS}
     w = {sp: sets[sp][1].astype(np.float64) for sp in SPLITS}
-    nr = {sp: np.maximum(cached_knn(sets[sp][0], st)[:, k - 1], 1e-12) for sp in SPLITS}
+    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SPLITS}
     B = {sp: np.nan_to_num(ec.ball_features(sets[sp][0], nr[sp], bl, es.N_BALLS),
                            nan=es.POOR_FIT) for sp in SPLITS}
     samp = ec.shell_sample(bl, st["in_cache"], args.p, args.R, args.b)

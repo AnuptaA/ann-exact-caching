@@ -113,3 +113,12 @@ def exact_topk_blocked(queries: np.ndarray, db: np.ndarray, k: int,
             best_i = all_i[keep].reshape(c, k)
         out[s0:s0 + c] = best_i
     return out
+
+
+def knn_dists(q, db_c, db_c_sq, k, chunk=2048):
+    """Sorted distances from each query to its k nearest rows of db_c (float64)."""
+    out = np.empty((len(q), k))
+    for s in range(0, len(q), chunk):
+        d = pairwise_dist(q[s:s + chunk], db_c, db_c_sq)
+        out[s:s + chunk] = np.sort(np.partition(d, k - 1, axis=1)[:, :k], axis=1)
+    return out

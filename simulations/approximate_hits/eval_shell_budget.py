@@ -31,8 +31,8 @@ from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_core as ec
 from simulations.approximate_hits import eval_predictors as epred
 from simulations.approximate_hits import eval_simple as es
-from simulations.approximate_hits.eval_final import interp_log
-from simulations.approximate_hits.eval_radius_scores import cached_knn
+from utils.cache.metrics import interp_log
+from utils.base.knn import knn_dists
 from utils.cache.calibration import select, threshold_grid
 
 logging.basicConfig(level=logging.INFO,
@@ -93,7 +93,7 @@ def eval_option(task):
     sets, topk = ecal._G["sets"], ecal._G["topk"]
     y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SPLITS}
     w = {sp: sets[sp][1].astype(np.float64) for sp in SPLITS}
-    nr = {sp: np.maximum(cached_knn(sets[sp][0], st)[:, k - 1], 1e-12) for sp in SPLITS}
+    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SPLITS}
     X = {sp: np.nan_to_num(ec.ball_features(sets[sp][0], nr[sp], bl, es.N_BALLS),
                            nan=es.POOR_FIT) for sp in SPLITS}
     cache_frac = len(st["cached"]) / len(ecal._G["db"])

@@ -32,6 +32,7 @@ import numpy as np
 
 from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_predictors as epred
+from utils.cache.entries import perturbed
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -51,21 +52,6 @@ def _point(res, size):
 def _cache_frac(entries, n_db):
     ids = [ecal._G["cached_ids"][j] for j in entries]
     return len(np.unique(np.concatenate(ids))) / n_db if ids else 0.0
-
-
-def perturbed(entries, frac, n_cand, n_kv, rng):
-    """Replace a fraction of entries by random unselected candidates, same K."""
-    entries = list(entries)
-    taken = set(entries)  # never re-pick an original or an earlier replacement
-    for pos in rng.choice(len(entries), int(round(frac * len(entries))), replace=False):
-        t = entries[pos] % n_kv
-        while True:
-            j = int(rng.integers(n_cand)) * n_kv + t
-            if j not in taken:
-                break
-        taken.add(j)
-        entries[pos] = j
-    return entries
 
 
 def cache_family(data, args, n_db):
