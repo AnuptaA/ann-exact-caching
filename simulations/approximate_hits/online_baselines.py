@@ -35,7 +35,7 @@ QVCache (query-aware vector cache):
 
 import numpy as np
 
-from simulations.approximate_hits.online_sim import sq_dist
+from utils.base.knn import sq_dist
 
 #-------------------------------------------------------------------------------
 

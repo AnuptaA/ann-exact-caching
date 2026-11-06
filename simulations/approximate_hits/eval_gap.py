@@ -53,10 +53,10 @@ import numpy as np
 
 from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_predictors as epred
-from simulations.approximate_hits.eval_aker_thresholds import fetch
-from simulations.approximate_hits.eval_certificates import pairwise_dist, _sq_norms
+from utils.base.knn import fetch_rows
+from utils.base.knn import pairwise_dist, sq_norms
 from simulations.approximate_hits.eval_radius_scores import cached_knn, true_radius
-from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk_blocked
+from utils.base.knn import exact_topk_blocked
 from simulations.approximate_hits.threshold_selection import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -97,7 +97,7 @@ def db_profile(run_dir):
         d = np.empty((len(q), 2))
         for s in range(0, len(q), CHUNK):
             sel = ids[s:s + CHUNK][:, [19, PROFILE_K - 1]]
-            rows = fetch(db, sel.ravel()).reshape(len(sel), 2, -1)
+            rows = fetch_rows(db, sel.ravel()).reshape(len(sel), 2, -1)
             diff = np.asarray(q[s:s + CHUNK], dtype=np.float64)[:, None, :] - rows
             d[s:s + CHUNK] = np.sqrt((diff ** 2).sum(-1))
         out[sp] = np.sort(d, axis=1)
@@ -114,7 +114,7 @@ def center_profiles():
         e = min(s + CHUNK, len(cand_q))
         ids = np.stack([np.asarray(ecal._G["cached_ids"][i * n_kv + n_kv - 1][:PROFILE_K])
                         for i in range(s, e)])
-        rows = fetch(db, ids.ravel()).reshape(e - s, PROFILE_K, -1)
+        rows = fetch_rows(db, ids.ravel()).reshape(e - s, PROFILE_K, -1)
         diff = np.asarray(cand_q[s:e], dtype=np.float64)[:, None, :] - rows
         out[s:e] = np.sort(np.sqrt((diff ** 2).sum(-1)), axis=1)
     return out
@@ -142,8 +142,8 @@ def shell_sample(entries, in_cache, frac):
     ids = ids[_R["draw"][ids] < frac]
     if len(ids) < SAMPLE_J:
         return None
-    vecs = fetch(ecal._G["db"], ids)
-    return {"ids": ids, "vecs": vecs, "sq": _sq_norms(vecs)}
+    vecs = fetch_rows(ecal._G["db"], ids)
+    return {"ids": ids, "vecs": vecs, "sq": sq_norms(vecs)}
 
 
 def profile_features(q, entries, ck):
@@ -156,7 +156,7 @@ def profile_features(q, entries, ck):
     F = np.full((len(q), N_NEAR * (1 + len(PROFILE_RANKS))), np.nan)
     first = np.empty((len(q), 3))
     for s in range(0, len(q), CHUNK):
-        d = pairwise_dist(q[s:s + CHUNK], cq, _sq_norms(cq))
+        d = pairwise_dist(q[s:s + CHUNK], cq, sq_norms(cq))
         m = min(N_NEAR, d.shape[1])
         part = (np.argpartition(d, m - 1, axis=1)[:, :m] if m < d.shape[1]
                 else np.tile(np.arange(m), (len(d), 1)))
@@ -180,8 +180,8 @@ def draw_sample(frac, seed=0):
     db = ecal._G["db"]
     n = max(SAMPLE_J, int(round(frac * len(db))))
     ids = np.sort(np.random.default_rng(seed).choice(len(db), n, replace=False))
-    vecs = fetch(db, ids)
-    return {"ids": ids, "vecs": vecs, "sq": _sq_norms(vecs)}
+    vecs = fetch_rows(db, ids)
+    return {"ids": ids, "vecs": vecs, "sq": sq_norms(vecs)}
 
 
 def sample_features(q, ck, in_cache, samp):

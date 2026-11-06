@@ -37,7 +37,7 @@ from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_predictors as epred
 from simulations.approximate_hits import eval_gap as egap
 from simulations.approximate_hits.eval_ablation import NAMES, STORY, _gbt
-from simulations.approximate_hits.eval_certificates import pairwise_dist
+from utils.base.knn import pairwise_dist
 from simulations.approximate_hits.eval_radius_scores import cached_knn
 from simulations.approximate_hits.threshold_selection import (
     DEFAULT_METHOD, select, threshold_grid,

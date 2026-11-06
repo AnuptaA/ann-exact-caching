@@ -41,7 +41,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits.eval_certificates import pairwise_dist, _sq_norms
+from utils.base.knn import fetch_rows, pairwise_dist, sq_norms
 from simulations.approximate_hits.run_e2e_oracle_trace import AKER, WORKLOADS, SPLITS
 
 logging.basicConfig(level=logging.INFO,
@@ -67,15 +67,6 @@ def load_run(run_dir: Path):
     return {"data": data, "cfg": cfg, "uniq": z["uniq"], "inv": z["inv"],
             "topk": z["topk"][:, :cfg["k"]], "cand_top": z["cand_top"],
             "bounds": bounds, "cand_gid": cand_gid, "db": db}
-
-
-def fetch(db, ids):
-    """Rows of db (possibly memory-mapped) for ids, in ids order, float64."""
-    ids = np.asarray(ids, dtype=np.int64)
-    order = np.argsort(ids)
-    rows = np.empty((len(ids), db.shape[1]))
-    rows[order] = db[ids[order]]
-    return rows
 
 
 def representatives(run, entries):
@@ -150,9 +141,9 @@ def eval_state(run, point, entries, args):
     rep_cand, rep_k = representatives(run, entries)
     rep_gid = run["cand_gid"][rep_cand]
     rep_q = np.asarray(run["uniq"][rep_gid], dtype=np.float64)
-    rep_q_sq = _sq_norms(rep_q)
+    rep_q_sq = sq_norms(rep_q)
     nn1 = run["cand_top"][rep_cand, 0]
-    min_d = np.sqrt(((rep_q - fetch(db, nn1)) ** 2).sum(axis=1))
+    min_d = np.sqrt(((rep_q - fetch_rows(db, nn1)) ** 2).sum(axis=1))
     rep_of_gid = {int(g): r for r, g in enumerate(rep_gid)}
 
     in_cache = np.zeros(cfg["n_db"], dtype=bool)
@@ -182,7 +173,7 @@ def eval_state(run, point, entries, args):
         hit_reps = used[hit]
         for r in np.unique(hit_reps):
             if r not in nrl_rows and rep_k[r] > k:
-                nrl_rows[r] = fetch(db, run["cand_top"][rep_cand[r], :rep_k[r]])
+                nrl_rows[r] = fetch_rows(db, run["cand_top"][rep_cand[r], :rep_k[r]])
         y_entry = np.ones(len(test))
         if hit.any():
             y_entry[hit] = entry_retention(run, test[hit], hit_reps, rep_cand, rep_k,

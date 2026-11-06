@@ -9,12 +9,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import numpy as np
 
 from simulations.approximate_hits import eval_features_v2 as ef
-from simulations.approximate_hits.eval_certificates import _sq_norms
+from utils.base.knn import sq_norms
 
 
 def _state(centers, radii):
     cq = np.asarray(centers, dtype=np.float64)
-    return {"ent_q": cq, "ent_q_sq": _sq_norms(cq), "ent_r": np.asarray(radii, dtype=np.float64)}
+    return {"ent_q": cq, "ent_q_sq": sq_norms(cq), "ent_r": np.asarray(radii, dtype=np.float64)}
 
 
 def _setup(n_probes=64):

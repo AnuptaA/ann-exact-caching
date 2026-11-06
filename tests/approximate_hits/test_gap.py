@@ -56,11 +56,11 @@ def test_profile_features_offsets_and_missing_ranks():
 
 def test_sample_features_counts_only_uncached_intruders():
     from simulations.approximate_hits import eval_gap as eg
-    from simulations.approximate_hits.eval_certificates import _sq_norms
+    from utils.base.knn import sq_norms
 
     # sample: 1-d points at distances 1, 2, 3, 4, 5, 6 from the query at 0
     vecs = np.arange(1.0, 7.0)[:, None]
-    samp = {"ids": np.arange(6), "vecs": vecs, "sq": _sq_norms(vecs)}
+    samp = {"ids": np.arange(6), "vecs": vecs, "sq": sq_norms(vecs)}
     in_cache = np.array([True, False, True, False, False, False])
     q = np.zeros((1, 1))
     F = eg.sample_features(q, np.array([4.5]), in_cache, samp)

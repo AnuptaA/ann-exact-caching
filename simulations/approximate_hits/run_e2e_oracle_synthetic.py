@@ -35,8 +35,9 @@ from simulations.approximate_hits import run_e2e_oracle_sift as base
 from simulations.approximate_hits.greedy_population import GreedyPopulator
 from simulations.approximate_hits.run_e2e_oracle_sift import (
     DEFAULT_CHECKPOINTS, DEFAULT_K_VALUES, DEFAULT_TARGETS, SIFT1M_DIR,
-    exact_topk, plot_results, run_target, _print_target,
+    plot_results, run_target, _print_target,
 )
+from utils.base.knn import exact_topk
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",

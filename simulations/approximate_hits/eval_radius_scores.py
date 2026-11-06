@@ -38,7 +38,7 @@ import numpy as np
 
 from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_predictors as epred
-from simulations.approximate_hits.eval_certificates import pairwise_dist, _sq_norms
+from utils.base.knn import pairwise_dist, sq_norms
 from simulations.approximate_hits.threshold_selection import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -187,7 +187,7 @@ def main():
 
     fit_q, _ = ecal._G["sets"]["fit"]
     _R["fit_q"] = np.asarray(fit_q, dtype=np.float64)
-    _R["fit_sq"] = _sq_norms(_R["fit_q"])
+    _R["fit_sq"] = sq_norms(_R["fit_q"])
     _R["fit_r"] = true_radius(fit_q, ecal._G["topk"]["fit"])
     _R["mu"] = _R["fit_q"].mean(axis=0)
     _R["H"] = np.random.default_rng(0).standard_normal((fit_q.shape[1], LSH_BITS))

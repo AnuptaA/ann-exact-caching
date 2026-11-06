@@ -32,10 +32,10 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits.eval_certificates import (
-    build_entry_tables, pairwise_dist, _sq_norms,
-)
-from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk, load_inputs
+from simulations.approximate_hits.eval_certificates import build_entry_tables
+from utils.base.knn import pairwise_dist, sq_norms
+from simulations.approximate_hits.run_e2e_oracle_sift import load_inputs
+from utils.base.knn import exact_topk
 from simulations.approximate_hits.threshold_selection import (
     DEFAULT_METHOD, METHODS, select, threshold_grid,
 )
@@ -114,8 +114,8 @@ def state_tables(entries):
         # sorted (entry, vector) membership keys: entry e holds vector v iff
         # e * n_db + v is present (avoids an entries x database table)
         "member_keys": np.unique(np.concatenate(keys)) if keys else np.empty(0, np.int64),
-        "db_c": db_c, "db_c_sq": _sq_norms(db_c),
-        "ent_q": ent_q, "ent_q_sq": _sq_norms(np.asarray(ent_q, dtype=np.float64)),
+        "db_c": db_c, "db_c_sq": sq_norms(db_c),
+        "ent_q": ent_q, "ent_q_sq": sq_norms(np.asarray(ent_q, dtype=np.float64)),
         "ent_r": _G["radius"][ent],
     }
 

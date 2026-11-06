@@ -47,8 +47,8 @@ import numpy as np
 from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_predictors as epred
 from simulations.approximate_hits.eval_ablation import _gbt
-from simulations.approximate_hits.eval_aker_thresholds import fetch
-from simulations.approximate_hits.eval_certificates import pairwise_dist, _sq_norms
+from utils.base.knn import fetch_rows
+from utils.base.knn import pairwise_dist, sq_norms
 from simulations.approximate_hits.eval_gap import best_cutoff_rate, entry_kmax
 from simulations.approximate_hits.eval_radius_scores import cached_knn
 from simulations.approximate_hits.threshold_selection import (
@@ -95,7 +95,7 @@ def balls_of(entries):
     t = np.array([ecal._G["k_values"].index(int(k)) for k in K])
     rad = ecal._G["radius"][cand * n_kv + t]
     cq = np.asarray(ecal._G["cand_q"][cand], dtype=np.float64)
-    return {"cand": cand, "K": K, "c": cq, "c_sq": _sq_norms(cq), "r": rad}
+    return {"cand": cand, "K": K, "c": cq, "c_sq": sq_norms(cq), "r": rad}
 
 
 def ball_features(q, nr, bl, n):
@@ -130,7 +130,7 @@ def quantize(x, bits):
 def load_cand_ext(run_dir, R):
     """Exact top-R database ids per candidate query (for shells deeper than the
     cached top-500), computed once and saved to <run>/cand_top<R>.npy."""
-    from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk
+    from utils.base.knn import exact_topk
     path = Path(run_dir) / f"cand_top{R}.npy"
     if path.exists():
         return np.load(path)
@@ -159,8 +159,8 @@ def shell_sample(bl, in_cache, p, R, bits):
     ids = ids[_R["draw"][ids] < p]
     if len(ids) < SAMPLE_J:
         return None
-    vecs = quantize(fetch(ecal._G["db"], ids), bits)
-    return {"ids": ids, "vecs": vecs, "sq": _sq_norms(vecs),
+    vecs = quantize(fetch_rows(ecal._G["db"], ids), bits)
+    return {"ids": ids, "vecs": vecs, "sq": sq_norms(vecs),
             "memory": len(ids) * min(bits, 32) / 32 / len(ecal._G["db"])}
 
 

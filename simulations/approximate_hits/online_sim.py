@@ -79,6 +79,7 @@ from simulations.approximate_hits.eval_core import quantize
 from simulations.approximate_hits.eval_generalize import fit_logistic
 from simulations.approximate_hits.greedy_population import GreedyPopulator, hits_from_histograms
 from simulations.approximate_hits.threshold_selection import select, threshold_grid
+from utils.base.knn import sq_dist
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -93,12 +94,6 @@ EPS = 1e-12
 CHUNK = 1024
 
 #-------------------------------------------------------------------------------
-
-
-def sq_dist(a, b, b_sq):
-    """Squared Euclidean distances (float32), clipped at 0."""
-    d = (a * a).sum(axis=1)[:, None] + b_sq[None, :] - 2.0 * (a @ b.T)
-    return np.maximum(d, 0.0)
 
 
 class Cache:

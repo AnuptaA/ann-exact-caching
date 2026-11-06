@@ -35,7 +35,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import numpy as np
 
 from simulations.approximate_hits.greedy_population import hits_from_histograms, online_hits
-from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk, load_inputs
+from simulations.approximate_hits.run_e2e_oracle_sift import load_inputs
+from utils.base.knn import exact_topk, pairwise_dist, sq_norms
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -46,20 +47,6 @@ CHUNK = 2048
 _G: dict = {}  # shared inputs for forked workers
 
 #-------------------------------------------------------------------------------
-
-
-def _sq_norms(x):
-    return np.einsum("ij,ij->i", x, x)
-
-
-def pairwise_dist(a, b, b_sq=None):
-    """Euclidean distances between rows of a and rows of b (float64)."""
-    a = np.asarray(a, dtype=np.float64)
-    b = np.asarray(b, dtype=np.float64)
-    if b_sq is None:
-        b_sq = _sq_norms(b)
-    d2 = _sq_norms(a)[:, None] + b_sq[None, :] - 2.0 * (a @ b.T)
-    return np.sqrt(np.maximum(d2, 0.0))
 
 
 def load_run(run_dir: Path):
@@ -149,8 +136,8 @@ def certify_state(entries, profile_sizes):
         np.cumsum(unc, axis=1, out=cum[:, 1:])
         prof_unc[m] = cum
     db_c = db[cached]
-    db_c_sq = _sq_norms(db_c.astype(np.float64))
-    ent_q_sq = _sq_norms(ent_q.astype(np.float64))
+    db_c_sq = sq_norms(db_c.astype(np.float64))
+    ent_q_sq = sq_norms(ent_q.astype(np.float64))
 
     for s in range(0, n_test, CHUNK):
         e = min(s + CHUNK, n_test)
