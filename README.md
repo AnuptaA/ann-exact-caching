@@ -21,4 +21,5 @@ the cached answer returns stays at or above a user target.
 ```
 python -m venv venv && venv/bin/pip install -r requirements.txt
 make test
+make help    # pipeline targets
 ```

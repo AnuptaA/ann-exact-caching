@@ -377,7 +377,7 @@ def main():
     out = Path(args.out or Path(args.prep) / f"sim_{args.stream}_b{args.budget:g}")
     out.mkdir(parents=True, exist_ok=True)
     if args.method in ("aker", "qvcache"):
-        from simulations.approximate_hits import online_baselines as ob
+        from utils.cache import baselines as ob
         cls = ob.Aker if args.method == "aker" else ob.QVCache
         res = dict(cls(D, stream, args).run(), method=args.method, args=vars(args))
     else:

@@ -659,7 +659,7 @@ QVCache, in addition to static / periodic / LRU.
 
 Code: `online_prepare.py` (exact top-500 ground truth, query clusters,
 streams), `online_sim.py` (static / periodic / triggered / LRU; ablation
-switches), `online_baselines.py` (Aker, QVCache), `online_summary.py`.
+switches), `utils/cache/baselines.py` (Aker, QVCache), `online_summary.py`.
 Streams: random order (no shift) and an abrupt shift (20 k-means query
 clusters split into two halves of ~65k queries; half A then half B).
 Warm-up 20k queries, then batches of 1000; audits 10% (60% calibration role).

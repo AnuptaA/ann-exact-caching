@@ -6,7 +6,7 @@ import argparse
 
 import numpy as np
 
-from simulations.approximate_hits import online_baselines as ob
+from utils.cache import baselines as ob
 
 
 def _data(n_db=300, n_q=40, d=3, seed=0):
