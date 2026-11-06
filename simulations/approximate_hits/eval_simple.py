@@ -36,7 +36,7 @@ from simulations.approximate_hits import eval_predictors as epred
 from simulations.approximate_hits.eval_ablation import _gbt
 from simulations.approximate_hits.eval_gap import best_cutoff_rate
 from simulations.approximate_hits.eval_radius_scores import cached_knn
-from simulations.approximate_hits.threshold_selection import (
+from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
 

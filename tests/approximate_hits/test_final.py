@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import numpy as np
 
 from simulations.approximate_hits import eval_final as ef
-from simulations.approximate_hits.threshold_selection import threshold_grid
+from utils.cache.calibration import threshold_grid
 
 
 def test_interp_log():

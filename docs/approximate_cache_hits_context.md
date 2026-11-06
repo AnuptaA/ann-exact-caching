@@ -258,7 +258,7 @@ Results:
 - Normal + split is valid but loses a lot (halved data).
 - Remaining gap to the oracle is mostly predictor quality, not the bound.
 - Recommended: normal approximation + fixed-order testing.
-- Adopted as the default in `threshold_selection.py` (shared by
+- Adopted as the default in `utils/cache/calibration.py` (shared by
   `eval_calibrated.py` and `eval_calibration_methods.py`); `calibrated.json`
   files regenerated with it. ESCI T = 0.95 guaranteed hit rate at
   1 / 10 / 30% cache is now 5.9 / 14.6 / 31.4% (was 0 / 13.4 / 29.2%).

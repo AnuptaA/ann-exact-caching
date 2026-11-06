@@ -40,7 +40,7 @@ from simulations.approximate_hits.eval_certificates import build_entry_tables
 from utils.base.knn import pairwise_dist
 from simulations.approximate_hits.run_e2e_oracle_sift import load_inputs
 from utils.base.knn import exact_topk
-from simulations.approximate_hits.threshold_selection import select, threshold_grid
+from utils.cache.calibration import select, threshold_grid
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",

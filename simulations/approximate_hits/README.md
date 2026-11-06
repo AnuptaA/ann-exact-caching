@@ -27,7 +27,7 @@ training queries whose exact neighbors are known.
    - `eval_certificates.py`: provable retention lower bounds (CIG, partial
      CIG, neighbor-distance profiles).
    - `eval_calibrated.py`: predictor + calibrated threshold (default: normal
-     approximation with fixed-order testing, `threshold_selection.py`).
+     approximation with fixed-order testing, `utils/cache/calibration.py`).
    - `eval_predictors.py`: compares predictors (ridge, gradient-boosted trees,
      ...) on fit / dev / cal / test splits. Needs scikit-learn (repo `.venv`).
    - `eval_calibration_methods.py`: validates threshold-selection procedures

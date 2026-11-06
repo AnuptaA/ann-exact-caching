@@ -12,7 +12,7 @@ from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_core as ec
 from simulations.approximate_hits import eval_shell_budget as eb
 from simulations.approximate_hits import eval_shell_size as ess
-from simulations.approximate_hits.threshold_selection import select
+from utils.cache.calibration import select
 
 
 def test_min30_skips_tiny_groups_and_default_unchanged():

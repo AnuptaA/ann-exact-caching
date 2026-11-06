@@ -39,7 +39,7 @@ from simulations.approximate_hits import eval_gap as egap
 from simulations.approximate_hits.eval_ablation import NAMES, STORY, _gbt
 from utils.base.knn import pairwise_dist
 from simulations.approximate_hits.eval_radius_scores import cached_knn
-from simulations.approximate_hits.threshold_selection import (
+from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
 

@@ -9,7 +9,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import numpy as np
 import pytest
 
-from simulations.approximate_hits.threshold_selection import (
+from utils.cache.calibration import (
+    hoeffding_upper,
     METHODS, grid_stats, select,
 )
 
@@ -60,3 +61,9 @@ def test_guaranteed_methods_rarely_miss_target(target):
             # allow sampling slack around delta = 0.05 for 300 trials
             assert fails[m] / trials <= 0.09, (m, fails[m] / trials)
     assert fails["naive"] / trials > 0.2  # naive often misses (selection effect)
+
+
+def test_hoeffding_upper_matches_formula():
+    up = hoeffding_upper(np.full(100, 0.8), 0.05)
+    assert np.isclose(up, 0.8 + np.sqrt(np.log(20) / 200))
+

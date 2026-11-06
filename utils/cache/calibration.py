@@ -65,6 +65,10 @@ def threshold_grid(fit_scores: np.ndarray, n_points: int = 100) -> np.ndarray:
     return np.unique(np.quantile(fit_scores, np.linspace(0.0, 0.99, n_points)))[::-1]
 
 
+def hoeffding_upper(y, level):
+    return float(np.mean(y) + np.sqrt(np.log(1 / level) / (2 * len(y))))
+
+
 def _passes(n, mean, sd, level, kind, target):
     lcb = lcb_normal(n, mean, sd, level) if kind == "normal" else lcb_eb(n, mean, sd, level)
     return (n >= 2) & np.nan_to_num(lcb >= target, nan=False)

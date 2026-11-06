@@ -37,7 +37,7 @@ from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits.eval_certificates import build_entry_tables
 from simulations.approximate_hits.run_e2e_oracle_sift import load_inputs
 from utils.base.knn import exact_topk
-from simulations.approximate_hits.threshold_selection import (
+from utils.cache.calibration import (
     METHODS, select, threshold_grid,
 )
 

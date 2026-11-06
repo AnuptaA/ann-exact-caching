@@ -33,7 +33,7 @@ from simulations.approximate_hits import eval_predictors as epred
 from simulations.approximate_hits import eval_simple as es
 from simulations.approximate_hits.eval_final import interp_log
 from simulations.approximate_hits.eval_radius_scores import cached_knn
-from simulations.approximate_hits.threshold_selection import select, threshold_grid
+from utils.cache.calibration import select, threshold_grid
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",

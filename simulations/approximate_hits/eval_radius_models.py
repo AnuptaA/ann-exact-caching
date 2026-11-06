@@ -36,7 +36,7 @@ import numpy as np
 from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_predictors as epred
 from simulations.approximate_hits.eval_radius_scores import cached_knn, true_radius
-from simulations.approximate_hits.threshold_selection import (
+from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
 

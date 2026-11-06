@@ -12,7 +12,7 @@ For each cache state (checkpoint of a saved greedy run) and target T:
   3. Threshold: admit a query iff score >= lambda. lambda is chosen on
      CALIBRATION queries (fresh, independent draws) so that, with probability
      ~>= 1 - delta, the true mean retention over admitted queries is >= T.
-     Default procedure (threshold_selection.py): normal-approximation lower
+     Default procedure (utils/cache/calibration.py): normal-approximation lower
      bound per threshold, fixed-order testing over a grid of FIT-score
      quantiles from strict to lenient (stop at the first failure).
 
@@ -36,7 +36,7 @@ from simulations.approximate_hits.eval_certificates import build_entry_tables
 from utils.base.knn import pairwise_dist, sq_norms
 from simulations.approximate_hits.run_e2e_oracle_sift import load_inputs
 from utils.base.knn import exact_topk
-from simulations.approximate_hits.threshold_selection import (
+from utils.cache.calibration import (
     DEFAULT_METHOD, METHODS, select, threshold_grid,
 )
 

@@ -78,7 +78,7 @@ import numpy as np
 from simulations.approximate_hits.eval_core import quantize
 from simulations.approximate_hits.eval_generalize import fit_logistic
 from simulations.approximate_hits.greedy_population import GreedyPopulator, hits_from_histograms
-from simulations.approximate_hits.threshold_selection import select, threshold_grid
+from utils.cache.calibration import hoeffding_upper, select, threshold_grid
 from utils.base.knn import sq_dist
 
 logging.basicConfig(level=logging.INFO,
@@ -273,10 +273,6 @@ def hits_of_entries(D, entries, score, score_w, k, target):
     counts = cached[D["top"][score, :k]].sum(axis=1)
     hist = np.bincount(counts, weights=score_w, minlength=k + 1).astype(np.int64)
     return int(hits_from_histograms(hist, target, k)[0])
-
-
-def hoeffding_upper(y, level):
-    return float(np.mean(y) + np.sqrt(np.log(1 / level) / (2 * len(y))))
 
 
 class Sim:

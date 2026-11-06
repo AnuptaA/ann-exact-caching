@@ -70,13 +70,11 @@ def test_features_match_brute_force():
         assert np.isclose(X[row, 6], np.log1p(cnt))
 
 
-def test_retention_and_hoeffding():
+def test_retention_of_cached_query_is_one():
     D = _data()
     c = osim.Cache(D, k=5, R=60, bits=4, budget=1e9)
     c.add(3, 5)
     assert c.retention(np.array([3]))[0] == 1.0
-    up = osim.hoeffding_upper(np.full(100, 0.8), 0.05)
-    assert np.isclose(up, 0.8 + np.sqrt(np.log(20) / 200))
 
 
 def test_split_clusters_balanced_and_stream_ordered():

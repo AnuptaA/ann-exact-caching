@@ -57,7 +57,7 @@ from utils.base.knn import fetch_rows
 from utils.base.knn import pairwise_dist, sq_norms
 from simulations.approximate_hits.eval_radius_scores import cached_knn, true_radius
 from utils.base.knn import exact_topk_blocked
-from simulations.approximate_hits.threshold_selection import (
+from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
 
