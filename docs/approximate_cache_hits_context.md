@@ -1228,6 +1228,77 @@ on harmless shifts (needless resets), the retention test only on harmful
 ones, and only it can see changes that leave scores unchanged (data drift).
 Caveats: first shift only, frozen lambda, abrupt mixtures of A and B.
 
+## 5w. Detection + response study (eval_response.py)
+
+Question (user): if the response to an alarm is cheap and verifies itself,
+can the tests run loosely (accept false alarms) for faster detection?
+And should a shadow rebuild be part of the response?
+
+Corrected reasoning (shadow recalibration): after an alarm the only
+thresholds that can be certified are those certified by labels collected
+after the alarm (lambda_fresh and anything stricter); using older labels to
+loosen lambda assumes nothing changed, which is what the alarm disputes. So
+the post-alarm lambda is always lambda_fresh; a "shadow" period can only (1)
+keep serving at the pre-alarm lambda for a few batches while fresh labels
+accumulate (grace; unverified serving), or (2) raise audits to refill
+faster (boost). The cost of a needless alarm is the refill time (misses
+are labeled free, so it is short). The shadow rebuild answers a different
+question (is a better cache available?), independent of harm.
+
+Method: replay as in 5v (graded mixtures eps, 100 replications, P = 20k,
+H = 40k) with the serving loop's calibration (lambda recalibrated every
+batch from misses + weighted audited hits of the last 20k queries since the
+last reset; adaptive audits, 30 per batch) and detection (score test, KS
+last 2000 vs earlier since reset; retention test, scan + normal bound).
+Levels: strict = delta / (2 j (j + 1)) per test; loose = fixed per-check
+level 1% / 5% / 20%. Responses: reset; grace 2 batches (an alarm during
+grace ends it: evidence of harm); boost (100 audits per batch for 5
+batches); shadow rebuild at +5k / +15k after an alarm with candidates
+precomputed per (mix, window) from realistic windows (misses + weighted
+audited hits, 20% held out to calibrate it), build queries disjoint from
+replayed ones. Results results/response/<prep>_P20000_response.json;
+`eval_response.py --summary FILE`.
+
+Shadow decisions (candidate vs current oracle hits; install iff >= 1.1x):
+installed only at eps = 1 (5-12x) and eps = 0.7 with the 15k window (ESCI
+1.25x, SPACEV 1.63x); declined after a needless alarm (eps = 0: candidate
+worse, 0.78-0.94x) and on mild shifts. So the shadow check already prevents
+bad rebuilds after false alarms.
+
+Results (post-shift hit % / served retention; ESCI | SPACEV Zipf 0.6):
+| config | eps 0 (pre-shift hit) | eps 0.1 | eps 0.7 | eps 1.0 |
+|---|---|---|---|---|
+| no detection | 54.8 / .909 | 49.7 / .910 | 19.7 / .905 (29% windows < T) | 4.8 / .857 (50% < T) |
+| strict, reset | 54.7 | 48.2 / .911 | 18.4 / .914 | 3.1 / .910 |
+| strict, reset, rebuild | 54.7 | 48.2 / .911 | 20.6 / .913 | 17.6 / .912 |
+| strict, grace 2 | 54.7 | 49.2 / .912 | 18.9 / .912 | 3.6 / .883 |
+| loose 1%, reset | 54.1 | 47.6 | 18.2 | 3.0 / .910 |
+| loose 5%, reset | 52.1 | 46.1 | 17.6 | 2.8 / .912 |
+| loose 20%, reset | 46.6 | 41.8 | 15.8 | 2.3 / .914 |
+| loose 5%, grace 2 | 54.2 | 48.7 | 18.6 | 3.4 / .888 |
+| loose 20%, grace 2 | 53.2 | 47.6 | 18.0 | 3.2 / .893 |
+SPACEV: no detection eps = 1: .906 mean but 32% of windows < T; strict +
+reset + rebuild: eps = 1 hit 2.6 -> 7.0%, eps = 0.7 8.1 -> 10.5%,
+retention >= .921 everywhere; loose 5% / 20% reset: pre-shift hit 21.1 ->
+19.6 / 17.8; grace keeps retention >= T on SPACEV (deficits are smaller).
+Findings:
+1. Detection is needed (no detection: ESCI eps = 1 retention 0.857).
+2. Strict detection + reset + shadow rebuild is safe at every eps and
+   recovers hits after large shifts; the shadow check rebuilt nothing after
+   needless alarms.
+3. Tolerating false alarms brings nothing for workload shifts: the strict
+   score test already catches harmful ones within a batch, so loose levels
+   only add needless resets (each costs ~1 point of hit rate over a 60k-
+   query run: ESCI 0.7 / 2.5 / 8.2 alarms -> 0.7 / 2.7 / 8.2 points).
+4. Grace makes needless alarms almost free (loose 20%: 46.6 -> 53.2) but
+   breaks the guarantee on severe shifts (ESCI eps = 1: 0.883-0.893), as it
+   must: it serves at an unverified lambda. Not acceptable for a method
+   whose point is the guarantee.
+5. Boost: negligible effect (rows omitted above).
+Where a loose retention test could still pay: changes the score test cannot
+see (data drift: retention drops while scores stay), where it is the only
+detector; to test with the data-change workloads.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
