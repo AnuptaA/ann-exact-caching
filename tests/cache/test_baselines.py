@@ -5,6 +5,7 @@ import argparse
 
 
 import numpy as np
+import pytest
 
 from utils.cache import baselines as ob
 
@@ -69,3 +70,65 @@ def test_qvcache_threshold_learning_and_mini_eviction():
         qv._insert(q, 10 + q)
     assert qv.n_cached() <= 20 and qv.n_cached() == int((qv.ref > 0).sum())
     assert any(e["event"] == "evict_mini" for e in qv.events)
+
+
+def _consistent(b):
+    cached = b.ref > 0
+    assert b.n_c == int(cached.sum()) and (b.ref >= 0).all()
+
+
+def test_qvcache_every_insert_leaves_its_own_topk_fully_cached():
+    D = _data(n_db=300, n_q=40)
+    qv = ob.QVCache(D, np.arange(40), _args(budget=40 / 300, qv_mini=2))   # 2 minis of 20, k = 5
+    evictions = 0
+    for t, q in enumerate(range(40)):
+        qv._insert(q, t)
+        ids = D["top"][q, :5]
+        assert (qv.ref[ids] > 0).all(), f"insert {q} left part of its top-k uncached"
+        _consistent(qv)
+        assert (qv.owner[ids] >= 0).all()
+        assert qv.n_c <= qv.M + 5                           # bounded by the budget (plus one entry)
+        for m, members in enumerate(qv.mini):
+            assert all(qv.owner[v] == m for v in members) and qv.size[m] == len(members)
+        evictions = sum(e["event"] == "evict_mini" for e in qv.events)
+    assert evictions > 0
+
+
+def test_qvcache_single_mini_index_and_too_small_budget():
+    D = _data(n_db=300, n_q=40)
+    qv = ob.QVCache(D, np.arange(40), _args(budget=12 / 300, qv_mini=1))
+    for t, q in enumerate(range(30)):
+        qv._insert(q, t)
+        assert (qv.ref[D["top"][q, :5]] > 0).all()
+        _consistent(qv)
+    with pytest.raises(ValueError, match="cannot hold one entry"):
+        ob.QVCache(D, np.arange(40), _args(budget=20 / 300, qv_mini=8))      # 2.5 < k = 5
+    with pytest.raises(ValueError, match="cannot hold one entry"):
+        ob.Aker(D, np.arange(40), _args(budget=3 / 300))
+    with pytest.raises(ValueError, match="warm-up"):
+        ob.QVCache(D, np.arange(40), _args(warmup=1))
+
+
+def test_aker_eviction_never_leaves_dangling_aliases_or_counts():
+    D = _data(n_db=300, n_q=40)
+    D["q"][1] = D["q"][0] + 1e-6                             # near-duplicates become aliases
+    D["q"][3] = D["q"][2] + 1e-6
+    ak = ob.Aker(D, np.arange(40), _args(budget=12 / 300))   # room for about two entries
+    for rnd in range(3):
+        ak.batch(np.arange(40), 0)
+        _consistent(ak)
+        assert all(rep in ak.reps for rep in ak.alias.values())
+        assert set(ak.children) <= set(ak.reps)
+        assert set(ak.fifo) >= set(ak.reps)
+        assert ak.n_cached() <= ak.M + 5
+
+
+def test_baselines_handle_repeated_queries_in_one_batch():
+    D = _data(n_db=300, n_q=40)
+    stream = np.tile(np.arange(8), 6)
+    for cls in (ob.Aker, ob.QVCache):
+        b = cls(D, stream, _args(budget=60 / 300, batch=12, warmup=10))
+        out = b.run()
+        _consistent(b)
+        assert sum(r["served"] for r in out["log"]) <= len(stream)
+

@@ -45,6 +45,8 @@ class Base:
         self.D, self.stream, self.a = D, stream, args
         self.k = args.k
         self.M = args.budget * len(D["db"])
+        if self.M < self.k:
+            raise ValueError(f"budget of {self.M:g} vectors cannot hold one entry of k={self.k}")
         self.ref = np.zeros(len(D["db"]), dtype=np.int32)
         self.log, self.events = [], []
         self.cost = {"topk": 0, "topR": 0}
@@ -152,7 +154,12 @@ class QVCache(Base):
     def __init__(self, D, stream, args):
         super().__init__(D, stream, args)
         self.n_mini = args.qv_mini
+        if self.n_mini < 1 or args.qv_dims < 1 or args.qv_buckets < 1 or args.warmup < 2:
+            raise ValueError("need qv_mini, qv_dims, qv_buckets >= 1 and at least 2 warm-up queries")
         self.cap = self.M / self.n_mini
+        if self.cap < self.k:
+            raise ValueError(f"a mini-index of {self.cap:g} vectors cannot hold one entry of "
+                             f"k={self.k}; lower qv_mini or raise the budget")
         self.mini = [[] for _ in range(self.n_mini)]   # vector ids per mini-index
         self.size = [0] * self.n_mini
         self.last_used = [0] * self.n_mini
@@ -188,9 +195,11 @@ class QVCache(Base):
 
     def _insert(self, q, t):
         ids = self.D["top"][q, :self.k]
-        new = ids[self.ref[ids] == 0]
-        if self.size[self.fill] + len(new) > self.cap:
+        if self.size[self.fill] + int((self.ref[ids] == 0).sum()) > self.cap:
             self.fill = self._next_fill(t)
+        # recomputed after a possible eviction: vectors that lived in the evicted
+        # mini-index are uncached now and must be inserted with the new entry
+        new = ids[self.ref[ids] == 0]
         self._acquire(new)
         self.owner[new] = self.fill
         self.mini[self.fill].extend(new.tolist())
