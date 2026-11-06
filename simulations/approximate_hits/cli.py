@@ -19,6 +19,8 @@ GROUPS = {
                  "greedy cache population on a workload (sift, esci, synthetic, trace)"),
     "eval": ("simulations.approximate_hits.eval",
              "evaluate admission models and baselines on a saved run"),
+    "online": ("simulations.approximate_hits.online",
+               "online simulator: prepare, run, summary"),
 }
 
 

@@ -66,7 +66,6 @@ vectors fetched into the cache or sample. Writes <out>/<method>.json.
 """
 
 import json
-import argparse
 import logging
 from pathlib import Path
 
@@ -74,7 +73,6 @@ from pathlib import Path
 import numpy as np
 
 from simulations.approximate_hits.common import config_of
-from utils.base.logs import setup_logging
 
 from utils.cache.models import fit_logistic
 from utils.cache.cache import Cache
@@ -316,7 +314,7 @@ class Sim:
                 logger.info(f"{method} t={t}: served {done['served'] / done['n']:.3f} "
                             f"ret {done['served_retention_sum'] / max(done['served'], 1):.3f} "
                             f"lambda {self.lam} entries {len(cache.entries)} mem {done['memory']:.0f}")
-        return {"method": method, "args": vars(a), "log": self.log, "events": self.events,
+        return {"method": method, "args": config_of(a), "log": self.log, "events": self.events,
                 "cost": dict(self.cost, vectors_fetched=cache.vectors_fetched,
                              warmup_topR=a.warmup)}
 
@@ -333,9 +331,7 @@ def load(prep, args):
     return {"db": db, "q": q, "top": top, "draw": draw}, streams
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def add_args(ap):
     ap.add_argument("--prep", type=str, default="simulations/approximate_hits/results/online/esci1m")
     ap.add_argument("--method", choices=["static", "periodic", "triggered", "lru", "aker",
                                          "qvcache"], required=True)
@@ -390,7 +386,10 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-queries", type=int, default=None, help="truncate the stream")
     ap.add_argument("--out", type=str, default=None)
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     D, streams = load(args.prep, args)
     stream = streams[args.stream][:args.max_queries]
     out = Path(args.out or Path(args.prep) / f"sim_{args.stream}_b{args.budget:g}")
@@ -407,7 +406,3 @@ def main():
     name = f"{args.method}{args.tag}.json"
     (out / name).write_text(json.dumps(res))
     logger.info(f"wrote {out / name}")
-
-
-if __name__ == "__main__":
-    main()

@@ -14,14 +14,12 @@ Writes into --out:
                   phase   0 / 1 per position of the shift stream
 """
 
-import argparse
 import logging
 from pathlib import Path
 
 
 import numpy as np
 
-from utils.base.logs import setup_logging
 
 from utils.base.knn import exact_topk
 
@@ -52,18 +50,19 @@ def shift_stream(labels, group, rng):
     return order, phase
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def add_args(ap):
     ap.add_argument("--out", type=str, default="simulations/approximate_hits/results/online/esci1m")
     ap.add_argument("--n-db", type=int, default=1000000)
     ap.add_argument("--esci-dir", type=str, default="datasets/esci/data_vectors")
     ap.add_argument("--R", type=int, default=500)
     ap.add_argument("--n-clusters", type=int, default=20)
     ap.add_argument("--seed", type=int, default=42)
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     if args.n_clusters < 2:
-        ap.error("--n-clusters must be at least 2 (the shift stream needs two groups)")
+        raise SystemExit("--n-clusters must be at least 2 (the shift stream needs two groups)")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(args.seed)
@@ -88,7 +87,3 @@ def main():
         ids = exact_topk(q, db, args.R).astype(np.int32)
         np.save(out / f"top{args.R}.npy", ids)
     logger.info(f"wrote {out}")
-
-
-if __name__ == "__main__":
-    main()

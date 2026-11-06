@@ -10,9 +10,7 @@ window, backend work, rebuilds and alarms.
   python online_summary.py DIR [DIR ...] [--window 5000]
 """
 
-import sys
 import json
-import argparse
 from pathlib import Path
 
 ORDER = ["static", "periodic", "lru", "aker", "qvcache", "triggered"]
@@ -64,11 +62,13 @@ def _mean(rows, key):
     return sum(vals) / len(vals) if vals else None
 
 
-def main():
-    ap = argparse.ArgumentParser()
+def add_args(ap):
     ap.add_argument("dirs", nargs="+")
     ap.add_argument("--window", type=int, default=5000)
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     names = sorted({p.stem for d in args.dirs for p in Path(d).glob("*.json")},
                    key=lambda n: (next((i for i, m in enumerate(ORDER) if n.startswith(m)), 9), n))
     f = lambda v: "  -- " if v is None else f"{v:.3f}"
@@ -84,7 +84,3 @@ def main():
               f"{f(g('B_hit'))} {f(g('B_ret'))} | {g('below'):3.1f}/{g('n_win'):2.0f} "
               f"{f(g('worst'))} | {g('topk'):6.0f} {g('topR'):6.0f} {g('fetched'):8.0f} | "
               f"{g('rebuilds'):8.1f} {g('alarms'):6.1f}")
-
-
-if __name__ == "__main__":
-    sys.exit(main())

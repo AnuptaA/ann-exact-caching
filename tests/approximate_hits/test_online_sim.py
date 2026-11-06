@@ -7,8 +7,8 @@ import argparse
 import numpy as np
 import pytest
 
-from simulations.approximate_hits import online_prepare as op
-from simulations.approximate_hits import online_sim as osim
+from simulations.approximate_hits.online import prepare as op
+from simulations.approximate_hits.online import sim as osim
 
 
 def _data(n_db=400, n_q=30, d=4, R=60, seed=0):

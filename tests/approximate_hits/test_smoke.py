@@ -174,3 +174,32 @@ def test_every_command_group_has_help():
         with pytest.raises(SystemExit) as e:
             cli.main([group, "--help"])
         assert e.value.code == 0
+
+
+def test_online_prepare_run_and_summary(tmp_path):
+    rng = np.random.default_rng(3)
+    centers = rng.standard_normal((4, 6)) * 3
+    np.save(tmp_path / "esci_db300_s42.npy",
+            (centers[rng.integers(0, 4, 300)] + rng.standard_normal((300, 6))).astype(np.float32))
+    np.save(tmp_path / "esci_queries.npy",
+            (centers[rng.integers(0, 4, 500)] + rng.standard_normal((500, 6))).astype(np.float32))
+    prep = tmp_path / "prep"
+    cli.main(["online", "prepare", "--esci-dir", str(tmp_path), "--n-db", "300", "--R", "60",
+              "--n-clusters", "3", "--out", str(prep)])
+    assert (prep / "top60.npy").exists() and (prep / "streams.npz").exists()
+    out = tmp_path / "sim"
+    for method in ("static", "periodic", "triggered", "lru", "aker", "qvcache"):
+        cli.main(["online", "run", "--esci-dir", str(tmp_path), "--prep", str(prep), "--out", str(out),
+                  "--n-db", "300", "--method", method, "--k", "5", "--R", "60", "--budget", "0.2",
+                  "--batch", "40", "--warmup", "100", "--window", "300", "--n-cal", "60",
+                  "--epoch", "100", "--min-window", "100", "--check-every", "100", "--k-lru", "20",
+                  "--drift-window", "30", "--drift-queries", "80", "--c-max", "50", "--s-max", "300",
+                  "--qv-dims", "4", "--qv-buckets", "4"])
+        assert json.loads((out / f"{method}.json").read_text())["log"]
+    cli.main(["online", "summary", str(out)])
+
+
+def test_online_prepare_rejects_a_single_cluster(tmp_path):
+    with pytest.raises(SystemExit):
+        cli.main(["online", "prepare", "--esci-dir", str(tmp_path), "--n-clusters", "1",
+                  "--out", str(tmp_path / "x")])
