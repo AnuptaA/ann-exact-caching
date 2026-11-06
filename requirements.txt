@@ -1,9 +1,14 @@
-pandas
 numpy
 scipy
-matplotlib
 scikit-learn
-statsmodels
+matplotlib
 tqdm
-seaborn
 pytest
+
+# datasets/esci/build_embedding_subsample.py (ESCI embedding build only)
+pandas
+torch
+sentence-transformers
+
+# simulations/approximate_hits/eval_focused.py only
+lightgbm

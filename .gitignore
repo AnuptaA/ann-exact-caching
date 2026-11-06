@@ -213,9 +213,6 @@ datasets/sift/*.bvecs
 datasets/sift/benchmark/
 datasets/sift/sift*
 
-# Synthetic datasets
-datasets/synthetic/data/
-
 # ESCI datasets
 datasets/esci/data_vectors/
 datasets/esci/*.npy
@@ -239,35 +236,11 @@ simulations/radius_estimation/results/
 simulations/radius_estimation/results_sift/
 simulations/radius_estimation/results_sift1m/
 
-# Simulation outputs
-simulations/esci/raw/
-simulations/esci/processed/
-simulations/esci/embedding_space/
-simulations/sift/raw/
-simulations/sift/processed/
-simulations/synthetic/raw/
-simulations/synthetic/processed/
-simulations/characterization/
-simulations/results/
-simulations/debug/
-simulations/population_proposal_sigma/
-simulations/**/reports/
-simulations/**/profiles/
-
 # Local editor settings
 .claude/settings.local.json
-.claude/CLAUDE.md
-
-# old docs
-docs/old/
-
-# Weekly-branch experiment outputs (regenerable from each branch's own scripts;
-# never tracked historically, formalized here so it stops showing as untracked clutter)
-weekly/*/results/
-weekly/*/plots/
-weekly/*/pdf/
 
 # .DS_Store
 **/.DS_Store
+
 # Aker (Oh et al., PVLDB 2026) workloads and SPACEV1B query files
 datasets/aker/
