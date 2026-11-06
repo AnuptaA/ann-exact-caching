@@ -1056,6 +1056,105 @@ Memory note: SPACEV LRU runs peak at up to 9 GB (not 5.7); with 56
 parallel jobs available memory fell to ~12 GB, so round 2 was reduced to
 48 slots (SIGUSR2 to GNU xargs) and the multishift round to 44.
 
+## 5u. Round 2, multishift and invariance results
+
+Round 2 (784 runs) and multishift (448) finished, no failures. Ours / LRU:
+mean of seeds 0, 1; Aker / QVCache: best setting meeting T on seed 0 (not
+yet re-run on fresh seeds). Hit rate % / mean served retention / 5000-query
+windows below T. Full tables: `online_round2_summary.py [prep:stream ...]`
+and `online_summary.py --phases`.
+
+Single shift (ESCI 1M shift; SPACEV Zipf 0.6 shift):
+| method | ESCI hit / ret / below | after shift hit / ret | SPACEV 0.6 shift |
+|---|---|---|---|
+| static | 29.0 / 0.880 / 14 of 23 | 10.7 / 0.788 | 9.8 / 0.897 / 10.5 of 16 |
+| sliding recal, no test | 24.7 / 0.906 / 4 | 4.0 / 0.886 | 8.1 / 0.926 / 2 |
+| score test, recal | 24.0 / 0.910 / 0.5 | 2.8 / 0.924 | 8.1 / 0.927 / 1 |
+| score test, rebuild | 35.3 / 0.910 / 0.5 | 21.8 / 0.913 | 16.5 / 0.925 / 0 |
+| same, oracle calibration | 38.6 / 0.906 / 3 | 26.8 / 0.908 | 17.8 / 0.910 / 0.5 |
+| LRU K = 20, all tests | 29.3 / 0.912 / 0 | 17.0 / 0.917 | 17.3 / 0.918 / 0 |
+| Aker best | 0.4 | | 8.9 |
+| QVCache best | 1.0 (10 of 23 below) | | 6.9 (4 below) |
+- Score, hit-rate and all-tests configurations are identical (the full
+  shift fires every label-free test in the same batch). The retention test
+  NEVER fires, even alone, although retention after the shift is 0.886:
+  Hoeffding on <= 500 audited hits at level delta / (j (j + 1)) has a
+  width of ~0.1, and audited hits are scarce after a shift (~4 per batch),
+  so it can only catch large violations. Not useful for small deficits.
+- Without a test, sliding recalibration alone violates after the shift
+  (stale pairs stay in the 20k-query span).
+- Rebuild is the main hit-rate lever after a shift (ESCI 2.8 -> 21.8%).
+- Oracle calibration gains ~3 points: the calibration margin.
+- Stationary streams (ESCI random, Zipf traces): no alarms in any of our
+  configurations (no false alarms), all identical; static ~ greedy.
+Stationary and trace workloads (hit %):
+| workload | ours (greedy, any) | best LRU (K) | Aker | QVCache |
+|---|---|---|---|---|
+| ESCI random | 30.5 | 25.3 (10) | 0.2 | 0.7 |
+| Zipf 0.3 trace | 4.1 | 4.3 (20) | none meet T | 0.7 |
+| Zipf 0.6 trace | 13.0 | 11.2 (20) | 5.7 | 3.3 |
+| Zipf 0.99 trace | 50.6 | 47.3 (20) | 35.8 (4 of 16 below) | 40.5 (5 below) |
+| spacev-real trace | 4.4 | 3.1 (10) | 4.0 (10 of 21 below) | 3.4 |
+After the eviction fix LRU is competitive on SPACEV (beats ours on the
+Zipf 0.6 shift, 17.3-18.1 vs 16.5; ties on Zipf 0.3), and loses on ESCI.
+
+Multishift (phases: start, mild, full, return; hit % / retention):
+| ESCI | start | mild | full | return |
+|---|---|---|---|---|
+| static | 46.0 / 0.911 | 39.8 / 0.910 | 6.9 / 0.814 | 45.6 / 0.908 |
+| no test | 45.1 / 0.915 | 40.3 / 0.907 | 3.4 / 0.860 | 41.3 / 0.921 |
+| score, recal | 45.1 | 38.5 / 0.909 | 1.7 / 0.917 | 42.0 / 0.912 |
+| score, rebuild | 45.1 | 37.8 / 0.914 | 25.3 / 0.915 | 29.1 / 0.911 |
+| LRU K = 20, no test | 43.0 | 37.4 | 26.5 / 0.906 | 32.9 |
+| LRU K = 20, all | 33.0 | 35.4 | 24.6 | 30.9 |
+(SPACEV Zipf 0.6 / 0.99 return phase: score + rebuild 6.7 / 40.7 vs recal
+only 14.0 / 54.0.)
+- Detection delay: score test ~1000 queries (one or two batches) for the
+  mild shift on all four workloads, ~450-1100 for full and return; the
+  hit-rate test is slower on the mild shift (2000-3000) and missed it on
+  Zipf 0.3; the retention test never fires.
+- The mild shift does not break the guarantee even with no test (0.907),
+  so its alarm only costs hits (reset).
+- REBUILD HURTS ON THE RETURN: the start cache (built from 20k fully
+  labeled warm-up queries) was replaced in the full phase; on the return
+  the post-alarm rebuilds build from a short window of mostly misses, and
+  the shadow check compares against the current (full-phase) cache, which
+  is bad for the start mix, so a weak rebuild passes. Fixes to consider:
+  keep earlier caches (entry lists) as candidates in the shadow check,
+  later checks with a larger window, building quality.
+- LRU with tests raises a false alarm right after warm-up (an evolving
+  cache changes the score distribution), costing ~10 points in phase 0.
+
+Invariance (step 1; 18 states, k = 10 / 50; frozen = base state's lambda):
+- Ranking transfers everywhere: the base model with a recalibrated lambda
+  is within ~1 point of a natively fit model on every state and variant.
+- k: ratio7 makes the frozen lambda transfer across k (k = 50 at base:
+  18.7% / 0.905 vs base7 12.3% / 0.960).
+- p: NO variant is p-invariant. Frozen lambda at p = 0.1: retention 0.813
+  (base7), 0.806 (est7), 0.824 (ratio7); p = 1.0: too strict. Reason:
+  count / p has the right mean but its noise grows as p shrinks (at
+  p = 0.1 most neighborhoods sample 0 intruders), so the evidence of a 0
+  differs by p; a fixed transform cannot fix that. Needs p as an input
+  (pooled over p) or an estimate that accounts for the uncertainty.
+- R = 200 (thinner shells): ratio7 frozen 0.876 (base7 0.903); the coverage
+  feature (cov8) changed nothing (the base state rarely has uncovered
+  neighborhoods, so the model learns no use for it). K mixes: 0.876-0.881.
+- 2 bits: frozen retention ~0.72 for every variant (quantization changes
+  the inside test); 8 bits fine.
+- So per-state recalibration stays necessary (cheap online; done after every
+  rebuild, where p changes); an invariant score is a nice-to-have (frozen
+  or pooled lambda).
+
+Data-change prep (step 2): churn: 65% of queries have >= 1 held-out vector
+in their final true top-10 (expected 1 - 0.9^10), 0.14% have >= 5; no query
+below 500 present ranks. Drift (6 database clusters, 10.3% of the database,
+query share 0.8-1.8% each vs database share 1.2-2.4%): 21% of queries have
+>= 1 held-out vector in their top-10, 5.7% have >= 5. PROBLEM: at the start
+3.1% of queries have < 500 present ranks in the union top-1000 (minimum 0:
+their whole top-1000 is in held-out clusters), so their truth before the
+inserts is unknown. Fix in step 3: for those queries also rank the initial
+database (top-1000 over initially present vectors) and merge.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
