@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize online_sim.py results.
+"""Summarize online run results.
 
 One row per result file name (<method><tag>.json), averaged over all given
 directories (e.g. one per seed): hit rate and mean retention over served
@@ -7,7 +7,7 @@ queries after warm-up (overall and per workload phase), share of
 --window-query windows whose served retention is below T and the worst such
 window, backend work, rebuilds and alarms.
 
-  python online_summary.py DIR [DIR ...] [--window 5000]
+  python online summary DIR [DIR ...] [--window 5000]
 """
 
 import json

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """
-Simple models vs the GBT on the two feature families (eval_core features:
+Simple models vs the GBT on the two feature families (eval core features:
 per-ball stats for the 3 best-fitting balls; shell sample with --p, --R, --b).
 
 Scores (each turned into admissions by the same calibrated cutoff):
-  gbt           gradient-boosted trees (as in eval_core)
+  gbt           gradient-boosted trees (as in eval core)
   gbt_shallow   depth-2 trees with monotone constraints (worse fit / more
                 sampled points nearby -> lower score)
   linear        ridge regression on standardized features

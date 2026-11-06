@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """
-Inputs for the online simulator (online_sim.py), ESCI 1M, fixed database.
+Inputs for the online simulator (online run), ESCI 1M, fixed database.
 
 Writes into --out:
   top500.npy    exact top-R database ids for every ESCI query (ground truth

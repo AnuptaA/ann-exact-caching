@@ -2,6 +2,7 @@ VENV = venv
 PYTHON = $(VENV)/bin/python
 PY = PYTHONPATH=. $(PYTHON)
 AH = simulations/approximate_hits
+CLI = $(PY) -m simulations.approximate_hits
 
 # Run directory used by the evaluation targets (written by populate-*).
 RUN ?= $(AH)/results/esci_score20k
@@ -41,36 +42,36 @@ esci-prepare:
 # -- Populate and evaluate --------------------------------------------------
 
 populate-esci:
-	$(PY) -m simulations.approximate_hits populate esci --out $(RUN)
+	$(CLI) populate esci --out $(RUN)
 
 populate-sift:
-	$(PY) -m simulations.approximate_hits populate sift --out $(RUN)
+	$(CLI) populate sift --out $(RUN)
 
 eval-core:
-	$(PY) $(AH)/eval_core.py $(RUN)
+	$(CLI) eval core $(RUN)
 
 eval-final:
-	$(PY) $(AH)/eval_final.py $(RUN)
+	$(CLI) eval final $(RUN)
 
 eval-shell:
-	$(PY) $(AH)/eval_simple.py $(RUN)
-	$(PY) $(AH)/eval_shell_ablation.py $(RUN)
+	$(CLI) eval simple $(RUN)
+	$(CLI) eval shell-ablation $(RUN)
 
 # -- Online simulation ------------------------------------------------------
 
 online-prepare:
-	$(PY) $(AH)/online_prepare.py
+	$(CLI) online prepare
 
 online-run:
-	$(PY) $(AH)/online_sim.py --method $(METHOD) --stream $(STREAM)
+	$(CLI) online run --method $(METHOD) --stream $(STREAM)
 
 online-summary:
-	$(PY) $(AH)/online_summary.py $(AH)/results/online/esci1m/sim_$(STREAM)_b0.1
+	$(CLI) online summary $(AH)/results/online/esci1m/sim_$(STREAM)_b0.1
 
 # -- Figures ----------------------------------------------------------------
 
 figures:
-	$(PY) $(AH)/make_summary_figures.py
+	$(CLI) report figures
 
 # -- Tests ------------------------------------------------------------------
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for threshold-selection procedures in eval_calibration_methods."""
+"""Tests for threshold-selection procedures in eval calibration."""
 
 
 import numpy as np

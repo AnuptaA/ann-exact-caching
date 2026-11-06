@@ -3,7 +3,7 @@
 """
 Online simulator, milestone 1 (fixed database, fixed k, workload streams).
 
-Inputs from online_prepare.py: exact top-R database ids of every query (the
+Inputs from online prepare: exact top-R database ids of every query (the
 backend's answers and the ground truth), query streams (random order, or an
 abrupt workload shift between two groups of query clusters).
 

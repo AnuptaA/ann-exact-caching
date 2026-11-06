@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the Aker hit-rule replay in eval_aker_thresholds."""
+"""Tests for the Aker hit-rule replay in eval aker."""
 
 
 import numpy as np

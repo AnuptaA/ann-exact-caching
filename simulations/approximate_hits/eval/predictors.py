@@ -9,7 +9,7 @@ Query splits (all fresh, disjoint from cache selection):
   cal   calibration: choose lambda (normal approximation + fixed order)
   test  final report only
 
-Features: the 12 base features of eval_calibrated.py plus
+Features: the 12 base features of eval calibrated plus
   log(D_r / D_k) for r = ceil(k/4), ceil(k/2), ceil(3k/4)
   fraction of returned vectors lying in a ball that contains q
   log(d(q, nearest entry) / D_k)

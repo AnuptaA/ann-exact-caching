@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for eval_core: balls, ball features, shell sample, quantization."""
+"""Tests for eval core: balls, ball features, shell sample, quantization."""
 
 
 import numpy as np

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for helpers in eval_generalize."""
+"""Tests for helpers in eval generalize."""
 
 
 import numpy as np

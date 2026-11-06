@@ -3,7 +3,7 @@
 """
 Does the 7-feature logistic model generalize across cache states and k?
 
-Features (eval_core): relative offset and relative size for the 3 best-fitting
+Features (eval core): relative offset and relative size for the 3 best-fitting
 balls, plus the intruder count (sampled shell points inside the neighborhood;
 shell p = 25%, ranks up to 500, 4-bit). Neighborhood radius = distance to the
 k-th closest cached vector, so the features are defined for any k.
@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 
 from simulations.approximate_hits.common import config_of
-from utils.cache.metrics import nearest_point, result_for_target
+from utils.cache.metrics import admit as metrics_admit, nearest_point, result_for_target
 
 from utils.base.knn import pairwise_dist
 from utils.cache.entries import perturbed
@@ -93,10 +93,8 @@ def choose_lambda(score, fit_X, cal_X, cal_y, target):
 
 
 def admit(score, lam, X, y):
-    s = score(X)
-    adm = s >= lam if lam is not None else np.zeros(len(s), dtype=bool)
-    return {"hit_rate": float(adm.mean()),
-            "hit_retention": float(y[adm].mean()) if adm.any() else None}
+    hit_rate, hit_retention = metrics_admit(lam, score(X), y)
+    return {"hit_rate": hit_rate, "hit_retention": hit_retention}
 
 
 def _stack(parts, extra=None):

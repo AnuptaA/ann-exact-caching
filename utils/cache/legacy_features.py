@@ -59,7 +59,7 @@ def features(run, qvecs, st):
 
 
 def full_features(run, qvecs, st, cache_frac):
-    """Base features (as eval_calibrated.features), extended features, j*."""
+    """Base features (as eval calibrated.features), extended features, j*."""
     k = run.k
     n = len(qvecs)
     base = features(run, qvecs, st)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for helpers in eval_final."""
+"""Tests for helpers in eval final."""
 
 
 import numpy as np

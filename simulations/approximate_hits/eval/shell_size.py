@@ -4,7 +4,7 @@
 Larger shell samples, and how many calibration queries lambda needs.
 
 Per cache checkpoint of one saved run (greedy cache for --target), the
-7-feature logistic model (3 balls + intruder count, eval_final) with shell
+7-feature logistic model (3 balls + intruder count, eval final) with shell
 samples at every (p, R) in --ps x --Rs (R > 500 uses exact top-R neighbor
 lists of the candidate queries, computed once and saved):
   test hit rate, realized retention, sample memory

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the analytic scores in eval_simple."""
+"""Tests for the analytic scores in eval simple."""
 
 
 import numpy as np

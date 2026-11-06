@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """
-Which shell-sample features matter? Logistic regression (eval_simple) on the
-3-ball stats plus subsets of the 8 shell features (eval_core.shell_features):
+Which shell-sample features matter? Logistic regression (eval simple) on the
+3-ball stats plus subsets of the 8 shell features (eval core.shell_features):
   d1..d5     distances to the 5 nearest sampled points / neighborhood radius
   n1.0       sampled points within 1.0 x neighborhood radius (seen intruders)
   n1.1       ... within 1.1 x

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """
-Prior approximate vector caches for the online simulator (online_sim.py).
+Prior approximate vector caches for the online simulator (online run).
 
 Both start empty and process the warm-up queries like any others (misses
 fill the cache); metrics are logged after warm-up, costs from the start.

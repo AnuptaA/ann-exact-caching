@@ -3,7 +3,7 @@
 """
 The 7-feature model on one saved run, at every cache checkpoint.
 
-Model: logistic regression (eval_simple.logistic_scores) on relative offset
+Model: logistic regression (eval simple.logistic_scores) on relative offset
 and relative size for the 3 best-fitting balls plus the intruder count
 (sampled shell points inside the neighborhood; shell p, ranks up to R, b
 bits). Baseline: the same model on the 6 ball features only (no sample).

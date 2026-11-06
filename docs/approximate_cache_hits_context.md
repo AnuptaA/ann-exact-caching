@@ -185,8 +185,8 @@ Results in `simulations/approximate_hits/results/<run>/`; print tables with
 
 ## 5e. Provable retention lower bounds (certificates) on oracle-selected caches
 
-Code: `simulations/approximate_hits/eval_certificates.py` (writes
-`certificates.json` per run), `plot_certificates.py`. Certificates: exact CIG
+Code: `simulations/approximate_hits/eval certificates` (writes
+`certificates.json` per run), `report certificates`. Certificates: exact CIG
 (union), A1 partial CIG, A3 neighbor-distance profile (next M neighbor
 distances + ids per entry; intruders bounded via the ball of radius D_k + d
 around Q). Admission uses the lower bound in place of true retention. Zero
@@ -206,8 +206,8 @@ sampling) are the more promising route.
 
 ## 5f. Calibrated admission (B5) on the same oracle-selected caches
 
-Code: `simulations/approximate_hits/eval_calibrated.py` (writes
-`calibrated.json`), `plot_calibrated.py`. Ridge predictor on 12 cache-only
+Code: `simulations/approximate_hits/eval calibrated` (writes
+`calibrated.json`), `report calibrated`. Ridge predictor on 12 cache-only
 features (+ squares) fit on 20k fresh FIT queries; admit iff score >= lambda,
 lambda chosen on 20k fresh CALIBRATION queries via an empirical-Bernstein LCB
 >= T, Bonferroni over a 101-point grid of FIT-score quantiles, delta = 0.05.
@@ -231,8 +231,8 @@ Results (test hit rate at 1% / 10% / 30% cache):
 
 ## 5g. Comparing threshold-selection procedures (repeated trials)
 
-Code: `simulations/approximate_hits/eval_calibration_methods.py` (writes
-`calibration_methods.json`), `summarize_calibration_methods.py`; tests in
+Code: `simulations/approximate_hits/eval calibration` (writes
+`calibration_methods.json`), `report calibration`; tests in
 `tests/approximate_hits/test_calibration_methods.py`. Per run: 8 cache
 states (T in {0.9, 0.95} x ~1/5/10/30% cache), 200 trials each; each trial
 draws 20k calibration queries from a large fresh pool (ESCI: ~75k unused
@@ -259,7 +259,7 @@ Results:
 - Remaining gap to the oracle is mostly predictor quality, not the bound.
 - Recommended: normal approximation + fixed-order testing.
 - Adopted as the default in `utils/cache/calibration.py` (shared by
-  `eval_calibrated.py` and `eval_calibration_methods.py`); `calibrated.json`
+  `eval calibrated` and `eval calibration`); `calibrated.json`
   files regenerated with it. ESCI T = 0.95 guaranteed hit rate at
   1 / 10 / 30% cache is now 5.9 / 14.6 / 31.4% (was 0 / 13.4 / 29.2%).
 
@@ -272,8 +272,8 @@ simZipf requests: 5k candidate + 20k scoring, 20k fit, 20k calibration or a
 
 ## 5h. Predictor improvements, k sweep, database-size sweep (in progress)
 
-Code: `eval_predictors.py` (fit/dev/cal/test splits; run with `.venv`
-python, needs scikit-learn), `summarize_predictors.py`, `summarize_trends.py`,
+Code: `eval predictors` (fit/dev/cal/test splits; run with `.venv`
+python, needs scikit-learn), `report predictors`, `report trends`,
 `run_eval_queue.py` (runs an eval script on runs as their greedy results
 appear). Runs: `results/batch_k_db/` (k = 1/50/100 at 50k; k = 10 at 200k),
 `results/batch_db1m/` (k = 10 at 1M; ESCI 1M embedding built locally).
@@ -352,8 +352,8 @@ comparable to ours.
 
 ## 5j. Aker's hit rule on our offline caches
 
-Code: `eval_aker_thresholds.py` (writes `aker_thresholds[_ceiling].json`),
-`summarize_aker_thresholds.py`. Same greedy caches (T = 0.9), only the hit rule
+Code: `eval aker` (writes `aker_thresholds[_ceiling].json`),
+`report aker`. Same greedy caches (T = 0.9), only the hit rule
 changes: Aker's per-entry tau (init minD / 4, x1.1 on equality hits, x0.25 on
 approximate hits, cap minD; aliases for repeated approximate-hit queries; one
 representative per cached query, nearest representative only). No insertion
@@ -384,9 +384,9 @@ holds only for the cache it was calibrated on.
 
 ## 5k. Does a calibrated threshold transfer across caches?
 
-Code: `eval_threshold_transfer.py` (writes `threshold_transfer.json`),
-`summarize_threshold_transfer.py` (add `--matrices` for per-run matrices).
-`eval_predictors.setup_run` was extracted so both scripts share features,
+Code: `eval transfer` (writes `threshold_transfer.json`),
+`report transfer` (add `--matrices` for per-run matrices).
+`eval predictors.setup_run` was extracted so both scripts share features,
 GBT and lambda selection. For one run, build a cache family: nested size
 checkpoints, caches selected for other targets, and the base cache with a
 fraction of entries replaced by random unselected candidates of the same K.
@@ -476,8 +476,8 @@ We now compare the oracle against models built only from:
   offset / ball radius, relative size = neighborhood radius / ball radius;
 - the shell sample (fraction p of the uncached vectors at ranks K+1..R around
   each ball, b-bit quantized).
-Scripts: `eval_core.py` (knobs n, p, R, b), `eval_simple.py` (model types),
-`eval_shell_ablation.py`; diagram `plot_feature_diagram.py`.
+Scripts: `eval core` (knobs n, p, R, b), `eval simple` (model types),
+`eval shell-ablation`; diagram `report feature-diagram`.
 
 ESCI 50k, k = 10, T = 0.9 (calibrated hit rate at 1 / 5 / 10 / 30% cache;
 oracle 12.4 / 22.3 / 30.9 / 63.9):
@@ -514,7 +514,7 @@ cache-population queries come from the same distribution (spacev-real shows
 shift breaks the guarantee); the cache is chosen offline with oracle
 knowledge; the oracle is "best admission for this cache", not a better cache.
 
-Generalization (`eval_generalize.py`, ESCI 50k, T = 0.9):
+Generalization (`eval generalize`, ESCI 50k, T = 0.9):
 - Across caches (sizes 1-30%, a T = 0.7 cache, 30% of entries replaced): a
   model fit on any one cache, with lambda recalibrated on the destination,
   is within ~1 point of the native model (worst: 1% -> 30%, 50.2 vs 55.7);
@@ -657,9 +657,9 @@ QVCache, in addition to static / periodic / LRU.
 
 ## 5p. Online milestone 1 results (ESCI 1M, k = 10, T = 0.9, budget 10%)
 
-Code: `online_prepare.py` (exact top-500 ground truth, query clusters,
-streams), `online_sim.py` (static / periodic / triggered / LRU; ablation
-switches), `utils/cache/baselines.py` (Aker, QVCache), `online_summary.py`.
+Code: `online prepare` (exact top-500 ground truth, query clusters,
+streams), `online run` (static / periodic / triggered / LRU; ablation
+switches), `utils/cache/baselines.py` (Aker, QVCache), `online summary`.
 Streams: random order (no shift) and an abrupt shift (20 k-means query
 clusters split into two halves of ~65k queries; half A then half B).
 Warm-up 20k queries, then batches of 1000; audits 10% (60% calibration role).
