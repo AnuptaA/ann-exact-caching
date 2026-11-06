@@ -1017,6 +1017,45 @@ churn / drift for ESCI (union top-1000 for 131k queries over 1M); (3)
 simulator support (presence mask, event processing, entry radii, label
 maintenance, tests); (4) runs, after the workload-shift rounds finish.
 
+### Step 1 (eval_invariance.py) and step 2 (online_prepare_data.py)
+
+User's points: the intruder count is the only non-ratio feature, so it
+should depend at least on k (a neighborhood holds k cached vectors, so
+more intruders are expected at larger k) and on p. p is not fixed online:
+set_p_to_fill runs at warm-up and after every rebuild while the model stays
+the warm-up fit (LRU keeps p fixed); offline p = 0.25 always. Ratio form:
+est = count / p estimates the uncached vectors inside the neighborhood, so
+k / (k + est) is a direct, crude retention estimate.
+
+Step 1, `eval_invariance.py` (ESCI 1M, online_sim.Cache, greedy cache
+built like the online warm-up from 4k candidate / 8k scoring queries; fit
+15k / cal 15k / test 30k queries shared by all states): 18 cache states
+varying one property each (f, forced p, budget, R, bits, K mix, another
+cache); variants base7 / est7 (log1p(count / p)) / ratio7 (k / (k + count /
+p)) / cov8 (ratio7 + shell coverage of the best ball); per (state, k):
+native vs base-model vs pooled-model hit rate at a recalibrated lambda, and
+hit / retention at the base state's frozen lambda. `--state NAME` writes
+results/invariance/NAME.npz, `--analyze` writes invariance.json.
+First result (base state only, one seed; T = 0.9): ranking is the same for
+all variants (recalibrated hit at k = 10 / 20 / 50: 31.6 / 26.8 / 19.4%,
+oracle 37.4 / 30.8 / 22.1%), but the k = 10 lambda reused at other k:
+base7 too strict (k = 50: 12.3% hits, retention 0.960); ratio7 transfers
+(k = 50: 18.7%, retention 0.905; k = 20: 25.6%, 0.908). So the ratio form
+makes the score's meaning k-invariant. Remaining 17 states running
+(`/tmp/run_inv.sh`, 2 at a time; flag results/invariance/INV_DONE).
+
+Step 2, `online_prepare_data.py --kind churn | drift` (ESCI 1M, 10% held
+out, gradual insert + delete schedule from the end of warm-up to the end of
+the stream, burst at 40000; union ranking topU1000.npy; drift: 50 database
+clusters, held-out clusters with query share >= 0.5 x database share;
+reports the share of queries whose true top-10 contains held-out vectors
+and the share with < 500 present ranks at start / end). Running
+(`/tmp/run_data_prep.sh`, flag esci1m/DATA_PREP_DONE).
+
+Memory note: SPACEV LRU runs peak at up to 9 GB (not 5.7); with 56
+parallel jobs available memory fell to ~12 GB, so round 2 was reduced to
+48 slots (SIGUSR2 to GNU xargs) and the multishift round to 44.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
@@ -1084,6 +1123,10 @@ Real SIFT (SIFT1M 50k base subsample, queries from the learn set, k = 10):
   footprint as a fraction of the budget B.
 - Fix the density-feature off-by-one and test it under queries that do not
   follow the data (e.g. Anupta's locality-constructed stages).
+- TODO (user, parked): a feature for the overlap between the top-n balls
+  (with many overlapping balls their union covers more than the best 3
+  show, so the model is too pessimistic there). Remind when asked for
+  undone TODOs.
 
 ## 8. Environment notes
 
