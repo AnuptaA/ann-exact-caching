@@ -579,7 +579,8 @@ def main():
                          "(greedy only; lru always recalibrates only)")
     ap.add_argument("--oracle-cal", action="store_true",
                     help="reference: every query is labeled for calibration at no cost")
-    ap.add_argument("--stream", choices=["random", "shift", "trace"], default="shift")
+    ap.add_argument("--stream", choices=["random", "shift", "trace", "multishift"],
+                    default="shift")
     ap.add_argument("--n-db", type=int, default=1000000)
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--target", type=float, default=0.9)
@@ -651,6 +652,9 @@ def main():
     if key in streams.files or (args.stream == "shift" and "phase" in streams.files):
         phase = streams[key] if key in streams.files else streams["phase"]
         res["phase_start"] = int(np.argmax(phase[:len(stream)] == 1))
+        # start position of every phase (multishift: phases 0..3)
+        ph = phase[:len(stream)]
+        res["phase_starts"] = [0] + (np.flatnonzero(np.diff(ph)) + 1).tolist()
     name = f"{args.method}{args.tag}.json"
     (out / name).write_text(json.dumps(res))
     logger.info(f"wrote {out / name}")

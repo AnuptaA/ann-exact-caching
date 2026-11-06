@@ -862,6 +862,45 @@ the baseline grids (Aker 18, QVCache 54); the best baseline settings are
 then re-run on fresh seeds so the reported numbers are not selected on the
 same run.
 
+## 5s. Multishift streams (several shifts of different sizes)
+
+Why: every earlier workload has one shift (ESCI / Zipf shift streams: half
+the clusters, then the other half; spacev-real: log, then official queries;
+Zipf traces and random streams: none). That shift is maximal, so every test
+catches it within a batch and the detector ablation cannot separate the
+tests; one shift also gives one detection / recovery / rebuild event per run.
+
+Stream `multishift` (`online_prepare.py --add-multishift`, written into
+streams.npz atomically; `multishift_stream`):
+- phase 0: warm-up (20k) + 5k stable queries, start mix = group A clusters
+  in proportion to their sizes (an alarm here is a false alarm);
+- phase 1, mild shift: 20% of queries from a few B clusters (new), and small
+  A clusters holding 12-16% of the start mix left out (target 20%; cluster
+  granularity), the kept A clusters in start proportions;
+- phase 2, full shift: B only;
+- phase 3, return: the start mix again (total-variation distance to phase 0
+  = 0.0001), tests a second reset and recovering an old cache.
+Exact per-cluster draw counts, each request used at most once (ESCI: each
+query once, random order; traces: original order within a phase). The
+clusters are split into A / B unevenly (A supplies phases 0, 1, 3) to
+maximize the equal length L of phases 1-3. Lengths: ESCI 25.0k / 30.6k x 3
+(116.7k of 130.7k queries used); Zipf 0.3 / 0.6 / 0.99 25.0k / 21.5-22.0k
+x 3. On SPACEV a phase is shorter than the last scheduled rebuild check
+(30k after an alarm), so only the 5k and 15k checks fall inside it.
+Not used: repeating ESCI queries to lengthen the stream (an exact repeat of
+a cached query is served perfectly, inflating hits); a second, milder level
+(10%) would need more queries than we have.
+
+Simulator: `--stream multishift`; results store `phase_starts`.
+`online_summary.py --phases DIR...` prints per phase hit / oracle /
+retention, detection delay (queries from the phase start to the first
+alarm), alarms and rebuilds.
+Runs (`online_round2_jobs.py --multishift`, 448 runs: our 20 configs x
+seeds 0, 1 and the Aker / QVCache grids on seed 0, 4 workloads; outputs
+`results/online/<prep>/r2_multishift_s<seed>/`) start automatically when
+round 2 finishes (`/tmp/run_ms.sh` waits for ROUND2_DONE; flag
+MULTISHIFT_DONE).
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes

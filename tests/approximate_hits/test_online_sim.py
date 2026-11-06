@@ -187,3 +187,22 @@ def test_write_streams_trace_keeps_order_and_repeats(tmp_path):
     for h in (0, 1):
         sub = requests[z["group"][labels[requests]] == h]
         assert np.array_equal(z["shift"][g == h], sub)
+
+
+def test_multishift_phases_mix_and_no_reuse():
+    rng = np.random.default_rng(0)
+    labels = rng.integers(0, 12, 6000)
+    requests = rng.permutation(6000)
+    order, phase, group, mild, L = op.multishift_stream(labels, requests, rng, warmup=1000,
+                                                       stable=200, mild=0.2)
+    assert len(np.unique(order)) == len(order)                 # each request at most once
+    assert (np.diff(phase) >= 0).all() and set(phase.tolist()) == {0, 1, 2, 3}
+    lab = labels[requests[order]]
+    A = group[lab] == 0
+    assert A[phase == 0].all() and A[phase == 3].all() and not A[phase == 2].any()
+    assert abs(np.isin(lab[phase == 1], mild["add"]).mean() - 0.2) < 0.02
+    assert not np.isin(lab[phase == 1], mild["drop"]).any()
+    # the return phase has the start mix
+    mix = lambda m: np.bincount(lab[m], minlength=12) / m.sum()
+    assert np.abs(mix(phase == 0) - mix(phase == 3)).sum() < 0.02
+    assert all(abs((phase == i).sum() - L) <= 12 for i in (2, 3))

@@ -4,7 +4,7 @@ experiments: detection x response factorial for our method (greedy cache),
 LRU with and without the drift tests, oracle-calibration references, and the
 Aker / QVCache tuning grids, on every workload.
 
-  python online_round2_jobs.py > /tmp/round2_jobs.txt
+  python online_round2_jobs.py [--multishift] > /tmp/round2_jobs.txt
   xargs -P 56 -I{} sh -c '{}' < /tmp/round2_jobs.txt
 """
 
@@ -17,6 +17,9 @@ WORKLOADS = [("esci1m", "shift", 0.1), ("esci1m", "random", 0.1),
              ("spacev-aker-0.6", "trace", 0.01), ("spacev-aker-0.6", "shift", 0.01),
              ("spacev-aker-0.3", "trace", 0.01), ("spacev-aker-0.99", "trace", 0.01),
              ("spacev-real", "trace", 0.01)]
+# start mix -> mild shift -> full shift -> return (online_prepare --add-multishift)
+MULTISHIFT = [("esci1m", "multishift", 0.1), ("spacev-aker-0.3", "multishift", 0.01),
+              ("spacev-aker-0.6", "multishift", 0.01), ("spacev-aker-0.99", "multishift", 0.01)]
 DETECT = {"none": "", "score": "score", "retention": "retention", "hitrate": "hitrate",
           "all": "score retention hitrate"}
 
@@ -46,9 +49,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1])
     ap.add_argument("--baseline-seeds", type=int, nargs="+", default=[0])
+    ap.add_argument("--multishift", action="store_true", help="the multishift workloads")
     args = ap.parse_args()
     jobs = []
-    for prep, stream, budget in WORKLOADS:
+    for prep, stream, budget in (MULTISHIFT if args.multishift else WORKLOADS):
         for seed in sorted(set(args.seeds) | set(args.baseline_seeds)):
             out = f"{RES}/{prep}/r2_{stream}_s{seed}"
             confs = (list(ours()) if seed in args.seeds else []) + \
