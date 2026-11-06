@@ -35,17 +35,9 @@ def standardize(X, ref):
 
 
 def logistic_scores(X, y, w):
-    """Logistic regression on standardized X with retention as a soft label:
-    each row is a positive with weight y and a negative with weight 1 - y
-    (exact cross-entropy on fractional labels). Returns {split: score} for
-    every split in X (X["fit"] is used for fitting and standardization)."""
-    from sklearn.linear_model import LogisticRegression
-    Z = {sp: standardize(X[sp], X["fit"]) for sp in X}
-    n = len(y)
-    lr = LogisticRegression(C=1.0, max_iter=2000)
-    lr.fit(np.vstack([Z["fit"], Z["fit"]]), np.r_[np.ones(n), np.zeros(n)],
-           sample_weight=np.r_[w * y, w * (1 - y)] + 1e-12)
-    return {sp: lr.decision_function(Z[sp]) for sp in X}
+    """Weighted logistic scores for every split in X (X["fit"] fits and standardizes)."""
+    scorer = fit_logistic(X["fit"], y, w, max_iter=2000)
+    return {sp: scorer(X[sp]) for sp in X}
 
 
 def gbt(kind="reg", quantile=None):
@@ -60,12 +52,18 @@ def gbt(kind="reg", quantile=None):
     return HistGradientBoostingRegressor(**common)
 
 
-def fit_logistic(X, y):
-    """Logistic regression with retention as a soft label; returns a scorer."""
+def fit_logistic(X, y, w=None, max_iter=3000):
+    """Logistic regression on standardized X with retention as a soft label.
+
+    Each row is a positive with weight w * y and a negative with weight
+    w * (1 - y) (exact cross-entropy on fractional labels). Returns a scorer.
+    """
     from sklearn.linear_model import LogisticRegression
+    w = np.ones(len(y)) if w is None else w
     mu, sd = X.mean(axis=0), X.std(axis=0) + 1e-9
     n = len(y)
-    lr = LogisticRegression(C=1.0, max_iter=3000)
+    lr = LogisticRegression(C=1.0, max_iter=max_iter)
     Z = (X - mu) / sd
-    lr.fit(np.vstack([Z, Z]), np.r_[np.ones(n), np.zeros(n)], sample_weight=np.r_[y, 1 - y] + 1e-12)
+    lr.fit(np.vstack([Z, Z]), np.r_[np.ones(n), np.zeros(n)],
+           sample_weight=np.r_[w * y, w * (1 - y)] + 1e-12)
     return lambda A: lr.decision_function((A - mu) / sd)
