@@ -706,6 +706,162 @@ Next: alarm-scheduled rebuild checks (drop retention alarm, per-batch
 recalibration, fixed shadow schedule); Aker-trace workloads with repetition
 plus spacev-real; tune all baseline parameters.
 
+## 5q. Agreed design space for the next round (after ESCI / SPACEV tuning)
+
+Principle: drop a strategy only if it does not make sense logically, not
+because it did nothing in one experiment. Candidate strategies are measured
+separately; the final technique keeps the minimal set needed.
+
+Dropped (logically bad):
+- Periodic forced rebuilds: a fixed schedule rebuilds in stationary phases
+  and the rebuilt cache is worse than the warm-up cache (rebuild data is
+  mostly misses + few up-weighted audited hits, noisier than 20k fully
+  labeled warm-up queries). Tuning shows a pure tradeoff (ESCI before / after
+  shift hit: every 5k 47.3 / 21.5, 20k 50.9 / 22.6, 40k 54.0 / 17.8, static
+  54.9 / 10.2). Installing a rebuild only on proven gain = the shadow rebuild.
+- Calibrating on pre-shift queries (stale sliding windows): periodic / LRU
+  recalibrated often but on a window of the last ~50k queries (3000
+  calibration audits at 6% of queries), so lambda stayed too loose for ~40k
+  queries after the shift (8-9 of 23 windows below T, phase B retention
+  0.89). Every method resets calibration data on an alarm.
+
+Dimension 1, detecting a shift (measure each separately):
+- score test: two-sample KS test between the model's scores of the last 2000
+  queries and of the calibration queries, both against the current cache.
+  Why it means a shift: the guarantee assumes future (score, retention)
+  pairs come from the calibration distribution; with cache and model fixed a
+  score is a function of the query, so an unchanged query distribution gives
+  an unchanged score distribution; a significant difference (false-alarm
+  rate controlled) means the query distribution changed. Not proof the
+  guarantee fails (scores may change while remaining accurate -> needless
+  but harmless conservatism), and blind to changes that keep scores but
+  change retention. Label-free, fast.
+- retention test: audited served queries average significantly below T
+  (Hoeffding). Directly tests the promise; catches what the score test
+  cannot (e.g. database inserts change true neighbors while scores stay).
+  Slow after a shift (few hits) and needs audits. Never fired on ESCI because
+  the score test fired first; keep.
+- hit-rate test: two-sided test on the fraction of queries scoring >= lambda,
+  recent vs calibration. A one-number special case of the score test (one
+  point of the score distribution); cheaper, less sensitive.
+- Levels shrink with each check (delta / (j (j + 1))) so false alarms stay
+  rare over long runs. After an alarm, keep only calibration data that
+  arrived after the alarm (alternative not worth it here: estimate when the
+  shift started from the score sequence and keep data from then on; our
+  detection took one batch).
+- The shadow rebuild is not a shift detector (a better cache can exist
+  without a shift); it is a response.
+
+Dimension 2, responding to a shift: recalibrate only, or recalibrate and
+repopulate the cache via a shadow rebuild (utility-tested repopulation:
+build a candidate cache from half of the recent labeled queries, compare
+oracle hits with the current cache on the other half, install, rebuilt from
+all of them, iff >= 10% better). Repopulating always implies recalibrating
+(lambda is valid only for the cache it was calibrated on).
+Cache policy: greedy (above) or LRU (continuous insert-on-miss; gets the same
+alarm-reset calibration). External baselines with their own serve rules and
+learned thresholds: Aker, QVCache (all parameters tuned).
+
+Labels (backend answers): misses have them for free; hits are audited with
+probability a (a backend call each). Calibration needs a random sample of
+the workload (or known inclusion probabilities with inverse-probability
+weights): the guarantee treats calibration queries as draws from the future
+query distribution, and any selection related to score or retention (e.g.
+misses only) biases the bound. Current implementation: a 10% coin flip for
+every query (free for misses). Next: use ALL misses plus audited hits with
+weight 1 / a (weighted confidence bound; more data for deciding whether to
+lower lambda). Building the cache uses the same labels (audited hits up-
+weighted to restore the hit / miss mix); its pool is split 20% candidate
+entries (each a query's exact top-K ball, K in 10..500, plus current entries
+free) / 80% scoring queries. Replace the fixed 60/40 calibration / build
+split of audits with one pool and the rule: a cache is never calibrated on
+the data used to build it (between rebuilds all labels calibrate).
+After warm-up the model is never refit, so labels serve only building and
+calibration (warm-up uses the four-way split candidates / scoring / fit /
+calibration).
+
+Why adaptive's hit rate barely drops after the shift although lambda uses
+only post-shift calibration queries: ~1000 calibration queries already give
+85-95% of the hit rate of 10k (calibration-size study), reached ~15k queries
+after the alarm; and the baselines' post-shift hits are inflated by a stale,
+too-loose lambda (their retention 0.89). Clear result: after the shift hit
+rates are similar (adaptive 20.7%, periodic every 20k 22.6%, LRU K = 20
+20.0%) but only adaptive keeps retention above T (0.918 vs 0.894 / 0.890).
+
+Oracle references for shifting workloads: (1) per method, the oracle serve
+decision for the cache it actually had (perfect knowledge of each query's
+retention; per-batch retention histograms are now logged); (2) per phase, the
+best cache built offline from that phase's own fully labeled queries (ESCI:
+62.6% before / 41.4% after the shift). Planned: an oracle-calibrated lambda
+reference (lambda from abundant fresh labels) to separate honest hits from
+hits inflated by miscalibration.
+
+Running experiments: parallelize to the machine (96 cores, 371 GB; jobs x
+threads ~ cores; SPACEV 10M runs need ~5 GB each); timings are not measured,
+so wall-clock parallelism does not matter for results.
+Known bug (fixed in 5r): LRU K = 10 on spacev-real crashed after its cache
+became empty.
+SPACEV tuning grid (old code, seed 0, 1% budget): best setting per method
+with mean served retention >= T (hit rate / oracle hit rate for the cache
+the method had / retention; "below" = 5000-query windows below T):
+
+| workload | ours (adaptive) | periodic | LRU | Aker | QVCache |
+|---|---|---|---|---|---|
+| aker-0.6 trace | 13.7 / 16.2 / 0.917, 0 below | 15.3 / 18.9 / 0.913, 1 | 11.7 (K 20) | 5.7 | 3.3 |
+| aker-0.6 shift | 17.9 / 20.4 / 0.911, 1 | 19.0 / 22.6 / 0.913, 2 | 18.5 / 21.0 / 0.914, 0 | 8.9 | 6.9 (4 below) |
+| spacev-real trace | 4.6 / 6.0 / 0.941, 1 | 4.8 / 6.3 / 0.933, 0 | 2.3 (K 50) | 4.0 (10 below) | 3.4 |
+
+Aker / QVCache do better on the repeated-request traces than on ESCI (<= 1%)
+but stay well below ours. Caveat: the old LRU results are handicapped by an
+eviction bug (5r), and the old periodic / LRU used stale calibration windows.
+
+## 5r. Round-2 implementation (detection x response) and launch
+
+Code (`online_sim.py`, rewritten Sim; tests in test_online_sim.py):
+- Methods: static, greedy (our cache), lru, aker, qvcache. Periodic,
+  triggered and adaptive removed (adaptive = greedy --detect score
+  --response rebuild with the post-alarm checks 5k / 15k / 30k).
+- `--detect` any subset of score / retention / hitrate (each at
+  delta_alarm / (m j (j + 1)), m = number enabled); `--response recal |
+  rebuild` (lru always recal). An alarm resets calibration and the window.
+- Calibration labels: every miss (weight 1) plus audited hits (weight
+  1 / audit rate), serve-time (score, retention) pairs against the cache in
+  force then (for LRU this is before the miss is inserted, so a cache is
+  never calibrated on its own entries), among the last --cal-span = 20000
+  queries since the last reset. Recalibrated every batch (cheap: no feature
+  recomputation). Bound: `threshold_selection.select_weighted` (ratio
+  estimate sum w y / sum w, variance sum w^2 (y - m)^2 / (sum w)^2, normal,
+  fixed order; equals normal_fixed with unit weights).
+- Score / hit-rate tests: last 2000 scores vs the earlier scores since the
+  last reset (>= 1000 needed); hit-rate test = two-proportion z test.
+- Rebuild: a random --cal-share = 20% of ALL window queries is held out (its
+  labeled part calibrates the new cache; all its scores are the new
+  reference), the labeled rest builds (shadow half / half, gain 10%).
+  Replaces the fixed 60/40 calibration / build split of audits.
+- `--oracle-cal`: every query labeled for calibration at no cost (reference
+  separating honest hits from hits inflated by miscalibration).
+- LRU eviction bug: chunk size assumed each entry frees 2 K vectors, so
+  after the first batch it evicted all old entries and most new ones (K = 10
+  emptied the cache and crashed; other K ran far under budget, so old
+  SPACEV LRU numbers are handicapped). Now chunks = excess / average memory
+  per entry, at most half the entries at once. Empty-cache guard in
+  features (nothing served with < k cached vectors).
+- Smoke test, ESCI shift, 90k queries: score alarm one batch after the
+  shift (66000 vs 65623), rebuild at 71000 (shadow 4305 vs 1150 oracle
+  hits), later check kept; ~4 min per ESCI run.
+
+Round 2 (`online_round2_jobs.py` -> /tmp/round2_jobs.txt, 784 runs,
+`xargs -P 56`, 1 thread each, SPACEV runs peak 5.7 GB; outputs
+`results/online/<prep>/r2_<stream>_s<seed>/`, logs in `logs/`; flag file
+`results/online/ROUND2_DONE`). Workloads: ESCI 1M shift + random (10%
+budget), spacev-aker-0.6 trace + shift, spacev-aker-0.3 / 0.99 trace,
+spacev-real trace (1% budget). Seeds 0, 1 for: static, greedy_none, greedy x
+{score, retention, hitrate, all} x {recal, rebuild}, two oracle-cal
+references, lru K in {10, 20, 50, 100} x {no tests, all tests}. Seed 0 for
+the baseline grids (Aker 18, QVCache 54); the best baseline settings are
+then re-run on fresh seeds so the reported numbers are not selected on the
+same run.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes

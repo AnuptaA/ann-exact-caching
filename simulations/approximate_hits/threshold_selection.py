@@ -107,3 +107,29 @@ def select(method: str, s_cal: np.ndarray, y_cal: np.ndarray,
     if not ok.any():
         return None
     return float(grid_desc[np.flatnonzero(ok)[-1]])
+
+
+def select_weighted(s_cal, y_cal, w_cal, grid_desc, target, delta):
+    """normal_fixed with inverse-probability weights (a query labeled with
+    probability pi gets weight 1 / pi). Per threshold: ratio estimate of the
+    mean retention over {s >= lam}, sum w y / sum w, with variance
+    sum w^2 (y - mean)^2 / (sum w)^2 (times n / (n - 1)); equals the
+    unweighted bound when all weights are 1. Fixed order, stop at the first
+    failure. Returns lambda or None (admit nothing)."""
+    order = np.argsort(-s_cal)
+    s, y, w = s_cal[order], y_cal[order], w_cal[order].astype(np.float64)
+    cum = lambda v: np.concatenate([[0.0], np.cumsum(v)])
+    W, WY, W2, W2Y, W2YY = cum(w), cum(w * y), cum(w * w), cum(w * w * y), cum(w * w * y * y)
+    n = np.searchsorted(-s, -grid_desc, side="right")
+    z = NormalDist().inv_cdf(1.0 - delta)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = WY[n] / W[n]
+        var = (W2YY[n] - 2 * mean * W2Y[n] + mean ** 2 * W2[n]) / W[n] ** 2 * n / (n - 1)
+        lcb = mean - z * np.sqrt(np.maximum(var, 0.0))
+    ok = (n >= 2) & np.nan_to_num(lcb >= target, nan=False)
+    fails = np.flatnonzero(~ok)
+    if len(fails):
+        ok[fails[0]:] = False
+    if not ok.any():
+        return None
+    return float(grid_desc[np.flatnonzero(ok)[-1]])

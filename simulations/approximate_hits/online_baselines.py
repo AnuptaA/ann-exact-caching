@@ -11,7 +11,8 @@ state (thresholds) is updated in arrival order within a batch.
 Aker (density-aware approximate cache):
   representative entry per inserted miss: the query, its backend top-k ids
   (neighbor reference list), minD = distance to its nearest neighbor, and a
-  threshold tau initialized to minD / 4 and capped at minD.
+  threshold tau initialized to --aker-tau-init x minD (paper: 1/4) and capped
+  at --aker-cap x minD (paper: 1).
   lookup: exact repeat of a cached query (equality hit; tau *= 1.1), repeat
   of an earlier approximate-hit query (alias hit), or the nearest
   representative with d(query, representative) < tau (approximate hit; tau
@@ -72,6 +73,9 @@ class Base:
         a = self.a
         for s in range(0, len(self.stream), a.batch):
             qb = self.stream[s:s + a.batch]
+            # retention counts under the cache as it is when the batch starts
+            # (best possible answer: the k nearest cached vectors)
+            counts = (self.ref[self.D["top"][qb, :self.k]] > 0).sum(axis=1)
             served, ret = self.batch(qb, s)
             self.cost["topk"] += int((~served).sum())
             if s + len(qb) > a.warmup:
@@ -79,6 +83,8 @@ class Base:
                 self.log.append({"t": s + len(qb), "n": int(keep.sum()),
                                  "served": int(served[keep].sum()),
                                  "served_retention_sum": float(ret[served & keep].sum()),
+                                 "ret_hist": np.bincount(counts[keep],
+                                                         minlength=self.k + 1).tolist(),
                                  "audited_served": 0, "lambda": None,
                                  "memory": self.n_cached(), "cached": self.n_cached(),
                                  "entries": self.n_entries()})
@@ -101,7 +107,8 @@ class Aker(Base):
         ids = self.D["top"][c, :self.k]
         min_d = float(self._dist(c, ids[:1])[0])
         self._acquire(ids)
-        self.reps[c] = [min_d / 4, min_d]
+        # [tau, cap]: tau starts at tau_init * minD and never exceeds cap * minD
+        self.reps[c] = [self.a.aker_tau_init * min_d, self.a.aker_cap * min_d]
         self.fifo.append(c)
         while self.n_cached() > self.M and self.fifo:
             v = self.fifo.pop(0)

@@ -22,6 +22,7 @@ def _data(n_db=300, n_q=40, d=3, seed=0):
 
 def _args(**kw):
     a = dict(k=5, budget=0.1, warmup=10, batch=5, aker_alpha_l=1.1, aker_alpha_t=0.25,
+             aker_tau_init=0.25, aker_cap=1.0,
              qv_mini=2, qv_D=0.0, qv_alpha=0.9, qv_dims=2, qv_buckets=4)
     a.update(kw)
     return argparse.Namespace(**a)

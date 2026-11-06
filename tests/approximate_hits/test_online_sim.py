@@ -90,24 +90,72 @@ def test_split_clusters_balanced_and_stream_ordered():
     assert (np.diff(phase) >= 0).all() and (qg[order] == phase).all()
 
 
-def _sim(D):
+def _sim(D, **kw):
     import argparse
-    a = argparse.Namespace(k=5, target=0.9, delta=0.05, budget=0.2, f=0.85, R=60, bits=4,
-                           audit_rate=0.1, cal_share=0.5, n_cal=100, window=1000, c_max=50,
-                           s_max=1000, cand_share=0.2, seed=0)
-    return osim.Sim(D, np.arange(len(D["q"])), a)
+    a = dict(k=5, target=0.9, delta=0.05, budget=0.2, f=0.85, R=60, bits=4, audit_rate=0.1,
+             cal_share=0.5, cal_span=1000, window=1000, c_max=50, s_max=1000, cand_share=0.2,
+             min_window=5, gain=0.1, oracle_cal=False, k_lru=5, seed=0)
+    a.update(kw)
+    return osim.Sim(D, np.arange(len(D["q"])), argparse.Namespace(**a))
 
 
-def test_rebuild_inputs_exclude_calibration_role_and_weight_served():
+def test_weighted_bound_matches_unweighted_and_weights_matter():
+    from simulations.approximate_hits import threshold_selection as ts
+    rng = np.random.default_rng(0)
+    s = rng.random(3000)
+    y = np.clip(s + 0.1 * rng.standard_normal(3000), 0, 1)
+    grid = ts.threshold_grid(s)
+    assert ts.select_weighted(s, y, np.ones(3000), grid, 0.8, 0.05) == \
+        ts.select("normal_fixed", s, y, grid, 0.8, 0.05)
+    # up-weighting low-retention queries can only make lambda stricter
+    w = np.where(y < 0.5, 10.0, 1.0)
+    lw = ts.select_weighted(s, y, w, grid, 0.8, 0.05)
+    lu = ts.select_weighted(s, y, np.ones(3000), grid, 0.8, 0.05)
+    assert lw is None or lw >= lu
+
+
+def test_two_prop_pvalue():
+    assert osim.two_prop_pvalue(50, 100, 50, 100) == 1.0
+    assert osim.two_prop_pvalue(80, 100, 20, 100) < 1e-6
+    assert osim.two_prop_pvalue(0, 100, 0, 100) == 1.0
+
+
+def test_lru_eviction_never_empties_cache():
     D = _data(n_q=30)
-    sim = _sim(D)
-    # (query, served, audited, cal role)
-    sim.window = [(0, False, False, False), (1, True, False, False), (2, True, True, False),
-                  (3, True, True, True), (4, False, True, True), (5, False, True, False)]
-    qs, wts = sim.rebuild_inputs()
-    assert set(qs.tolist()) == {0, 2, 5}            # unaudited served and cal role excluded
-    w = dict(zip(qs.tolist(), wts.tolist()))
-    assert w[0] == 1 and w[5] == 1 and w[2] == round((1 - 0.05) / 0.05)
+    sim = _sim(D, budget=0.05)                     # M = 20 vectors
+    for c in range(5):
+        sim.cache.add(c, 20)                       # far over budget
+        sim.cache.last_used[c] = 0
+    qb = np.arange(5, 30)
+    serve = np.zeros(len(qb), bool)
+    sim.lru_update(qb, serve, np.zeros((len(qb), 5), np.int64), 1, 0.0)
+    assert len(sim.cache.entries) >= 1 and sim.cache.memory() <= sim.M + 5
+    # the newest entries survive, the old ones were evicted first
+    assert not set(range(5)) & set(sim.cache.entries)
+
+
+def test_rebuild_holds_out_calibration_and_weights_hits(monkeypatch):
+    D = _data(n_q=30)
+    sim = _sim(D, cal_share=0.3)
+    sim.model = lambda X: -X[:, 0]
+    sim.cache.add(0, 20)
+    sim.window = [(q, q % 3 == 0, q % 6 == 0, 0.2) for q in range(30)]
+    seen = []
+
+    def fake(qs, wts):
+        seen.append((set(qs.tolist()), dict(zip(qs.tolist(), wts.tolist()))))
+        return {int(qs[0]): 20}
+    monkeypatch.setattr(sim, "_greedy", fake)
+    monkeypatch.setattr(osim, "hits_of_entries", lambda *a: 10 ** 6)
+    assert sim.try_rebuild(1)
+    built, w = seen[-1]
+    # unaudited hits never build; audited hits weigh 10 / 0.2, misses 10
+    assert not any(q % 3 == 0 and q % 6 != 0 for q in built)
+    assert all(w[q] == (50 if q % 6 == 0 else 10) for q in built)
+    # calibration of the new cache uses only held-out queries, none built on
+    held = 30 - len(built) - sum(q % 3 == 0 and q % 6 != 0 for q in range(30))
+    assert len(sim.cal) == 1 and len(sim.ref) == 1
+    assert len(sim.cal[0][1]) <= held + 5 and len(sim.ref[0][1]) >= len(sim.cal[0][1])
 
 
 def test_greedy_candidates_disjoint_from_scoring(monkeypatch):
@@ -122,3 +170,20 @@ def test_greedy_candidates_disjoint_from_scoring(monkeypatch):
     monkeypatch.setattr(osim, "greedy_entries", fake)
     sim._greedy(np.arange(30), np.ones(30, dtype=np.int64))
     assert seen["cand"] and not (seen["cand"] & seen["score"])
+
+
+def test_write_streams_trace_keeps_order_and_repeats(tmp_path):
+    rng = np.random.default_rng(0)
+    labels = rng.integers(0, 6, 50)
+    requests = rng.integers(0, 50, 400)              # repeated requests
+    natural = (np.arange(400) >= 300).astype(np.int8)
+    op.write_streams(tmp_path, labels, requests, rng, natural)
+    z = np.load(tmp_path / "streams.npz")
+    assert sorted(z["random"]) == sorted(requests) and sorted(z["shift"]) == sorted(requests)
+    assert np.array_equal(z["trace"], requests) and np.array_equal(z["phase_trace"], natural)
+    g = z["group"][labels[z["shift"]]]
+    assert np.array_equal(g, z["phase_shift"]) and (np.diff(g) >= 0).all()
+    # original order kept within each half
+    for h in (0, 1):
+        sub = requests[z["group"][labels[requests]] == h]
+        assert np.array_equal(z["shift"][g == h], sub)

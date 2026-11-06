@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Write the job list (one shell command per line) for the round-2 online
+experiments: detection x response factorial for our method (greedy cache),
+LRU with and without the drift tests, oracle-calibration references, and the
+Aker / QVCache tuning grids, on every workload.
+
+  python online_round2_jobs.py > /tmp/round2_jobs.txt
+  xargs -P 56 -I{} sh -c '{}' < /tmp/round2_jobs.txt
+"""
+
+import argparse
+import itertools
+
+RES = "simulations/approximate_hits/results/online"
+SIM = ".venv/bin/python -u simulations/approximate_hits/online_sim.py"
+WORKLOADS = [("esci1m", "shift", 0.1), ("esci1m", "random", 0.1),
+             ("spacev-aker-0.6", "trace", 0.01), ("spacev-aker-0.6", "shift", 0.01),
+             ("spacev-aker-0.3", "trace", 0.01), ("spacev-aker-0.99", "trace", 0.01),
+             ("spacev-real", "trace", 0.01)]
+DETECT = {"none": "", "score": "score", "retention": "retention", "hitrate": "hitrate",
+          "all": "score retention hitrate"}
+
+
+def ours():
+    yield "static_default", "--method static"
+    yield "greedy_none", "--method greedy --detect"
+    for d, r in itertools.product(["score", "retention", "hitrate", "all"], ["recal", "rebuild"]):
+        yield f"greedy_{d}_{r}", f"--method greedy --detect {DETECT[d]} --response {r}"
+    yield "greedy_none_oraclecal", "--method greedy --detect --oracle-cal"
+    yield "greedy_all_rebuild_oraclecal", f"--method greedy --detect {DETECT['all']} --oracle-cal"
+    for K, d in itertools.product([10, 20, 50, 100], ["none", "all"]):
+        yield f"lru_k{K}_{d}", f"--method lru --k-lru {K} --detect {DETECT[d]}"
+
+
+def baselines():
+    for ti, at, c in itertools.product([0.25, 0.5, 1.0], [0.25, 0.5, 0.9], [1.0, 2.0]):
+        yield (f"aker_ti{ti}_at{at}_c{c}",
+               f"--method aker --aker-tau-init {ti} --aker-alpha-t {at} --aker-cap {c}")
+    for D, m, (dims, bk) in itertools.product([0.0, 0.025, 0.075, 0.15, 0.25, 0.5], [2, 4, 8],
+                                              [(4, 4), (8, 4), (16, 8)]):
+        yield (f"qvcache_D{D}_m{m}_r{dims}x{bk}",
+               f"--method qvcache --qv-D {D} --qv-mini {m} --qv-dims {dims} --qv-buckets {bk}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1])
+    ap.add_argument("--baseline-seeds", type=int, nargs="+", default=[0])
+    args = ap.parse_args()
+    jobs = []
+    for prep, stream, budget in WORKLOADS:
+        for seed in sorted(set(args.seeds) | set(args.baseline_seeds)):
+            out = f"{RES}/{prep}/r2_{stream}_s{seed}"
+            confs = (list(ours()) if seed in args.seeds else []) + \
+                (list(baselines()) if seed in args.baseline_seeds else [])
+            for name, flags in confs:
+                tag = name.split("_", 1)[1] if "_" in name else ""
+                method = name.split("_")[0]
+                jobs.append((prep.startswith("esci"),
+                             f"mkdir -p {out}/logs && [ -f {out}/{method}_{tag}.json ] || "
+                             f"{SIM} --prep {RES}/{prep} --stream {stream} --budget {budget} "
+                             f"--seed {seed} {flags} --tag _{tag} --out {out} "
+                             f"> {out}/logs/{name}.txt 2>&1"))
+    # ESCI runs are the longest: start them first
+    for _, cmd in sorted(jobs, key=lambda j: not j[0]):
+        print(cmd)
+
+
+if __name__ == "__main__":
+    main()
