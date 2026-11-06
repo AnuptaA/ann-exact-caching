@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""Summary figures: radius-estimation baselines vs direct retention prediction,
-and guaranteed (calibrated) vs oracle hit rates.
+"""Summary figures: guaranteed (calibrated) vs oracle hit rates.
 
 Writes into results/summary/:
-  fig1_radius_baselines.png   radius error, retention error, trusted-estimate
-                              realized retention, guaranteed hit rate
   fig2_esci_hit_rate.png      ESCI 50k / 1M, T = 0.9 / 0.95
   fig3_workloads_1m.png       all workloads at 1M, T = 0.9
   fig4_aker.png               Aker traces (10M databases), T = 0.9
@@ -21,76 +18,10 @@ import matplotlib.pyplot as plt
 RESULTS = Path(__file__).parent / "results"
 VIOL_TOL = 0.01
 OUT = RESULTS / "summary"
-EST_LABELS = {"true_radius": "true radius\n(sanity check)", "lsh": "LSH radius",
-              "global_mean": "global-mean\nradius", "ridge": "ridge\n(retention)",
-              "gbt": "GBT\n(retention)"}
-EST_COLORS = {"true_radius": "0.6", "lsh": "tab:red", "global_mean": "tab:orange",
-              "ridge": "tab:blue", "gbt": "tab:purple"}
 
 
 def _load(path):
     return json.loads(path.read_text()) if path.exists() else None
-
-
-def _state(d, target, size):
-    rows = [s for s in d["states"] if abs(s["target"] - target) < 1e-9]
-    return min(rows, key=lambda s: abs(s["cache_frac"] - size))
-
-
-def fig1():
-    runs = [("esci_score20k", "ESCI (real queries)"), ("sift_score20k", "SIFT (real queries)")]
-    fig, axes = plt.subplots(len(runs), 3, figsize=(16, 5.0 * len(runs)), squeeze=False)
-    for row, (run, title) in enumerate(runs):
-        d = _load(RESULTS / run / "radius_baselines.json")
-        if d is None:
-            continue
-        r = d["radius"]
-        s = _state(d, 0.9, 0.10)
-        ests = ["true_radius", "lsh", "global_mean", "ridge", "gbt"]
-
-        ax = axes[row, 0]
-        vals = [100 * r["lsh"]["rmse"] / r["true_mean"],
-                100 * r["global_mean"]["rmse"] / r["true_mean"]]
-        bars = ax.bar(["LSH buckets", "global average"], vals,
-                      color=[EST_COLORS["lsh"], EST_COLORS["global_mean"]])
-        ax.bar_label(bars, fmt="%.1f%%")
-        skill = 1 - r["lsh"]["rmse"] / r["global_mean"]["rmse"]
-        ax.set_ylabel("radius RMSE (% of mean radius)")
-        ax.set_title(f"{title}\nradius error (LSH only {100 * skill:.0f}% better)", fontsize=10)
-
-        ax = axes[row, 1]
-        mae = [s[e]["retention_mae"] for e in ests]
-        bars = ax.bar([EST_LABELS[e] for e in ests], mae, color=[EST_COLORS[e] for e in ests])
-        ax.bar_label(bars, fmt="%.3f")
-        ax.set_ylabel("mean |estimated - true retention|")
-        ax.set_title("retention error (T=0.9, 10% cache)", fontsize=10)
-        ax.tick_params(axis="x", labelsize=8)
-
-        ax = axes[row, 2]
-        x = np.arange(len(ests))
-        trust = [s[e]["trusted_realized_retention"] or 0 for e in ests]
-        guar = [100 * s[e]["guaranteed_hit_rate"] for e in ests]
-        b1 = ax.bar(x - 0.2, guar, 0.4, color=[EST_COLORS[e] for e in ests],
-                    label="guaranteed hit rate (%)")
-        ax.bar_label(b1, fmt="%.1f", fontsize=8)
-        ax.axhline(100 * s["oracle_best_case_hit_rate"], color="k", ls="--", lw=1,
-                   label=f"oracle best case ({100 * s['oracle_best_case_hit_rate']:.1f}%)")
-        ax.set_xticks(x)
-        ax.set_xticklabels([EST_LABELS[e] for e in ests], fontsize=8)
-        ax.set_ylabel("guaranteed test hit rate (%)")
-        ax2 = ax.twinx()
-        ax2.plot(x + 0.2, trust, "kD", ms=6, label="realized retention if estimate trusted")
-        ax2.axhline(0.9, color="tab:green", lw=1, label="target T = 0.9")
-        ax2.set_ylim(0.3, 1.0)
-        ax2.set_ylabel("realized retention when trusting estimate")
-        ax.set_title("end to end (T=0.9, 10% cache)", fontsize=10)
-        h1, l1 = ax.get_legend_handles_labels()
-        h2, l2 = ax2.get_legend_handles_labels()
-        ax.legend(h1 + h2, l1 + l2, fontsize=7, loc="upper center",
-                  bbox_to_anchor=(0.5, -0.16), ncol=2)
-    fig.tight_layout()
-    fig.savefig(OUT / "fig1_radius_baselines.png", dpi=120)
-    plt.close(fig)
 
 
 def _oracle_curves(run_dir, target):
@@ -227,7 +158,6 @@ def fig4():
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    fig1()
     fig2()
     fig3()
     fig4()

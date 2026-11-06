@@ -32,8 +32,6 @@ training queries whose exact neighbors are known.
      ...) on fit / dev / cal / test splits. Needs scikit-learn (repo `.venv`).
    - `eval_calibration_methods.py`: validates threshold-selection procedures
      by repeated calibration draws.
-   - `eval_radius_baselines.py`: LSH / global-mean radius estimation vs direct
-     retention prediction, end to end (`.venv`).
    - `eval_aker_thresholds.py`: replays Aker's density-aware per-entry
      threshold rule on our offline caches (trace runs).
    - `eval_threshold_transfer.py`: does a calibrated threshold transfer across

@@ -232,9 +232,6 @@ datasets/sift/raw_siftsmall/
 # Generated experiment outputs (keep the curated summary figures)
 simulations/approximate_hits/results/*
 !simulations/approximate_hits/results/summary/
-simulations/radius_estimation/results/
-simulations/radius_estimation/results_sift/
-simulations/radius_estimation/results_sift1m/
 
 # Local editor settings
 .claude/settings.local.json

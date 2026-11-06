@@ -708,9 +708,9 @@ plus spacev-real; tune all baseline parameters.
 
 ## 6. Radius-estimation findings so far
 
-End-to-end comparison (`eval_radius_baselines.py`, writes
-`radius_baselines.json`; figures via `make_summary_figures.py` into
-`results/summary/`): on the same caches and queries (k = 10, 50k database),
+Code removed in the cleanup (`eval_radius_baselines.py`, its fig 1 and
+`simulations/radius_estimation/`); it is in git history at commit 0846a16 on
+branch jd. End-to-end comparison on the same caches and queries (k = 10, 50k database),
 LSH buckets (config chosen on dev) cut radius RMSE only 22% (ESCI: 8.5% vs
 10.9% of mean radius) / 23% (SIFT: 13.2% vs 17.1%) vs the global mean, and
 give no better retention estimates (ESCI, T = 0.9, 10% cache: MAE 0.196 LSH,
@@ -719,8 +719,6 @@ retention estimates realizes 0.77 (ESCI) / 0.60 (SIFT) retention at T = 0.9;
 calibrated admission with LSH- or global-mean-based scores certifies no
 threshold (0% guaranteed hits in every state), vs GBT 22.2% (ESCI) / 9.8%
 (SIFT) and true radius 25.8% / 12.2% (oracle best case 30.9% / 14.4%).
-
-Code: `simulations/radius_estimation/`.
 
 Estimator studied: plain random-hyperplane LSH. Store the average train-query
 radius per bucket; estimate a test query's radius as the count-weighted average
