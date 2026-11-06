@@ -74,7 +74,8 @@ def hoeffding_upper(y, level):
 
 
 def _passes(n, mean, sd, level, kind, target):
-    lcb = lcb_normal(n, mean, sd, level) if kind == "normal" else lcb_eb(n, mean, sd, level)
+    with np.errstate(divide="ignore", invalid="ignore"):   # n < 2 groups are rejected below
+        lcb = lcb_normal(n, mean, sd, level) if kind == "normal" else lcb_eb(n, mean, sd, level)
     return (n >= 2) & np.nan_to_num(lcb >= target, nan=False)
 
 

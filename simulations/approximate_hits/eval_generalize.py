@@ -214,6 +214,8 @@ def main():
     ap.add_argument("--source-k", type=int, default=10)
     ap.add_argument("--n-each", type=int, default=20000)
     args = ap.parse_args()
+    if args.mode == "k" and args.source_k not in args.ks:
+        ap.error(f"--source-k {args.source_k} must be one of --ks {args.ks}")
     run_dir = Path(args.run_dir)
     data, _, run = load_run_data(run_dir, args.n_each)
     if args.mode == "k":
