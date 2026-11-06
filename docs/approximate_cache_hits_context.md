@@ -1155,6 +1155,79 @@ their whole top-1000 is in held-out clusters), so their truth before the
 inserts is unknown. Fix in step 3: for those queries also rank the initial
 database (top-1000 over initially present vectors) and merge.
 
+## 5v. Detector study (eval_detectors.py)
+
+Method: the state at the moment a shift arrives (warm-up cache, model,
+lambda frozen; no response yet) is fixed, so every query's score and
+retention against it is computed once (--prepare), and detectors are
+replayed on sampled streams (--run): P pre-shift queries from group A (the
+warm-up mix), then H = 40k post-shift queries from (1 - eps) A + eps B,
+eps in {0, .05, .1, .2, .3, .5, .7, 1}; 200 replications per eps; P = 20k
+and 60k (60k: later in a run, so the level schedule is stricter). Since
+cache and lambda are fixed, the post-shift served retention is exact:
+| eps | 0 | .1 | .3 | .5 | .7 | 1 |
+|---|---|---|---|---|---|---|
+| ESCI served retention / hit rate | .909/.548 | .906/.503 | .900/.412 | .891/.321 | .873/.231 | .787/.095 |
+| SPACEV Zipf 0.6 | .906/.197 | .905/.181 | .902/.150 | .898/.119 | .891/.088 | .859/.042 |
+(harmful iff < 0.9: ESCI eps >= 0.5 (0.3 borderline), SPACEV eps >= 0.5).
+Variants: score / hit-rate tests: recent window W in {500, 2000, 5000},
+reference "cal" (4k warm-up calibration scores) or "grow" (all scores since
+warm-up), check every B in {1000, 250}, level schedule jj (delta / (j (j +
+1))), fixed (delta / J, J known), none. Retention test: data = last 100 /
+500 audits, audits of the last 2k / 5k / 20k queries, or a scan over 1k /
+2k / 5k / 10k / 20k-query windows (level / 5); bounds hoeffding, kl
+(Chernoff form, same assumptions), eb (empirical Bernstein, same
+assumptions), normal (CLT, the assumption calibration already makes);
+audits fixed 0.1 / 0.3 or adaptive (next batch's rate = clip(A / hits in
+the last batch, 0.1, 1), A = 10 / 30; audited retentions weighted 1 / rate).
+Results: results/detectors/<prep>_P<P>_detectors.json;
+`eval_detectors_summary.py FILE [--filter ...]`.
+
+Findings (all from these runs):
+1. A level correction is necessary: without one (per-check level delta)
+   false alarms are 52-56% over 60 checks and 91-95% over 100 checks. With
+   jj or fixed they stay <= 5% (one exception, score test with the "cal"
+   reference and W = 500 on SPACEV: 6-7.5%; the SPACEV trace is
+   time-ordered, so later A requests differ slightly from the warm-up's).
+   jj and fixed perform alike.
+2. Label-free tests: on harmful shifts the score and hit-rate tests both
+   fire within one batch (1000 queries; 250-500 with B = 250, at the same
+   false-alarm rate). On small shifts the score test is more sensitive:
+   SPACEV eps = 0.3: score W = 500 94-98% within 1000 vs hit-rate W = 500
+   23-28% (delay 4-12k); SPACEV eps = 0.1: score grow W = 5000 95% vs
+   hit-rate 21%; on ESCI they are close for W >= 2000. The hit-rate test
+   was never faster than the score test at any eps. The "grow" reference
+   beats "cal" (larger reference: more sensitive at small eps, fewer false
+   alarms). Neither test tracks harm: ESCI eps = 0.1 (retention 0.906,
+   harmless) is detected 98% of the time.
+3. Retention test: (a) no false alarms (<= 1%) in any variant; (b) bound:
+   normal >> kl > hoeffding ~ eb at these sample sizes and strict levels
+   (eb's 7 log(2 / level) / (3 (n - 1)) term dominates); (c) data: the old
+   count window (last 500 audits) is slow (stale pre-shift audits); the
+   scan over several time windows is best overall; (d) adaptive auditing
+   is the biggest lever at almost no cost: SPACEV eps = 1, scan + normal:
+   fixed 0.1 detects 2%, fixed 0.3 45%, adaptive A = 30 99% (median 13k
+   queries) with 9 / 27 / 17 audits per 1000 queries; ESCI eps = 1: median
+   delay 9000 -> 3000 at the same audit cost.
+4. The retention test is limited by sample size, not tuning: queries to
+   detect ~ (z sd / deficit)^2 / (audits per query) (sd of served
+   retention ~0.16-0.21, z at the test level). Predicted vs observed median
+   delay: ESCI eps = 1 (deficit 0.113) 2.2k vs 3k; ESCI eps = 0.7 (0.027)
+   27k vs 22k (48% detected within 40k); SPACEV eps = 1 (0.041) 12k vs
+   13k; deficits <= 0.01 need ~ 6000 audits (~200k queries at 30 audits per
+   1000): undetectable here. Best variant: scan + normal + adaptive A = 30.
+5. Later in a run (P = 60k vs 20k) the retention test is slower (ESCI eps
+   = 1: 3000 -> 5000; SPACEV: 13k -> 20k): the jj level is stricter; the
+   label-free tests are unaffected (strong signal).
+Answer to "score > hit-rate > retention fundamental?": label-free tests are
+faster than the retention test for workload shifts (they use every query;
+the retention test needs (sd / deficit)^2 audits); the score test is at
+least as fast as the hit-rate test everywhere and much more sensitive to
+small shifts on SPACEV. But faster is not better: the label-free tests fire
+on harmless shifts (needless resets), the retention test only on harmful
+ones, and only it can see changes that leave scores unchanged (data drift).
+Caveats: first shift only, frozen lambda, abrupt mixtures of A and B.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
