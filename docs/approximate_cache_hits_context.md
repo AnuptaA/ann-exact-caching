@@ -901,6 +901,122 @@ seeds 0, 1 and the Aker / QVCache grids on seed 0, 4 workloads; outputs
 round 2 finishes (`/tmp/run_ms.sh` waits for ROUND2_DONE; flag
 MULTISHIFT_DONE).
 
+## 5t. Generalization of the features across cache states; data-change spec
+
+### Which features generalize (reasoning, not yet measured)
+
+Goal: one model whose score means the same thing in any cache state
+(different caches, K mixes, budgets, shell settings, database versions), so
+lambda is stable and only needs light recalibration. A feature generalizes if
+P(retention | features) does not depend on hidden properties of the state.
+
+- Relative offset and relative size (3 best balls): scale-free ratios
+  within an exact ball. The core is geometric and state-independent: if
+  offset + size <= 1 the query's neighborhood lies inside an exact ball, so
+  retention = 1 for any cache and database. Beyond the boundary retention
+  depends on how many uncached vectors lie in the uncovered part, which
+  these features do not see (density, from the shell features). Depends on
+  the state through ball overlap: with more overlapping balls the union
+  covers more than the best 3 show (model too pessimistic: safe, fewer hits).
+  Under data changes they keep their meaning only if balls stay exact
+  (insert maintenance below).
+- Intruder count, log1p(#sampled shell vectors inside the neighborhood):
+  NOT invariant.
+  (1) It scales with the sampling rate p: the same count means 1/p times
+      as many intruders. p differs between caches (set to fill the budget)
+      and changes at every online rebuild, while the model is fit once at
+      warm-up. The offline transfer study kept p = 0.25 fixed, so this was
+      never tested.
+  (2) Shell coverage: shells exist only at ranks K+1..R around centers; an
+      entry with K = R has none, and a neighborhood reaching outside every
+      shell sees no intruders even if there are many. A count of 0 mixes
+      "no intruders" with "not covered", and the mix depends on the K
+      distribution and R.
+  (3) Quantization (b bits) shifts which points count as inside.
+  (4) Data changes: inserts outside all shells (data drift into new regions)
+      are invisible.
+- Likely fixes: an estimated intruder count, count / p (or log1p of it); a
+  coverage feature, e.g. the neighborhood's relative size w.r.t. the best
+  ball's shell radius (offset + size <= 1 in shell units = fully covered);
+  train on many varied states (budgets, p, K mixes, before and after data
+  changes) rather than one warm-up cache.
+- Symptom already seen: lambda had to be recalibrated per cache state and
+  per k, though the model's ranking transferred; consistent with scores
+  whose meaning shifts with hidden state.
+- Planned offline test (before the online data-change runs): fit on one
+  state, test on states differing in p, R, bits, K mix and database version,
+  raw count vs count / p + coverage; measure ranking (oracle share at the
+  recalibrated lambda) and calibration drift (lambda change, retention at a
+  frozen lambda).
+
+### Data-change workloads (spec)
+
+Two workloads, fixed query distribution (random stream) so only the data
+changes; later combined with workload shifts:
+- churn (no data drift): hold out a uniform random 10% of the database;
+  initial database = the other 90%. After warm-up, the held-out vectors are
+  inserted gradually over the stream, and as many uniformly random vectors of
+  the initial database are deleted at the same rate (size stays constant,
+  distribution stays the same).
+- drift: k-means on the database (~50 clusters); hold out whole clusters
+  totaling ~10% of the database, chosen so a meaningful share of queries
+  (reported) has true neighbors in them; same insert / delete schedule
+  (random deletes from the initial database), so the only difference from
+  churn is where the inserts land. Queries near the new clusters get new
+  true neighbors that start uncached, the dangerous case.
+- Datasets: ESCI 1M first (131k queries, warm-up 20k, ~0.9 inserts and
+  deletes per query), then SPACEV 10M traces.
+- Schedule variants: gradual (default), and a burst (all inserts at once)
+  to compare with known-change resets.
+
+Ground truth without a database version per time: one ranking per query over
+the union of all vectors (top-R' with R' = 1000; R' must exceed R = 500 plus
+the vectors absent at any time; flag queries where fewer than R are
+present). Truth at time t = the first k present ids of that ranking.
+Prepared by `online_prepare.py --data-change churn|drift` (writes
+db_events.npz: initial presence, insert / delete times and ids; topU.npy).
+
+Cache maintenance (the ball invariant: every present vector within an
+entry's radius is cached):
+- an entry stores its ball radius and shell radius (distances to its K-th /
+  R-th present neighbor at creation), i.e. prefix positions in its center's
+  union ranking;
+- insert x: distances from x to all entry centers (cost counted: one
+  distance per entry); inside a ball -> cache x (memory + 1, fetched + 1);
+  inside a shell -> joins the sample iff its per-vector draw < p;
+- delete x: remove from the cache or sample (a cache must never return a
+  deleted vector; applies to every method incl. baselines);
+- over budget after inserts: lower p to fit (set_p_to_fill), so the p
+  invariance above matters; entries are not dropped (the shadow rebuild
+  handles it).
+- ablation: insert maintenance off (balls silently become inexact).
+
+Calibration under data changes (stored pairs were measured on an older
+database):
+- sliding (current code): pairs age out after --cal-span queries;
+- maintained labels: keep each calibration query's top-(k + m) answer (m = 10
+  buffer); an insert closer than the k-th updates it (one distance per
+  stored query); a delete removes it; a label with fewer than k left
+  expires; scores and retention recomputed against the current cache before
+  recalibrating (every few batches to bound cost; cost counted);
+- known-change reset (burst schedule only): reset calibration at the burst.
+Detection: retention test (sees retention lost to inserts); score and
+hit-rate tests (mostly blind to data changes: scores change only through
+cache / sample changes); response recal / rebuild as before.
+
+Grid (ESCI, churn and drift, 2 seeds): static (deletes removed only),
+greedy x {sliding, maintained} x detect {none, retention, all} x {recal,
+rebuild}, ablations (insert maintenance off; count / p feature), LRU (with
+maintenance), Aker / QVCache (deletes removed; their own rules otherwise),
+oracle-cal reference. Metrics as before plus: retention per window and for
+queries whose true neighbors include inserted vectors, maintenance cost
+(center distances, label updates), vectors fetched for in-ball inserts.
+
+Order of work: (1) offline feature-invariance test above; (2) prepare
+churn / drift for ESCI (union top-1000 for 131k queries over 1M); (3)
+simulator support (presence mask, event processing, entry radii, label
+maintenance, tests); (4) runs, after the workload-shift rounds finish.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
