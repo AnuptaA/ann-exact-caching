@@ -62,6 +62,8 @@ def main():
     ap.add_argument("--n-clusters", type=int, default=20)
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
+    if args.n_clusters < 2:
+        ap.error("--n-clusters must be at least 2 (the shift stream needs two groups)")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(args.seed)

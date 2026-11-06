@@ -401,7 +401,8 @@ def main():
     else:
         res = Sim(D, stream, args).run(args.method)
     if args.stream == "shift":
-        res["phase_start"] = int(np.argmax(streams["phase"] == 1))
+        phase = streams["phase"]
+        res["phase_start"] = int(np.argmax(phase == 1)) if (phase == 1).any() else len(phase)
     name = f"{args.method}{args.tag}.json"
     (out / name).write_text(json.dumps(res))
     logger.info(f"wrote {out / name}")
