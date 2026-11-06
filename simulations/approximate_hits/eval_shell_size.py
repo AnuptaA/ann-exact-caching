@@ -27,12 +27,11 @@ import numpy as np
 
 from utils.base.logs import setup_logging
 
-from utils.cache.entries import state_tables
-from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of, neighborhood_radius
-from utils.cache.metrics import expand_index
+from utils.cache.features import shell_block, split_inputs
+from utils.cache.metrics import admit, expand_index, result_for_target, state_tasks
 from utils.cache.models import logistic_scores
 from utils.cache.parallel import worker_pool
-from utils.cache.shell import SAMPLE_J, load_cand_ext, shell_features, shell_sample
+from utils.cache.shell import SAMPLE_J, load_cand_ext
 from utils.cache.workloads import EVAL_SPLITS, load_run_data
 from utils.cache.calibration import select, threshold_grid
 
@@ -43,11 +42,6 @@ BITS = 4
 BASE = (0.25, 500)
 
 #-------------------------------------------------------------------------------
-
-
-def _admit(lam, s, y):
-    adm = s >= lam if lam is not None else np.zeros(len(s), dtype=bool)
-    return float(adm.mean()), (float(y[adm].mean()) if adm.any() else None)
 
 
 def cal_study(s_pool, y_pool, grid, target, ns, draws, methods, rng):
@@ -64,7 +58,7 @@ def cal_study(s_pool, y_pool, grid, target, ns, draws, methods, rng):
             c, e = perm[:n], perm[n:]
             for m in methods:
                 lam = select(m, s_pool[c], y_pool[c], grid, target, DELTA)
-                h, r = _admit(lam, s_pool[e], y_pool[e])
+                h, r = admit(lam, s_pool[e], y_pool[e])
                 hits, below, below01 = res[m]
                 hits.append(h)
                 res[m] = (hits, below + (r is not None and r < target),
@@ -78,31 +72,22 @@ def cal_study(s_pool, y_pool, grid, target, ns, draws, methods, rng):
 
 def eval_point(task, run, args):
     target, point, entries = task
-    k = run.k
-    st = state_tables(run, entries)
-    if len(st["cached"]) <= k:
+    inp = split_inputs(run, entries, EVAL_SPLITS)
+    if inp is None:
         return None
-    bl = balls_of(run, entries)
-    sets, topk = run.sets, run.topk
-    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in EVAL_SPLITS}
-    w = {sp: sets[sp][1].astype(np.float64) for sp in EVAL_SPLITS}
-    nr = {sp: neighborhood_radius(sets[sp][0], st, k) for sp in EVAL_SPLITS}
-    B = {sp: np.nan_to_num(ball_features(sets[sp][0], nr[sp], bl, N_BALLS),
-                           nan=POOR_FIT) for sp in EVAL_SPLITS}
+    sets, st, bl, y, w, nr, B = run.sets, inp.st, inp.bl, inp.y, inp.w, inp.nr, inp.B
     ex = {sp: expand_index(w[sp]) for sp in EVAL_SPLITS}
     out = {"cache_frac": point["cache_frac"], "oracle_hit_rate": point["test_hit_rate"],
            "shells": {}}
     for R in args.Rs:
         for p in args.ps:
-            samp = shell_sample(run, bl, st["in_cache"], p, R, BITS)
-            S = {sp: shell_features(sets[sp][0], nr[sp], samp)[:, [SAMPLE_J]]
-                 for sp in EVAL_SPLITS}
+            samp, S = shell_block(run, inp, p, R, BITS, [SAMPLE_J])
             X = {sp: np.hstack([B[sp], S[sp]]) for sp in EVAL_SPLITS}
             s = logistic_scores(X, y["fit"], w["fit"])
             grid = threshold_grid(s["fit"])
             lam = select("normal_fixed", s["cal"][ex["cal"]], y["cal"][ex["cal"]], grid,
                          target, DELTA)
-            h, r = _admit(lam, s["test"][ex["test"]], y["test"][ex["test"]])
+            h, r = admit(lam, s["test"][ex["test"]], y["test"][ex["test"]])
             out["shells"][f"p={p:g},R={R}"] = {"hit_rate": h, "hit_retention": r,
                                                "sample_memory": samp["memory"] if samp else 0.0}
             if (p, R) == BASE:
@@ -137,11 +122,8 @@ def main():
     data, _, run = load_run_data(run_dir, args.n_each)
     if max(args.Rs) > 500:
         run.cand_ext = load_cand_ext(run, run_dir, max(args.Rs))
-    res = next(r for r in data["results"] if abs(r["target"] - args.target) < 1e-9)
-    tasks = []
-    for size in args.sizes:
-        p = min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
-        tasks.append((args.target, p, res["selected"][:p["n_entries"]]))
+    res = result_for_target(data, args.target)
+    tasks = state_tasks(res, args.sizes, args.target)
     out = []
     with worker_pool(eval_point, args.workers, len(tasks), run=run, args=args) as pool:
         for s in pool.imap(tasks):

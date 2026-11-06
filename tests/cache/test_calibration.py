@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from utils.cache.calibration import (
-    METHODS, grid_stats, hoeffding_upper, lcb_eb, lcb_normal, select, threshold_grid,
+    METHODS, calibrated_lambda, grid_stats, hoeffding_upper, lcb_eb, lcb_normal, select, threshold_grid,
 )
 
 
@@ -112,4 +112,14 @@ def test_hoeffding_validates_arguments():
     for bad in (0.0, 1.0):
         with pytest.raises(ValueError):
             hoeffding_upper([0.5], bad)
+
+
+def test_calibrated_lambda_uses_cal_split_with_fit_grid():
+    rng = np.random.default_rng(0)
+    s = {"fit": rng.random(500), "cal": rng.random(500)}
+    y = {"cal": np.clip(s["cal"] + 0.05 * rng.standard_normal(500), 0, 1)}
+    idx = np.arange(500)
+    lam = calibrated_lambda(s, y, idx, 0.9)
+    assert lam == select("normal_fixed", s["cal"], y["cal"], threshold_grid(s["fit"]), 0.9, 0.05)
+    assert calibrated_lambda(s, y, idx, 0.9, 0.05, "naive") is not None
 

@@ -36,7 +36,7 @@ import numpy as np
 from utils.base.logs import setup_logging
 
 from utils.cache.legacy_features import EXT_NAMES, FEATURE_NAMES, SPLITS, build_state
-from utils.cache.metrics import expand_index
+from utils.cache.metrics import expand_index, state_tasks
 from utils.cache.models import fit_ridge, gbt
 from utils.cache.parallel import worker_pool
 from utils.cache.workloads import load_run_data
@@ -119,9 +119,7 @@ def main():
     for res in data["results"]:
         if not any(abs(res["target"] - t) < 1e-9 for t in args.targets):
             continue
-        for size in args.sizes:
-            p = min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
-            tasks.append((res["target"], p, res["selected"][:p["n_entries"]]))
+        tasks += state_tasks(res, args.sizes)
     logger.info(f"Building features for {len(tasks)} cache states...")
     with worker_pool(build_state, args.workers, len(tasks), run=run) as pool:
         states = [s for s in pool.map(tasks) if s is not None]

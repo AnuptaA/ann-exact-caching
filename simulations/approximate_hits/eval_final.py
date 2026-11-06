@@ -30,13 +30,12 @@ import numpy as np
 
 from utils.base.logs import setup_logging
 
-from utils.cache.metrics import interp_log
-from utils.cache.entries import state_tables
-from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of, neighborhood_radius
+from utils.cache.metrics import admit, interp_log, result_for_target
+from utils.cache.features import shell_block, split_inputs
 from utils.cache.metrics import expand_index
 from utils.cache.models import logistic_scores
 from utils.cache.parallel import worker_pool
-from utils.cache.shell import SAMPLE_J, shell_features, shell_sample
+from utils.cache.shell import SAMPLE_J
 from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
@@ -47,11 +46,6 @@ logger = logging.getLogger(__name__)
 DELTA = 0.05
 
 #-------------------------------------------------------------------------------
-
-
-def admit(lam, s, y):
-    adm = s >= lam if lam is not None else np.zeros(len(s), dtype=bool)
-    return float(adm.mean()), (float(y[adm].mean()) if adm.any() else None)
 
 
 def calibration_sweep(s_cal, y_cal, grid, s_test, y_test, target, ns, draws, rng):
@@ -74,19 +68,11 @@ def calibration_sweep(s_cal, y_cal, grid, s_test, y_test, target, ns, draws, rng
 
 def eval_point(task, run, args):
     target, point, entries = task
-    k = run.k
-    st = state_tables(run, entries)
-    if len(st["cached"]) <= k:
+    inp = split_inputs(run, entries, SCORE_SPLITS)
+    if inp is None:
         return None
-    bl = balls_of(run, entries)
-    sets, topk = run.sets, run.topk
-    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SCORE_SPLITS}
-    w = {sp: sets[sp][1].astype(np.float64) for sp in SCORE_SPLITS}
-    nr = {sp: neighborhood_radius(sets[sp][0], st, k) for sp in SCORE_SPLITS}
-    B = {sp: np.nan_to_num(ball_features(sets[sp][0], nr[sp], bl, N_BALLS),
-                           nan=POOR_FIT) for sp in SCORE_SPLITS}
-    samp = shell_sample(run, bl, st["in_cache"], args.p, args.R, args.b)
-    S = {sp: shell_features(sets[sp][0], nr[sp], samp)[:, [SAMPLE_J]] for sp in SCORE_SPLITS}
+    sets, st, bl, y, w, nr, B = run.sets, inp.st, inp.bl, inp.y, inp.w, inp.nr, inp.B
+    samp, S = shell_block(run, inp, args.p, args.R, args.b, [SAMPLE_J])
     ti, ci = expand_index(w["test"]), expand_index(w["cal"])
     out = {"cache_frac": point["cache_frac"], "oracle_hit_rate": point["test_hit_rate"],
            "sample_memory": samp["memory"] if samp else 0.0}
@@ -147,7 +133,7 @@ def main():
         summarize(run_dir / "final.json")
         return
     data, _, run = load_run_data(run_dir, args.n_each)
-    res = next(r for r in data["results"] if abs(r["target"] - args.target) < 1e-9)
+    res = result_for_target(data, args.target)
     tasks = [(args.target, p, res["selected"][:p["n_entries"]])
              for p in sorted(res["points"], key=lambda p: p["cache_frac"]) if p["n_entries"]]
     out = []

@@ -39,6 +39,7 @@ from pathlib import Path
 
 import numpy as np
 
+from utils.cache.metrics import result_for_target
 from utils.base.logs import setup_logging
 
 from utils.base.knn import fetch_rows, pairwise_dist, sq_norms
@@ -207,7 +208,7 @@ def main():
     for run_dir in map(Path, args.run_dirs):
         logger.info(f"{run_dir.name}: loading...")
         run = load_run(run_dir)
-        res = next(r for r in run["data"]["results"] if abs(r["target"] - args.target) < 1e-9)
+        res = result_for_target(run["data"], args.target)
         states = []
         for p in sorted(res["points"], key=lambda p: p["cache_frac"]):
             entries = res["selected"][:p["n_entries"]]

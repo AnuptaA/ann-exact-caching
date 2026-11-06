@@ -124,3 +124,14 @@ def select(method: str, s_cal: np.ndarray, y_cal: np.ndarray,
     if not ok.any():
         return None
     return float(grid_desc[np.flatnonzero(ok)[-1]])
+
+
+def calibrated_lambda(s, y, idx_cal, target, delta=0.05, method=DEFAULT_METHOD):
+    """Threshold from the calibration split.
+
+    s, y: dicts split -> score / retention arrays; idx_cal expands the
+    calibration queries to requests. The grid comes from the fit scores.
+    """
+    return select(method, s["cal"][idx_cal], y["cal"][idx_cal], threshold_grid(s["fit"]),
+                  target, delta)
+

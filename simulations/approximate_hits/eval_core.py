@@ -45,13 +45,12 @@ import numpy as np
 from utils.base.logs import setup_logging
 
 from utils.cache.models import gbt_regressor
-from utils.cache.metrics import best_cutoff_rate
-from utils.cache.entries import state_tables
-from utils.cache.features import ball_features, balls_of, neighborhood_radius
+from utils.cache.metrics import best_cutoff_rate, result_for_target, state_tasks
+from utils.cache.features import ball_features, split_inputs
 from utils.cache.metrics import expand_index
 from utils.cache.parallel import worker_pool
 from utils.cache.shell import shell_features, shell_sample
-from utils.cache.workloads import load_run_data
+from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -95,16 +94,10 @@ def oracle_at(points, frac):
 
 def eval_state(task, run, args, points):
     target, point, entries = task
-    k = run.k
-    st = state_tables(run, entries)
-    if len(st["cached"]) <= k:
+    inp = split_inputs(run, entries, SCORE_SPLITS, n_balls=None)
+    if inp is None:
         return None
-    bl = balls_of(run, entries)
-    sets, topk = run.sets, run.topk
-    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in ("fit", "cal", "test")}
-    w = {sp: sets[sp][1].astype(np.float64) for sp in ("fit", "cal", "test")}
-    nr = {sp: neighborhood_radius(sets[sp][0], st, k)
-          for sp in ("fit", "cal", "test")}
+    sets, st, bl, y, w, nr = run.sets, inp.st, inp.bl, inp.y, inp.w, inp.nr
     ball_cache, shell_cache = {}, {}
     out = {"cache_frac": point["cache_frac"], "n_balls": len(bl["r"]),
            "oracle_hit_rate": point["test_hit_rate"]}
@@ -156,11 +149,8 @@ def main():
     args = ap.parse_args()
     run_dir = Path(args.run_dir)
     data, _, run = load_run_data(run_dir, args.n_each)
-    res = next(r for r in data["results"] if abs(r["target"] - args.target) < 1e-9)
-    tasks = []
-    for size in args.sizes:
-        p = min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
-        tasks.append((args.target, p, res["selected"][:p["n_entries"]]))
+    res = result_for_target(data, args.target)
+    tasks = state_tasks(res, args.sizes, args.target)
     out = []
     with worker_pool(eval_state, args.workers, len(tasks), run=run, args=args,
                      points=res["points"]) as pool:

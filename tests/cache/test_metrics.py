@@ -4,7 +4,9 @@
 import numpy as np
 import pytest
 
-from utils.cache.metrics import best_cutoff_rate, expand_index, interp_log
+from utils.cache.metrics import (
+    admit, best_cutoff_rate, expand_index, interp_log, nearest_point, result_for_target, state_tasks,
+)
 
 
 def test_best_cutoff_rate():
@@ -42,4 +44,31 @@ def test_expand_index_repeats_rows_and_rejects_bad_weights():
     for bad in ([0.5, 1], [-1, 2]):
         with pytest.raises(ValueError, match="non-negative integers"):
             expand_index(np.array(bad))
+
+
+def test_admit_handles_no_threshold_and_empty_admission():
+    s, y = np.array([0.9, 0.5, 0.1]), np.array([1.0, 0.8, 0.0])
+    assert admit(0.4, s, y) == (2 / 3, 0.9)
+    assert admit(None, s, y) == (0.0, None)
+    assert admit(2.0, s, y) == (0.0, None)
+    assert admit(0.0, s, y) == (1.0, 0.6)
+
+
+def _data():
+    pts = [{"cache_frac": 0.01, "n_entries": 2}, {"cache_frac": 0.1, "n_entries": 5}]
+    return {"results": [{"target": 0.9, "points": pts, "selected": list(range(10))},
+                        {"target": 0.7, "points": [], "selected": []}]}
+
+
+def test_result_lookup_nearest_point_and_state_tasks():
+    data = _data()
+    res = result_for_target(data, 0.9)
+    with pytest.raises(ValueError, match="not in this run"):
+        result_for_target(data, 0.95)
+    assert nearest_point(res, 0.02)["n_entries"] == 2 and nearest_point(res, 0.5)["n_entries"] == 5
+    with pytest.raises(ValueError, match="no checkpoints"):
+        nearest_point(data["results"][1], 0.1)
+    tasks = state_tasks(res, [0.01, 0.1])
+    assert [(t, p["n_entries"], e) for t, p, e in tasks] == [(0.9, 2, [0, 1]), (0.9, 5, [0, 1, 2, 3, 4])]
+    assert state_tasks(res, [0.1], 0.8)[0][0] == 0.8
 

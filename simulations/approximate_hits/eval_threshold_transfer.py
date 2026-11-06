@@ -32,7 +32,7 @@ from utils.base.logs import setup_logging
 
 from utils.cache.entries import perturbed
 from utils.cache.legacy_features import build_state
-from utils.cache.metrics import expand_index
+from utils.cache.metrics import expand_index, nearest_point
 from utils.cache.models import gbt
 from utils.cache.parallel import worker_pool
 from utils.cache.workloads import load_run_data
@@ -43,10 +43,6 @@ from utils.cache.calibration import (
 logger = logging.getLogger(__name__)
 
 #-------------------------------------------------------------------------------
-
-
-def _point(res, size):
-    return min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
 
 
 def _cache_frac(run, entries):
@@ -60,14 +56,14 @@ def cache_family(data, args, run):
     main = by_t[round(args.target, 6)]
     fam = []
     for size in args.sizes:
-        p = _point(main, size)
+        p = nearest_point(main, size)
         fam.append((f"size{100 * size:g}%", (args.target, p, main["selected"][:p["n_entries"]])))
     for t in args.other_targets:
         r = by_t[round(t, 6)]
-        p = _point(r, args.base_size)
+        p = nearest_point(r, args.base_size)
         fam.append((f"T{t:g}@{100 * args.base_size:g}%",
                     (args.target, p, r["selected"][:p["n_entries"]])))
-    p = _point(main, args.base_size)
+    p = nearest_point(main, args.base_size)
     base = main["selected"][:p["n_entries"]]
     n_kv = len(run.k_values)
     n_cand = len(run.cand_q)

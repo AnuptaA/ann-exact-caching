@@ -38,3 +38,35 @@ def expand_index(w):
         raise ValueError("weights must be non-negative integers")
     return np.repeat(np.arange(len(w)), w.astype(np.int64))
 
+
+def admit(lam, s, y):
+    """(hit rate, mean retention of the hits or None) when admitting s >= lam."""
+    adm = s >= lam if lam is not None else np.zeros(len(s), dtype=bool)
+    return float(adm.mean()), (float(y[adm].mean()) if adm.any() else None)
+
+
+def result_for_target(data, target):
+    """The greedy result of a saved run for one retention target."""
+    for res in data["results"]:
+        if abs(res["target"] - target) < 1e-9:
+            return res
+    raise ValueError(f"target {target} not in this run; available: "
+                     f"{[r['target'] for r in data['results']]}")
+
+
+def nearest_point(res, size):
+    """The checkpoint of a greedy result whose cache fraction is closest to size."""
+    if not res["points"]:
+        raise ValueError("greedy result has no checkpoints")
+    return min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
+
+
+def state_tasks(res, sizes, target=None):
+    """(target, point, entries) per requested cache size, as the evaluators take them."""
+    target = res["target"] if target is None else target
+    out = []
+    for size in sizes:
+        p = nearest_point(res, size)
+        out.append((target, p, res["selected"][:p["n_entries"]]))
+    return out
+

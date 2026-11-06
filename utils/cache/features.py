@@ -2,10 +2,13 @@
 #-------------------------------------------------------------------------------
 """The 7-feature retention inputs: per-ball offset and size, plus the shell intruder counts."""
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from utils.base.knn import knn_dists, pairwise_dist, sq_norms
-from utils.cache.entries import entry_kmax
+from utils.cache.entries import entry_kmax, state_tables
+from utils.cache.shell import shell_features, shell_sample
 
 N_BALLS = 3
 POOR_FIT = 10.0
@@ -62,4 +65,49 @@ def neighborhood_radius(q, st, k, eps=1e-12):
     if len(st["db_c"]) < k:
         raise ValueError(f"only {len(st['db_c'])} cached vectors, fewer than k={k}")
     return np.maximum(knn_dists(q, st["db_c"], st["db_c_sq"], k)[:, k - 1], eps)
+
+
+@dataclass
+class SplitInputs:
+    """One cache state evaluated on every split (dicts keyed by split name)."""
+    st: dict      # state tables
+    bl: dict      # balls
+    y: dict       # retention per distinct query
+    w: dict       # request weights per distinct query
+    nr: dict      # neighborhood radius
+    B: dict       # ball features, missing balls set to POOR_FIT
+
+
+def split_inputs(run, entries, splits, n_balls=N_BALLS):
+    """Labels, weights, neighborhood radius and ball features per split.
+
+    n_balls=None skips the ball features (B is empty). Returns None when the cache holds
+    no more than k vectors (nothing to answer from).
+    """
+    st = state_tables(run, entries)
+    if len(st["cached"]) <= run.k:
+        return None
+    bl = balls_of(run, entries)
+    nr = {sp: neighborhood_radius(run.sets[sp][0], st, run.k) for sp in splits}
+    return SplitInputs(
+        st=st, bl=bl, nr=nr,
+        y={sp: st["in_cache"][run.topk[sp]].mean(axis=1) for sp in splits},
+        w={sp: run.sets[sp][1].astype(np.float64) for sp in splits},
+        B={} if n_balls is None else {
+            sp: np.nan_to_num(ball_features(run.sets[sp][0], nr[sp], bl, n_balls), nan=POOR_FIT)
+            for sp in splits})
+
+
+def shell_block(run, inp, p, R, bits, columns=None):
+    """Shell sample and its features per split.
+
+    columns: indices into the shell feature vector, e.g. [SAMPLE_J] for the
+    1.0 x radius intruder count; None keeps all columns.
+    """
+    samp = shell_sample(run, inp.bl, inp.st["in_cache"], p, R, bits)
+    S = {}
+    for sp in inp.nr:
+        F = shell_features(run.sets[sp][0], inp.nr[sp], samp)
+        S[sp] = F if columns is None else F[:, columns]
+    return samp, S
 

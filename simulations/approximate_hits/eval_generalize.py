@@ -34,6 +34,7 @@ from pathlib import Path
 
 import numpy as np
 
+from utils.cache.metrics import nearest_point, result_for_target
 from utils.base.logs import setup_logging
 
 from utils.base.knn import pairwise_dist
@@ -122,13 +123,13 @@ def mode_caches(data, args, run, topk):
     main = res[round(args.target, 6)]
     fam = {}
     for size in args.sizes:
-        p = min(main["points"], key=lambda p: abs(p["cache_frac"] - size))
+        p = nearest_point(main, size)
         fam[f"{100 * size:g}%"] = (main["selected"][:p["n_entries"]], p["cache_frac"])
     r = res[round(args.other_target, 6)]
-    p = min(r["points"], key=lambda p: abs(p["cache_frac"] - args.base_size))
+    p = nearest_point(r, args.base_size)
     fam[f"T={args.other_target:g} cache, {100 * args.base_size:g}%"] = (
         r["selected"][:p["n_entries"]], p["cache_frac"])
-    p = min(main["points"], key=lambda p: abs(p["cache_frac"] - args.base_size))
+    p = nearest_point(main, args.base_size)
     n_kv = len(run.k_values)
     ent = perturbed(main["selected"][:p["n_entries"]], args.perturb, len(run.cand_q),
                     n_kv, np.random.default_rng(0))
@@ -170,11 +171,11 @@ def mode_caches(data, args, run, topk):
 
 
 def mode_k(data, args, run, topk):
-    res = next(r for r in data["results"] if abs(r["target"] - args.target) < 1e-9)
+    res = result_for_target(data, args.target)
     T, ks = args.target, args.ks
     out = {}
     for size in args.sizes:
-        p = min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
+        p = nearest_point(res, size)
         logger.info(f"features for cache {100 * size:g}% at k = {ks}...")
         D = cache_data(run, res["selected"][:p["n_entries"]], ks, topk)
         models = {k: fit_logistic(*D[k]["fit"]) for k in ks}

@@ -31,6 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
+from utils.cache.metrics import state_tasks
 from utils.base.logs import setup_logging
 
 from utils.cache.entries import state_tables
@@ -155,9 +156,7 @@ def main():
     for res in data["results"]:
         if not any(abs(res["target"] - t) < 1e-9 for t in args.targets):
             continue
-        for size in args.sizes:
-            p = min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
-            tasks.append((res["target"], p, res["selected"][:p["n_entries"]]))
+        tasks += state_tasks(res, args.sizes)
     logger.info(f"{len(tasks)} states x {args.trials} trials")
     with worker_pool(eval_state, args.workers, len(tasks), run=run, params=params) as pool:
         out = pool.map(tasks)
