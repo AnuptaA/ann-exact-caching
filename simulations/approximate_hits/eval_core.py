@@ -34,34 +34,28 @@ interpolated on the greedy oracle curve, None beyond its range).
 Writes <run>/core.json. Requires scikit-learn (.venv python).
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
+from utils.base.logs import setup_logging
+
 from utils.cache.models import gbt_regressor
-from utils.base.knn import pairwise_dist, sq_norms
-from utils.cache.entries import entry_kmax
 from utils.cache.metrics import best_cutoff_rate
-from utils.base.knn import knn_dists
 from utils.cache.entries import state_tables
-from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of
+from utils.cache.features import ball_features, balls_of, neighborhood_radius
 from utils.cache.metrics import expand_index
 from utils.cache.parallel import worker_pool
-from utils.cache.shell import SAMPLE_J, load_cand_ext, shell_features, shell_ids, shell_sample
-from utils.cache.workloads import SCORE_SPLITS, load_run_data
+from utils.cache.shell import shell_features, shell_sample
+from utils.cache.workloads import load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 EPS = 1e-12
@@ -109,7 +103,7 @@ def eval_state(task, run, args, points):
     sets, topk = run.sets, run.topk
     y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in ("fit", "cal", "test")}
     w = {sp: sets[sp][1].astype(np.float64) for sp in ("fit", "cal", "test")}
-    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], EPS)
+    nr = {sp: neighborhood_radius(sets[sp][0], st, k)
           for sp in ("fit", "cal", "test")}
     ball_cache, shell_cache = {}, {}
     out = {"cache_frac": point["cache_frac"], "n_balls": len(bl["r"]),
@@ -152,6 +146,7 @@ def eval_state(task, run, args, points):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("run_dir")
     ap.add_argument("--target", type=float, default=0.9)

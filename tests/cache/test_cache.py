@@ -73,7 +73,6 @@ def test_retention_of_cached_query_is_one():
     assert c.retention(np.array([3]))[0] == 1.0
 
 
-
 def test_ball_features_agree_with_offline_extractor():
     D = _data()
     c = Cache(D, k=5, R=60, bits=32, budget=1e9)

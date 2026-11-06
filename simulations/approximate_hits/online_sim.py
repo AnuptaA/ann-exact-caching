@@ -65,25 +65,21 @@ queries), top-R searches (warm-up, rebuild candidates, LRU insertions), and
 vectors fetched into the cache or sample. Writes <out>/<method>.json.
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
+
+from utils.base.logs import setup_logging
 
 from utils.cache.models import fit_logistic
 from utils.cache.cache import Cache
 from utils.cache.population import greedy_entries, hits_of_entries, oracle_hits
 from utils.cache.calibration import hoeffding_upper, select, threshold_grid
-from utils.base.knn import sq_dist
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 ESCI = Path("datasets/esci/data_vectors")
@@ -320,6 +316,7 @@ def load(prep, args):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--prep", type=str, default="simulations/approximate_hits/results/online/esci1m")
     ap.add_argument("--method", choices=["static", "periodic", "triggered", "lru", "aker",

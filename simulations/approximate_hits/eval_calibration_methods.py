@@ -23,15 +23,15 @@ distribution; a trial fails if the admitted evaluation queries' mean
 retention is below T. A valid method should fail in at most ~delta of trials.
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
+
+from utils.base.logs import setup_logging
 
 from utils.cache.entries import state_tables
 from utils.cache.legacy_features import features
@@ -42,9 +42,6 @@ from utils.cache.calibration import (
     METHODS, select, threshold_grid,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 #-------------------------------------------------------------------------------
@@ -132,6 +129,7 @@ def eval_state(task, run, params):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir")
     ap.add_argument("--targets", type=float, nargs="+", default=[0.9, 0.95])

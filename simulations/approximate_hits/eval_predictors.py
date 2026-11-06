@@ -25,19 +25,16 @@ over all evaluated cache states of the run.
 Requires scikit-learn (run with the repo's .venv python).
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits.eval_certificates import build_entry_tables
-from utils.base.knn import pairwise_dist
-from utils.base.knn import exact_topk
+from utils.base.logs import setup_logging
+
 from utils.cache.legacy_features import EXT_NAMES, FEATURE_NAMES, SPLITS, build_state
 from utils.cache.metrics import expand_index
 from utils.cache.models import fit_ridge, gbt
@@ -45,9 +42,6 @@ from utils.cache.parallel import worker_pool
 from utils.cache.workloads import load_run_data
 from utils.cache.calibration import select, threshold_grid
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 MODELS = ["ridge_base", "ridge_ext", "gbt", "gbt_cls", "gbt_q20", "gbt_pooled"]
@@ -108,6 +102,7 @@ def evaluate_state(state, scorers, delta):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir")
     ap.add_argument("--targets", type=float, nargs="+", default=[0.9, 0.95])

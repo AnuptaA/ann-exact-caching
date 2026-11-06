@@ -18,21 +18,20 @@ Output: hit rate (fraction of test queries served from cache) vs cache size
 (fraction of database vectors), one line per retention target.
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 from datetime import datetime
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
+
+from utils.base.logs import setup_logging
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from datasets.dataloaders import load_fvecs_fast
 from utils.cache.workloads import load_inputs
 from utils.base.knn import exact_topk
 from utils.cache.population import (
@@ -41,9 +40,6 @@ from utils.cache.population import (
     online_hits,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 DEFAULT_TARGETS = [0.5, 0.7, 0.8, 0.9, 0.95, 1.0]
@@ -171,6 +167,7 @@ def plot_results(results, out_dir, n_db, title="SIFT"):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--dataset", choices=["sift", "esci"], default="sift")
     ap.add_argument("--esci-dir", type=str, default="datasets/esci/data_vectors")

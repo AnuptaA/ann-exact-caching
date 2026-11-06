@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """Tests for the analytic scores in eval_simple."""
 
-import sys
-from pathlib import Path
-
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 

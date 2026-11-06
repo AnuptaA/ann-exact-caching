@@ -4,7 +4,7 @@
 
 import numpy as np
 
-from utils.base.knn import pairwise_dist, sq_norms
+from utils.base.knn import knn_dists, pairwise_dist, sq_norms
 from utils.cache.entries import entry_kmax
 
 N_BALLS = 3
@@ -53,3 +53,9 @@ def ball_features(q, nr, bl, n):
         d = pairwise_dist(q[s:s + 2048], bl["c"], bl["c_sq"])
         out[s:s + 2048] = fit_balls(nr[s:s + 2048], d, bl["r"], n, np.nan)
     return out
+
+
+def neighborhood_radius(q, st, k, eps=1e-12):
+    """Distance from each query to its k-th nearest cached vector (floored at eps)."""
+    return np.maximum(knn_dists(q, st["db_c"], st["db_c_sq"], k)[:, k - 1], eps)
+

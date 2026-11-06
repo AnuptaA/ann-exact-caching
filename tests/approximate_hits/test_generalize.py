@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """Tests for helpers in eval_generalize."""
 
-import sys
-from pathlib import Path
-
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 

@@ -20,15 +20,15 @@ Reports realized test retention over hits and hit rate per pair. Writes
 <run>/threshold_transfer.json. Requires scikit-learn (run with .venv python).
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
+
+from utils.base.logs import setup_logging
 
 from utils.cache.entries import perturbed
 from utils.cache.legacy_features import build_state
@@ -40,9 +40,6 @@ from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 #-------------------------------------------------------------------------------
@@ -102,6 +99,7 @@ def _lambda(model, src, cal, target, delta):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("run_dir")
     ap.add_argument("--target", type=float, default=0.9)

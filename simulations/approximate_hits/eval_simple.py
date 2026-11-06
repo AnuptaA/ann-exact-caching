@@ -20,32 +20,28 @@ Missing ball slots (fewer balls than 3) are filled with a poor fit (10).
 Writes <run>/simple.json. Requires scikit-learn (.venv python).
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
+from utils.base.logs import setup_logging
+
 from utils.cache.models import gbt_regressor, logistic_scores, standardize
 from utils.cache.metrics import best_cutoff_rate
-from utils.base.knn import knn_dists
 from utils.cache.entries import state_tables
-from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of
+from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of, neighborhood_radius
 from utils.cache.metrics import expand_index
 from utils.cache.parallel import worker_pool
-from utils.cache.shell import SAMPLE_J, load_cand_ext, shell_features, shell_ids, shell_sample
+from utils.cache.shell import SAMPLE_J, shell_features, shell_sample
 from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 
@@ -106,7 +102,7 @@ def eval_state(task, run, args):
     sets, topk = run.sets, run.topk
     y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SCORE_SPLITS}
     w = {sp: sets[sp][1].astype(np.float64) for sp in SCORE_SPLITS}
-    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SCORE_SPLITS}
+    nr = {sp: neighborhood_radius(sets[sp][0], st, k) for sp in SCORE_SPLITS}
     B = {sp: np.nan_to_num(ball_features(sets[sp][0], nr[sp], bl, N_BALLS), nan=POOR_FIT)
          for sp in SCORE_SPLITS}
     samp = shell_sample(run, bl, st["in_cache"], args.p, args.R, args.b)
@@ -129,6 +125,7 @@ def eval_state(task, run, args):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("run_dir")
     ap.add_argument("--target", type=float, default=0.9)

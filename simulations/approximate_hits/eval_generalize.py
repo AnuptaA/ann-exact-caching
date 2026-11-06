@@ -26,15 +26,15 @@ Each: test hit rate, realized retention, and the oracle (optimal admission on
 true retention). Writes <run>/generalize_<mode>.json. Needs scikit-learn.
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
+
+from utils.base.logs import setup_logging
 
 from utils.base.knn import pairwise_dist
 from utils.cache.entries import perturbed
@@ -48,9 +48,6 @@ from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 SHELL = (0.25, 500, 4)
@@ -204,6 +201,7 @@ def mode_k(data, args, run, topk):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("run_dir")
     ap.add_argument("--mode", choices=["caches", "k"], required=True)

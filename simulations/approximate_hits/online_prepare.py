@@ -14,20 +14,17 @@ Writes into --out:
                   phase   0 / 1 per position of the shift stream
 """
 
-import sys
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
+from utils.base.logs import setup_logging
+
 from utils.base.knn import exact_topk
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 ESCI = Path("datasets/esci/data_vectors")
@@ -57,6 +54,7 @@ def shift_stream(labels, group, rng):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--out", type=str, default="simulations/approximate_hits/results/online/esci1m")
     ap.add_argument("--n-db", type=int, default=1000000)

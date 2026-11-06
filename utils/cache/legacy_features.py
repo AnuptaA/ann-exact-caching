@@ -4,7 +4,7 @@
 
 import numpy as np
 
-from utils.base.knn import pairwise_dist, sq_norms
+from utils.base.knn import pairwise_dist
 from utils.cache.entries import is_member, state_tables
 
 CHUNK = 2048

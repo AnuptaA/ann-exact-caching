@@ -31,22 +31,19 @@ Writes <run>/aker_thresholds[_<tag>].json. Ceiling variant: --tau-init 1
 --alpha-t 1 --alpha-l 1 (static rule d < minD, the loosest Aker allows).
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
+
+from utils.base.logs import setup_logging
 
 from utils.base.knn import fetch_rows, pairwise_dist, sq_norms
 from utils.cache.workloads import AKER, WORKLOADS, TRACE_SPLITS
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 CHUNK = 4096
@@ -194,6 +191,7 @@ def eval_state(run, point, entries, args):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("run_dirs", nargs="+")
     ap.add_argument("--target", type=float, default=0.9,

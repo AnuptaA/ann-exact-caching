@@ -21,15 +21,15 @@ distinct request vectors and saved to <out>/topk.npz, so every later
 evaluation uses identical neighbor lists.
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
+
+from utils.base.logs import setup_logging
 
 from utils.cache.workloads import WORKLOADS, build_trace, load_base, split_view
 from simulations.approximate_hits import run_e2e_oracle_sift as base
@@ -39,9 +39,6 @@ from simulations.approximate_hits.run_e2e_oracle_sift import (
 )
 from utils.base.knn import exact_topk_blocked
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 DEFAULT_CHECKPOINTS = [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05]
@@ -53,6 +50,7 @@ DEFAULT_CHECKPOINTS = [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05]
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--trace", choices=sorted(WORKLOADS), required=True)
     ap.add_argument("--k", type=int, default=10)

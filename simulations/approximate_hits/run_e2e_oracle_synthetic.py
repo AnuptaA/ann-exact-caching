@@ -19,34 +19,31 @@ The database, retention oracle, policy, and greedy population are the same as
 run_e2e_oracle_sift.py.
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 from datetime import datetime
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
-import numpy as np
+from utils.base.logs import setup_logging
 
-from datasets.dataloaders import load_fvecs_fast
 from utils.cache.workloads import build_inputs
 from simulations.approximate_hits import run_e2e_oracle_sift as base
 from utils.cache.population import GreedyPopulator
-from simulations.approximate_hits.run_e2e_oracle_sift import DEFAULT_CHECKPOINTS, DEFAULT_K_VALUES, DEFAULT_TARGETS, plot_results, run_target, _print_target
-from utils.cache.workloads import SIFT1M_DIR
+from simulations.approximate_hits.run_e2e_oracle_sift import (
+    DEFAULT_CHECKPOINTS, DEFAULT_K_VALUES, DEFAULT_TARGETS, plot_results, run_target,
+    _print_target,
+)
 from utils.base.knn import exact_topk
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 #-------------------------------------------------------------------------------
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--zipf", type=float, default=0.99, help="Zipf exponent s")
     ap.add_argument("--method", choices=["interp", "gauss"], default="interp")

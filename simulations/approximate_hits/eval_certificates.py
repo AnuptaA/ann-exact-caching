@@ -24,15 +24,15 @@ Admission uses each certificate's lower bound in place of true retention, so
 the hits-only average target holds for true retention as well.
 """
 
-import sys
 import json
 import argparse
 import logging
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
+
+from utils.base.logs import setup_logging
 
 from utils.cache.population import hits_from_histograms, online_hits
 from utils.cache.workloads import load_inputs
@@ -40,9 +40,6 @@ from utils.base.knn import exact_topk, pairwise_dist, sq_norms
 from utils.cache.entries import build_entry_tables
 from utils.cache.parallel import worker_pool
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s",
-                    datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
 CHUNK = 2048
@@ -180,6 +177,7 @@ def eval_target(res, g):
 
 
 def main():
+    setup_logging()
     ap = argparse.ArgumentParser()
     ap.add_argument("run_dir")
     ap.add_argument("--profile-sizes", type=int, nargs="+", default=[100, 1000])
