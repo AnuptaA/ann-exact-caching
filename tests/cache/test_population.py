@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import numpy as np
 import pytest
 
-from simulations.approximate_hits.greedy_population import (
+from utils.cache.population import (
     GreedyPopulator,
     hits_from_histograms,
     online_hits,

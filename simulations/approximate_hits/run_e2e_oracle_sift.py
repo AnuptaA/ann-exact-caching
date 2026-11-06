@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 
 from datasets.dataloaders import load_fvecs_fast
 from utils.base.knn import exact_topk
-from simulations.approximate_hits.greedy_population import (
+from utils.cache.population import (
     GreedyPopulator,
     hits_from_histograms,
     online_hits,

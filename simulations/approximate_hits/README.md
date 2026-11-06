@@ -15,7 +15,7 @@ training queries whose exact neighbors are known.
    balls of candidate-generating queries for several K. Greedy adds the entry
    with the largest (additional scoring-query hits) / (additional cached
    vectors) under the hits-only average-retention policy.
-   - `greedy_population.py`: policy (`hits_from_histograms`, `online_hits`)
+   - `utils/cache/population.py`: policy (`hits_from_histograms`, `online_hits`)
      and the incremental `GreedyPopulator`.
    - Drivers (write `results.json` and plots into `--out`):
      - `run_e2e_oracle_sift.py`: SIFT or ESCI (`--dataset`) with real queries.

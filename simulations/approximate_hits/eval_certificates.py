@@ -34,7 +34,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits.greedy_population import hits_from_histograms, online_hits
+from utils.cache.population import hits_from_histograms, online_hits
 from simulations.approximate_hits.run_e2e_oracle_sift import load_inputs
 from utils.base.knn import exact_topk, pairwise_dist, sq_norms
 

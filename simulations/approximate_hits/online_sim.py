@@ -77,7 +77,7 @@ import numpy as np
 
 from simulations.approximate_hits.eval_core import quantize
 from simulations.approximate_hits.eval_generalize import fit_logistic
-from simulations.approximate_hits.greedy_population import GreedyPopulator, hits_from_histograms
+from utils.cache.population import GreedyPopulator, hits_from_histograms
 from utils.cache.calibration import hoeffding_upper, select, threshold_grid
 from utils.base.knn import sq_dist
 

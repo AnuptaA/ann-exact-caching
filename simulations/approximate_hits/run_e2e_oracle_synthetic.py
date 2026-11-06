@@ -32,7 +32,7 @@ import numpy as np
 
 from datasets.dataloaders import load_fvecs_fast
 from simulations.approximate_hits import run_e2e_oracle_sift as base
-from simulations.approximate_hits.greedy_population import GreedyPopulator
+from utils.cache.population import GreedyPopulator
 from simulations.approximate_hits.run_e2e_oracle_sift import (
     DEFAULT_CHECKPOINTS, DEFAULT_K_VALUES, DEFAULT_TARGETS, SIFT1M_DIR,
     plot_results, run_target, _print_target,
