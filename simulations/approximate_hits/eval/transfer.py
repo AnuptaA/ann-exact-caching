@@ -21,15 +21,14 @@ Reports realized test retention over hits and hit rate per pair. Writes
 """
 
 import json
-import argparse
 import logging
 from pathlib import Path
 
 
 import numpy as np
 
-from utils.base.logs import setup_logging
 
+from simulations.approximate_hits.common import config_of
 from utils.cache.entries import perturbed
 from utils.cache.legacy_features import build_state
 from utils.cache.metrics import expand_index, nearest_point
@@ -94,9 +93,7 @@ def _lambda(model, src, cal, target, delta):
                   grid, target, delta)
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def add_args(ap):
     ap.add_argument("run_dir")
     ap.add_argument("--target", type=float, default=0.9)
     ap.add_argument("--sizes", type=float, nargs="+", default=[0.001, 0.005, 0.01, 0.05])
@@ -107,7 +104,10 @@ def main():
     ap.add_argument("--delta", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--workers", type=int, default=8)
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     run_dir = Path(args.run_dir)
 
     data, cfg, run = load_run_data(run_dir, args.n_each)
@@ -147,11 +147,7 @@ def main():
         if len(gaps):
             logger.info(f"  {tag}: {len(off)} off-diagonal pairs with hits; worst retention - T "
                         f"{gaps.min():+.3f}; below T-0.01: {(gaps < -0.01).mean():.0%}")
-    out = {"args": vars(args), "caches": [{"name": n, "cache_frac": st["cache_frac"]}
+    out = {"args": config_of(args), "caches": [{"name": n, "cache_frac": st["cache_frac"]}
                                           for n, st in caches], "pairs": pairs}
     (run_dir / "threshold_transfer.json").write_text(json.dumps(out, indent=1))
     logger.info(f"Wrote {run_dir / 'threshold_transfer.json'}")
-
-
-if __name__ == "__main__":
-    main()

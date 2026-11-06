@@ -32,15 +32,14 @@ Writes <run>/aker_thresholds[_<tag>].json. Ceiling variant: --tau-init 1
 """
 
 import json
-import argparse
 import logging
 from pathlib import Path
 
 
 import numpy as np
 
+from simulations.approximate_hits.common import config_of
 from utils.cache.metrics import result_for_target
-from utils.base.logs import setup_logging
 
 from utils.base.knn import fetch_rows, pairwise_dist, sq_norms
 from utils.cache.workloads import PATHS, TRACE_SPLITS, WORKLOADS
@@ -191,9 +190,7 @@ def eval_state(run, point, entries, args):
 #-------------------------------------------------------------------------------
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def add_args(ap):
     ap.add_argument("run_dirs", nargs="+")
     ap.add_argument("--target", type=float, default=0.9,
                     help="which greedy cache (selected for this target) to use")
@@ -203,7 +200,10 @@ def main():
     ap.add_argument("--alias-update", choices=["approx", "equality", "none"],
                     default="approx")
     ap.add_argument("--tag", type=str, default="")
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     name = "aker_thresholds" + (f"_{args.tag}" if args.tag else "") + ".json"
     for run_dir in map(Path, args.run_dirs):
         logger.info(f"{run_dir.name}: loading...")
@@ -222,10 +222,6 @@ def main():
                                   f" entry {s[m]['hit_retention_entry'] or 0:.3f}"
                                   for m in ("cold", "warm")))
             states.append(s)
-        (run_dir / name).write_text(json.dumps({"args": vars(args), "states": states},
+        (run_dir / name).write_text(json.dumps({"args": config_of(args), "states": states},
                                                indent=1))
         logger.info(f"  wrote {run_dir / name}")
-
-
-if __name__ == "__main__":
-    main()

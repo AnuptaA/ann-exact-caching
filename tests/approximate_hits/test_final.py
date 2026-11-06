@@ -4,7 +4,7 @@
 
 import numpy as np
 
-from simulations.approximate_hits import eval_final as ef
+from simulations.approximate_hits.eval import final as ef
 from utils.cache.calibration import threshold_grid
 
 

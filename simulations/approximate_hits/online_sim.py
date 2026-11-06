@@ -73,6 +73,7 @@ from pathlib import Path
 
 import numpy as np
 
+from simulations.approximate_hits.common import config_of
 from utils.base.logs import setup_logging
 
 from utils.cache.models import fit_logistic
@@ -397,7 +398,7 @@ def main():
     if args.method in ("aker", "qvcache"):
         from utils.cache import baselines as ob
         cls = ob.Aker if args.method == "aker" else ob.QVCache
-        res = dict(cls(D, stream, args).run(), method=args.method, args=vars(args))
+        res = dict(cls(D, stream, args).run(), method=args.method, args=config_of(args))
     else:
         res = Sim(D, stream, args).run(args.method)
     if args.stream == "shift":

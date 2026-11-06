@@ -4,7 +4,7 @@
 
 import numpy as np
 
-from simulations.approximate_hits import eval_core as ec
+from simulations.approximate_hits.eval import core as ec
 from utils.cache.features import ball_features, balls_of
 from utils.cache.shell import quantize, shell_sample
 from utils.cache.workloads import RunData

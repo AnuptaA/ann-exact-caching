@@ -7,26 +7,16 @@ work for all three workloads, not that the numbers are right.
 """
 
 import json
-import sys
 
 import numpy as np
 import pytest
 
-from simulations.approximate_hits import (
-    cli, eval_aker_thresholds, eval_calibrated, eval_calibration_methods, eval_certificates,
-    eval_core, eval_final, eval_generalize, eval_predictors, eval_shell_ablation,
-    eval_shell_budget, eval_shell_size, eval_simple, eval_threshold_transfer,
-)
+from simulations.approximate_hits import cli
 from utils.cache import workloads
 
 
-def run(main, *argv):
-    old = sys.argv
-    sys.argv = ["prog", *map(str, argv)]
-    try:
-        main()
-    finally:
-        sys.argv = old
+def evaluate(name, run_dir, *argv):
+    cli.main(["eval", name, str(run_dir), *map(str, argv)])
 
 
 def populate(*argv):
@@ -113,69 +103,69 @@ def test_populate_wrote_results_for_every_workload(esci_run, synthetic_run, trac
 
 
 @pytest.mark.parametrize("name,main,args,output", [
-    ("core", eval_core.main, ["--sizes", "0.1", "--n-each", "60", "--workers", "1"], "core.json"),
-    ("simple", eval_simple.main, ["--sizes", "0.1", "--n-each", "60", "--R", "500", "--workers", "1"],
+    ("core", "core", ["--sizes", "0.1", "--n-each", "60", "--workers", "1"], "core.json"),
+    ("simple", "simple", ["--sizes", "0.1", "--n-each", "60", "--R", "500", "--workers", "1"],
      "simple.json"),
-    ("final", eval_final.main, ["--n-each", "60", "--R", "500", "--cal-sizes", "40", "--draws", "3",
+    ("final", "final", ["--n-each", "60", "--R", "500", "--cal-sizes", "40", "--draws", "3",
                                 "--workers", "1"], "final.json"),
-    ("shell_ablation", eval_shell_ablation.main, ["--sizes", "0.1", "--n-each", "60", "--R", "500",
+    ("shell_ablation", "shell-ablation", ["--sizes", "0.1", "--n-each", "60", "--R", "500",
                                                    "--workers", "1"], "shell_ablation.json"),
-    ("shell_size", eval_shell_size.main, ["--sizes", "0.1", "--ps", "0.5", "--Rs", "500",
+    ("shell_size", "shell-size", ["--sizes", "0.1", "--ps", "0.5", "--Rs", "500",
                                           "--cal-sizes", "40", "--draws", "3", "--n-each", "60",
                                           "--workers", "1"], "shell_size.json"),
-    ("shell_budget", eval_shell_budget.main, ["--budgets", "0.1", "--fs", "0.85", "--Rs", "500",
+    ("shell_budget", "shell-budget", ["--budgets", "0.1", "--fs", "0.85", "--Rs", "500",
                                               "--n-each", "60", "--workers", "1"], "shell_budget.json"),
-    ("gen_caches", eval_generalize.main, ["--mode", "caches", "--sizes", "0.1", "--base-size", "0.1",
+    ("gen_caches", "generalize", ["--mode", "caches", "--sizes", "0.1", "--base-size", "0.1",
                                           "--other-target", "0.7", "--n-each", "60"],
      "generalize_caches.json"),
-    ("gen_k", eval_generalize.main, ["--mode", "k", "--ks", "1", "5", "--source-k", "5",
+    ("gen_k", "generalize", ["--mode", "k", "--ks", "1", "5", "--source-k", "5",
                                      "--n-each", "60"], "generalize_k.json"),
-    ("certificates", eval_certificates.main, ["--profile-sizes", "10", "--workers", "1"],
+    ("certificates", "certificates", ["--profile-sizes", "10", "--workers", "1"],
      "certificates.json"),
-    ("calibrated", eval_calibrated.main, ["--n-fit", "60", "--n-calib", "60", "--workers", "1",
+    ("calibrated", "calibrated", ["--n-fit", "60", "--n-calib", "60", "--workers", "1",
                                           "--targets", "0.9"], "calibrated.json"),
-    ("predictors", eval_predictors.main, ["--targets", "0.9", "--sizes", "0.1", "--n-each", "60",
+    ("predictors", "predictors", ["--targets", "0.9", "--sizes", "0.1", "--n-each", "60",
                                           "--workers", "1"], "predictors.json"),
-    ("transfer", eval_threshold_transfer.main, ["--sizes", "0.05", "--base-size", "0.1",
+    ("transfer", "transfer", ["--sizes", "0.05", "--base-size", "0.1",
                                                 "--other-targets", "0.7", "--perturb", "0.3",
                                                 "--n-each", "60", "--workers", "1"],
      "threshold_transfer.json"),
-    ("calibration_methods", eval_calibration_methods.main,
+    ("calibration_methods", "calibration",
      ["--targets", "0.9", "--sizes", "0.1", "--n-fit", "60", "--n-cal", "40", "--trials", "2",
       "--n-pool-requests", "200", "--workers", "1"], "calibration_methods.json"),
 ])
 def test_esci_run_through_every_evaluator(esci_run, name, main, args, output):
-    run(main, esci_run, *args)
+    evaluate(main, esci_run, *args)
     assert json.loads((esci_run / output).read_text())
 
 
 @pytest.mark.parametrize("name,main,args,output", [
-    ("simple", eval_simple.main, ["--sizes", "0.2", "--n-each", "40", "--R", "50", "--workers", "1"],
+    ("simple", "simple", ["--sizes", "0.2", "--n-each", "40", "--R", "50", "--workers", "1"],
      "simple.json"),
-    ("certificates", eval_certificates.main, ["--profile-sizes", "10", "--workers", "1"],
+    ("certificates", "certificates", ["--profile-sizes", "10", "--workers", "1"],
      "certificates.json"),
-    ("calibrated", eval_calibrated.main, ["--n-fit", "40", "--n-calib", "40", "--workers", "1",
+    ("calibrated", "calibrated", ["--n-fit", "40", "--n-calib", "40", "--workers", "1",
                                           "--targets", "0.9"], "calibrated.json"),
-    ("predictors", eval_predictors.main, ["--targets", "0.9", "--sizes", "0.2", "--n-each", "40",
+    ("predictors", "predictors", ["--targets", "0.9", "--sizes", "0.2", "--n-each", "40",
                                           "--workers", "1"], "predictors.json"),
-    ("calibration_methods", eval_calibration_methods.main,
+    ("calibration_methods", "calibration",
      ["--targets", "0.9", "--sizes", "0.2", "--n-fit", "40", "--n-cal", "30", "--trials", "2",
       "--n-pool-requests", "100", "--workers", "1"], "calibration_methods.json"),
 ])
 def test_synthetic_run_through_the_zipf_branches(synthetic_run, name, main, args, output):
-    run(main, synthetic_run, *args)
+    evaluate(main, synthetic_run, *args)
     assert json.loads((synthetic_run / output).read_text())
 
 
 @pytest.mark.parametrize("name,main,args,output", [
-    ("simple", eval_simple.main, ["--sizes", "0.2", "--R", "20", "--workers", "1"], "simple.json"),
-    ("calibrated", eval_calibrated.main, ["--workers", "1", "--targets", "0.9"], "calibrated.json"),
-    ("predictors", eval_predictors.main, ["--targets", "0.9", "--sizes", "0.2", "--workers", "1"],
+    ("simple", "simple", ["--sizes", "0.2", "--R", "20", "--workers", "1"], "simple.json"),
+    ("calibrated", "calibrated", ["--workers", "1", "--targets", "0.9"], "calibrated.json"),
+    ("predictors", "predictors", ["--targets", "0.9", "--sizes", "0.2", "--workers", "1"],
      "predictors.json"),
-    ("aker", eval_aker_thresholds.main, ["--target", "0.9"], "aker_thresholds.json"),
+    ("aker", "aker", ["--target", "0.9"], "aker_thresholds.json"),
 ])
 def test_trace_run_through_the_trace_branches(trace_run, name, main, args, output):
-    run(main, trace_run, *args)
+    evaluate(main, trace_run, *args)
     assert json.loads((trace_run / output).read_text())
 
 

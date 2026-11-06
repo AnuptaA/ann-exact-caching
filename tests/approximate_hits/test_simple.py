@@ -4,7 +4,7 @@
 
 import numpy as np
 
-from simulations.approximate_hits import eval_simple as es
+from simulations.approximate_hits.eval import simple as es
 from utils.cache.shell import COUNT_SCALES, SAMPLE_J
 
 

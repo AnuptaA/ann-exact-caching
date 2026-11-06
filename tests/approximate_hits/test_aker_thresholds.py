@@ -4,7 +4,7 @@
 
 import numpy as np
 
-from simulations.approximate_hits.eval_aker_thresholds import simulate
+from simulations.approximate_hits.eval.aker import simulate
 
 
 def _run(stream, alias_update="approx"):

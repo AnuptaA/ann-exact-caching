@@ -32,7 +32,6 @@ from pathlib import Path
 
 import numpy as np
 
-from utils.base.logs import setup_logging
 
 from utils.cache.population import hits_from_histograms, online_hits
 from utils.cache.workloads import load_inputs
@@ -176,13 +175,14 @@ def eval_target(res, g):
     return {"target": target, "rows": rows}
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser()
+def add_args(ap):
     ap.add_argument("run_dir")
     ap.add_argument("--profile-sizes", type=int, nargs="+", default=[100, 1000])
     ap.add_argument("--workers", type=int, default=6)
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     run_dir = Path(args.run_dir)
 
     data, cfg, db, cand_q, test_q, test_w, test_seq = load_run(run_dir)
@@ -204,7 +204,3 @@ def main():
     path.write_text(json.dumps({"profile_sizes": args.profile_sizes, "results": out}))
     viol = sum(r[key] for t in out for r in t["rows"] for key in r if key.endswith("_violations"))
     logger.info(f"Wrote {path}; total lower-bound violations: {viol}")
-
-
-if __name__ == "__main__":
-    main()

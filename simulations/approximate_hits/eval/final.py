@@ -21,15 +21,14 @@ Writes <run>/final.json. Requires scikit-learn (.venv python).
 """
 
 import json
-import argparse
 import logging
 from pathlib import Path
 
 
 import numpy as np
 
-from utils.base.logs import setup_logging
 
+from simulations.approximate_hits.common import config_of
 from utils.cache.metrics import admit, interp_log, result_for_target
 from utils.cache.features import shell_block, split_inputs
 from utils.cache.metrics import expand_index
@@ -113,9 +112,7 @@ def summarize(path):
 #-------------------------------------------------------------------------------
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def add_args(ap):
     ap.add_argument("run_dir")
     ap.add_argument("--target", type=float, default=0.9)
     ap.add_argument("--p", type=float, default=0.25)
@@ -127,7 +124,10 @@ def main():
     ap.add_argument("--n-each", type=int, default=20000)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--summary", action="store_true", help="only print run_dir/final.json")
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     run_dir = Path(args.run_dir)
     if args.summary:
         summarize(run_dir / "final.json")
@@ -146,8 +146,4 @@ def main():
                         f"7feat {s['model7']['hit_rate']:.3f} balls {s['balls_only']['hit_rate']:.3f}"
                         f" (+{100 * s['sample_memory']:.2f}% memory)")
             (run_dir / "final.json").write_text(
-                json.dumps({"args": vars(args), "states": out}, indent=1))
-
-
-if __name__ == "__main__":
-    main()
+                json.dumps({"args": config_of(args), "states": out}, indent=1))

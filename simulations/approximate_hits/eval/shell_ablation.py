@@ -20,15 +20,14 @@ Requires scikit-learn (.venv python).
 """
 
 import json
-import argparse
 import logging
 from pathlib import Path
 
 
 import numpy as np
 
-from utils.base.logs import setup_logging
 
+from simulations.approximate_hits.common import config_of
 from utils.cache.models import gbt_regressor
 from utils.cache.metrics import admit, best_cutoff_rate, result_for_target, state_tasks
 from utils.cache.features import shell_block, split_inputs
@@ -107,9 +106,7 @@ def eval_state(task, run, args):
 #-------------------------------------------------------------------------------
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def add_args(ap):
     ap.add_argument("run_dir")
     ap.add_argument("--target", type=float, default=0.9)
     ap.add_argument("--sizes", type=float, nargs="+", default=[0.01, 0.05, 0.1, 0.3])
@@ -118,7 +115,10 @@ def main():
     ap.add_argument("--b", type=int, default=4)
     ap.add_argument("--n-each", type=int, default=20000)
     ap.add_argument("--workers", type=int, default=4)
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     run_dir = Path(args.run_dir)
     data, _, run = load_run_data(run_dir, args.n_each)
     res = result_for_target(data, args.target)
@@ -133,8 +133,4 @@ def main():
             logger.info(f"cache {100 * s['cache_frac']:.2f}% (oracle {s['oracle_hit_rate']:.3f}): "
                         + "; ".join(f"{n} {s[n]['calibrated_hit_rate']:.3f}" for n in names))
             (run_dir / "shell_ablation.json").write_text(
-                json.dumps({"args": vars(args), "configs": CONFIGS, "states": out}, indent=1))
-
-
-if __name__ == "__main__":
-    main()
+                json.dumps({"args": config_of(args), "configs": CONFIGS, "states": out}, indent=1))

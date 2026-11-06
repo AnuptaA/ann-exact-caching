@@ -31,8 +31,8 @@ from pathlib import Path
 
 import numpy as np
 
+from simulations.approximate_hits.common import config_of
 from utils.cache.metrics import state_tasks
-from utils.base.logs import setup_logging
 
 from utils.cache.entries import state_tables
 from utils.cache.legacy_features import features
@@ -129,9 +129,7 @@ def eval_state(task, run, params):
     return summary
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser()
+def add_args(ap):
     ap.add_argument("run_dir")
     ap.add_argument("--targets", type=float, nargs="+", default=[0.9, 0.95])
     ap.add_argument("--sizes", type=float, nargs="+", default=[0.01, 0.05, 0.10, 0.30])
@@ -143,7 +141,10 @@ def main():
     ap.add_argument("--delta", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--workers", type=int, default=6)
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     run_dir = Path(args.run_dir)
     params = dict(trials=args.trials, n_cal=args.n_cal, delta=args.delta, seed=args.seed)
 
@@ -162,9 +163,5 @@ def main():
         out = pool.map(tasks)
     out = [o for o in out if o is not None]
     path = run_dir / "calibration_methods.json"
-    path.write_text(json.dumps({"args": vars(args), "methods": METHODS, "states": out}))
+    path.write_text(json.dumps({"args": config_of(args), "methods": METHODS, "states": out}))
     logger.info(f"Wrote {path}")
-
-
-if __name__ == "__main__":
-    main()

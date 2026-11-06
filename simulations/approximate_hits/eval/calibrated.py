@@ -23,14 +23,12 @@ bound), and the realized mean retention over hits on the test queries.
 """
 
 import json
-import argparse
 import logging
 from pathlib import Path
 
 
 import numpy as np
 
-from utils.base.logs import setup_logging
 
 from utils.cache.entries import state_tables
 from utils.cache.legacy_features import FEATURE_NAMES, features
@@ -108,9 +106,7 @@ def eval_target(res, run, args):
     return {"target": target, "rows": rows}
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser()
+def add_args(ap):
     ap.add_argument("run_dir")
     ap.add_argument("--n-fit", type=int, default=20000)
     ap.add_argument("--n-calib", type=int, default=20000)
@@ -120,7 +116,10 @@ def main():
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--targets", type=float, nargs="+", default=None,
                     help="only evaluate these targets (default: all in the run)")
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     run_dir = Path(args.run_dir)
 
     run_cfg = json.loads((run_dir / "results.json").read_text())["config"]
@@ -150,7 +149,3 @@ def main():
                                 "n_calib": args.n_calib, "features": FEATURE_NAMES,
                                 "results": out}))
     logger.info(f"Wrote {path}")
-
-
-if __name__ == "__main__":
-    main()

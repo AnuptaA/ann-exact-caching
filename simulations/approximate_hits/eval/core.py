@@ -35,15 +35,14 @@ Writes <run>/core.json. Requires scikit-learn (.venv python).
 """
 
 import json
-import argparse
 import logging
 from pathlib import Path
 
 
 import numpy as np
 
-from utils.base.logs import setup_logging
 
+from simulations.approximate_hits.common import config_of
 from utils.cache.models import gbt_regressor
 from utils.cache.metrics import best_cutoff_rate, result_for_target, state_tasks
 from utils.cache.features import ball_features, split_inputs
@@ -138,15 +137,16 @@ def eval_state(task, run, args, points):
 #-------------------------------------------------------------------------------
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def add_args(ap):
     ap.add_argument("run_dir")
     ap.add_argument("--target", type=float, default=0.9)
     ap.add_argument("--sizes", type=float, nargs="+", default=[0.01, 0.05, 0.1, 0.3])
     ap.add_argument("--n-each", type=int, default=20000)
     ap.add_argument("--workers", type=int, default=4)
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     run_dir = Path(args.run_dir)
     data, _, run = load_run_data(run_dir, args.n_each)
     res = result_for_target(data, args.target)
@@ -163,10 +163,6 @@ def main():
                             f"{n} {s[n]['calibrated_hit_rate']:.3f}"
                             f"(+{100 * s[n]['sample_memory']:.1f}%)" for n in configs()))
             (run_dir / "core.json").write_text(
-                json.dumps({"args": vars(args), "default": DEFAULT,
+                json.dumps({"args": config_of(args), "default": DEFAULT,
                             "configs": {n: [c[0], c[1]] for n, c in configs().items()},
                             "states": out}, indent=1))
-
-
-if __name__ == "__main__":
-    main()

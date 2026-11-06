@@ -4,7 +4,7 @@
 
 import numpy as np
 
-from simulations.approximate_hits import eval_generalize as eg
+from simulations.approximate_hits.eval import generalize as eg
 
 
 def test_optimal_rate_splits_ties():

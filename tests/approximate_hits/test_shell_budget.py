@@ -4,8 +4,8 @@
 
 import numpy as np
 
-from simulations.approximate_hits import eval_shell_budget as eb
-from simulations.approximate_hits import eval_shell_size as ess
+from simulations.approximate_hits.eval import shell_budget as eb
+from simulations.approximate_hits.eval import shell_size as ess
 from utils.cache.calibration import select
 from utils.cache.shell import shell_ids
 from utils.cache.workloads import RunData

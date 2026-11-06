@@ -27,15 +27,14 @@ true retention). Writes <run>/generalize_<mode>.json. Needs scikit-learn.
 """
 
 import json
-import argparse
 import logging
 from pathlib import Path
 
 
 import numpy as np
 
+from simulations.approximate_hits.common import config_of
 from utils.cache.metrics import nearest_point, result_for_target
-from utils.base.logs import setup_logging
 
 from utils.base.knn import pairwise_dist
 from utils.cache.entries import perturbed
@@ -201,9 +200,7 @@ def mode_k(data, args, run, topk):
     return out
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def add_args(ap):
     ap.add_argument("run_dir")
     ap.add_argument("--mode", choices=["caches", "k"], required=True)
     ap.add_argument("--target", type=float, default=0.9)
@@ -214,9 +211,12 @@ def main():
     ap.add_argument("--ks", type=int, nargs="+", default=[1, 10, 50, 100])
     ap.add_argument("--source-k", type=int, default=10)
     ap.add_argument("--n-each", type=int, default=20000)
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     if args.mode == "k" and args.source_k not in args.ks:
-        ap.error(f"--source-k {args.source_k} must be one of --ks {args.ks}")
+        raise SystemExit(f"--source-k {args.source_k} must be one of --ks {args.ks}")
     run_dir = Path(args.run_dir)
     data, _, run = load_run_data(run_dir, args.n_each)
     if args.mode == "k":
@@ -226,9 +226,5 @@ def main():
     else:
         out = mode_caches(data, args, run, run.topk)
     path = run_dir / f"generalize_{args.mode}.json"
-    path.write_text(json.dumps({"args": vars(args), "results": out}, indent=1))
+    path.write_text(json.dumps({"args": config_of(args), "results": out}, indent=1))
     logger.info(f"wrote {path}")
-
-
-if __name__ == "__main__":
-    main()

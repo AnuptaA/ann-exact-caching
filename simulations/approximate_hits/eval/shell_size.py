@@ -18,15 +18,14 @@ Writes <run>/shell_size.json. Requires scikit-learn (.venv python).
 """
 
 import json
-import argparse
 import logging
 from pathlib import Path
 
 
 import numpy as np
 
-from utils.base.logs import setup_logging
 
+from simulations.approximate_hits.common import config_of
 from utils.cache.features import shell_block, split_inputs
 from utils.cache.metrics import admit, expand_index, result_for_target, state_tasks
 from utils.cache.models import logistic_scores
@@ -102,9 +101,7 @@ def eval_point(task, run, args):
 #-------------------------------------------------------------------------------
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def add_args(ap):
     ap.add_argument("run_dir")
     ap.add_argument("--target", type=float, default=0.9)
     ap.add_argument("--sizes", type=float, nargs="+", required=True)
@@ -117,7 +114,10 @@ def main():
     ap.add_argument("--n-each", type=int, default=20000)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--out-name", type=str, default="shell_size.json")
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     run_dir = Path(args.run_dir)
     data, _, run = load_run_data(run_dir, args.n_each)
     if max(args.Rs) > 500:
@@ -134,8 +134,4 @@ def main():
                         + " ".join(f"{n} {v['hit_rate']:.3f}(+{100 * v['sample_memory']:.2f}%)"
                                    for n, v in s["shells"].items()))
             (run_dir / args.out_name).write_text(
-                json.dumps({"args": vars(args), "states": out}, indent=1))
-
-
-if __name__ == "__main__":
-    main()
+                json.dumps({"args": config_of(args), "states": out}, indent=1))

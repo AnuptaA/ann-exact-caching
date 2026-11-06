@@ -26,15 +26,14 @@ Requires scikit-learn (run with the repo's .venv python).
 """
 
 import json
-import argparse
 import logging
 from pathlib import Path
 
 
 import numpy as np
 
-from utils.base.logs import setup_logging
 
+from simulations.approximate_hits.common import config_of
 from utils.cache.legacy_features import EXT_NAMES, FEATURE_NAMES, SPLITS, build_state
 from utils.cache.metrics import expand_index, state_tasks
 from utils.cache.models import fit_ridge, gbt
@@ -101,16 +100,17 @@ def evaluate_state(state, scorers, delta):
     return out
 
 
-def main():
-    setup_logging()
-    ap = argparse.ArgumentParser()
+def add_args(ap):
     ap.add_argument("run_dir")
     ap.add_argument("--targets", type=float, nargs="+", default=[0.9, 0.95])
     ap.add_argument("--sizes", type=float, nargs="+", default=[0.01, 0.05, 0.10, 0.30])
     ap.add_argument("--n-each", type=int, default=20000)
     ap.add_argument("--delta", type=float, default=0.05)
     ap.add_argument("--workers", type=int, default=8)
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     run_dir = Path(args.run_dir)
 
     data, cfg, run = load_run_data(run_dir, args.n_each)
@@ -135,11 +135,7 @@ def main():
     for st in states:
         out.append(evaluate_state(st, train_models(st, pooled), args.delta))
     path = run_dir / "predictors.json"
-    path.write_text(json.dumps({"args": vars(args), "models": MODELS,
+    path.write_text(json.dumps({"args": config_of(args), "models": MODELS,
                                 "base_features": FEATURE_NAMES,
                                 "ext_features": EXT_NAMES, "states": out}))
     logger.info(f"Wrote {path}")
-
-
-if __name__ == "__main__":
-    main()

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from simulations.approximate_hits.common import config_of
 from simulations.approximate_hits.report.plots import plot_results, print_target
 from utils.base.knn import exact_topk, exact_topk_blocked
 from utils.cache.population import run_targets
@@ -93,8 +94,7 @@ def _schedule(args, n_db):
 
 
 def _config(args, **extra):
-    base = {k: v for k, v in vars(args).items() if k not in ("run", "workload")}
-    return dict(base, **extra)
+    return dict(config_of(args), **extra)
 
 
 def _finish(args, results, n_db, title, config, **top):
