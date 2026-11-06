@@ -25,8 +25,9 @@ from typing import Optional
 import numpy as np
 
 METHODS = ["naive", "eb_bonferroni", "normal_bonferroni", "normal_fixed",
-           "eb_fixed", "normal_split"]
+           "eb_fixed", "normal_split", "normal_fixed_min30"]
 DEFAULT_METHOD = "normal_fixed"
+MIN_N = 30  # normal_fixed_min30: thresholds admitting < MIN_N cal requests are skipped
 
 
 def lcb_normal(n, mean, sd, level):
@@ -93,9 +94,11 @@ def select(method: str, s_cal: np.ndarray, y_cal: np.ndarray,
         ok = (n >= 1) & np.nan_to_num(mean >= target, nan=False)
     elif method.endswith("bonferroni"):
         ok = _passes(n, mean, sd, delta / len(grid_desc), method.split("_")[0], target)
-    elif method.endswith("fixed"):
-        ok = _passes(n, mean, sd, delta, method.split("_")[0], target)
-        fails = np.flatnonzero(~ok)
+    elif "fixed" in method:
+        # skipping depends only on calibration scores, not labels
+        tested = n >= MIN_N if method.endswith("_min30") else np.ones(len(n), dtype=bool)
+        ok = _passes(n, mean, sd, delta, method.split("_")[0], target) & tested
+        fails = np.flatnonzero(tested & ~ok)
         if len(fails):
             ok = ok.copy()
             ok[fails[0]:] = False

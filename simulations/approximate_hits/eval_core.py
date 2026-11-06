@@ -127,10 +127,33 @@ def quantize(x, bits):
     return lo + np.round((x - lo) / step) * step
 
 
-def shell_sample(bl, in_cache, p, R, bits):
+def load_cand_ext(run_dir, R):
+    """Exact top-R database ids per candidate query (for shells deeper than the
+    cached top-500), computed once and saved to <run>/cand_top<R>.npy."""
+    from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk
+    path = Path(run_dir) / f"cand_top{R}.npy"
+    if path.exists():
+        return np.load(path)
+    logger.info(f"exact top-{R} for {len(ecal._G['cand_q'])} candidate queries...")
+    ids = exact_topk(ecal._G["cand_q"], ecal._G["db"], R)
+    tmp = path.with_suffix(".tmp.npy")
+    np.save(tmp, ids)
+    tmp.rename(path)
+    return ids
+
+
+def shell_ids(cand, K, R):
+    """Database ids at ranks K+1..R around one candidate query. Uses the saved
+    deeper neighbor lists (_R["cand_ext"]) when R exceeds the cached top-500."""
     n_kv = len(ecal._G["k_values"])
-    shells = [np.asarray(ecal._G["cached_ids"][i * n_kv + n_kv - 1][k:R])
-              for i, k in zip(bl["cand"], bl["K"]) if k < R]
+    top = ecal._G["cached_ids"][cand * n_kv + n_kv - 1]
+    if R > len(top):
+        return np.asarray(_R["cand_ext"][cand][K:R])
+    return np.asarray(top[K:R])
+
+
+def shell_sample(bl, in_cache, p, R, bits):
+    shells = [shell_ids(i, k, R) for i, k in zip(bl["cand"], bl["K"]) if k < R]
     ids = np.unique(np.concatenate(shells)) if shells else np.empty(0, np.int64)
     ids = ids[~in_cache[ids]]
     ids = ids[_R["draw"][ids] < p]

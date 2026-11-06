@@ -567,6 +567,145 @@ model does not need refitting when the cache or k changes (5m).
   a refresh mechanism (cf. Aker).
 Untested: how hit rate degrades with smaller n (larger safety margin).
 
+## 5o. Online simulator design (milestone 1 not yet built)
+
+Terminology: the SERVE DECISION per query = compute the 7 features against
+the current cache, logistic score, serve from cache iff score >= lambda
+(answer = k nearest cached vectors, union of all entries), else miss ->
+backend. ("Admission" is avoided: in caching it means inserting items.)
+
+Simulation dimensions: fixed vs mixed k; insert / delete rate; data shift;
+workload shift; skew / repetition; memory budget; (later) ANN backend.
+- Data shift: cluster the database (e.g. k-means, 100 clusters); half the
+  clusters are the initial set, half arrive over time (deletes from the
+  first, inserts from the second), so shift is regional. ESCI metadata
+  (locale, category) is an alternative split. Apply changes in batches
+  between query epochs and compute exact top-k once per database snapshot
+  (tractable on ESCI 1M or a 1M SPACEV slice, not 10M).
+- Workload shift: cluster the queries, run one set of clusters then the
+  other; abrupt vs gradual, recurring vs not. spacev-real is a natural
+  abrupt shift.
+
+Methods:
+- Ours: periodic rebuilds with the offline greedy (fixed interval as the
+  baseline; signal-triggered as the main variant), cache and lambda frozen
+  within an epoch, recalibration from the audit window.
+- Cost-aware population: maximize expected hits over the next epoch minus
+  fetch cost (new entries need top-K and shell fetches; already-cached
+  entries are free), with a churn discount.
+- LRU baseline: insert every miss as an entry with fixed K (e.g. 50); an
+  entry is USED when it supplies at least one of the k vectors of a served
+  answer; evict least recently used (shared vectors reference counted);
+  same serve decision, lambda recalibrated every delta requests (guarantee
+  only approximate between recalibrations, since the cache keeps changing).
+- Aker's per-entry threshold rule, online.
+- Static cache (no rebuild); oracle-lambda upper bound.
+
+Audits (random fraction of all queries also sent to the backend; their
+top-k_max ids stored): (1) fresh unbiased calibration data, (2) drift test:
+anytime-valid confidence sequence on audited hits' mean retention, alarm when
+its upper bound < T -> recalibrate, (3) training data if the model must be
+refit (signal: ranking quality on audits drops or lambda collapses hits),
+(4) measured delivered retention. Free early warning: two-sample test of
+incoming score / feature distribution vs the calibration set. Audit rate from
+calibration precision + detection delay (see 5n).
+
+Rebuild signal (utility, separate from calibration validity): shadow rebuild
+= run the greedy on the recent window in the background and compare oracle
+hit rates of the proposed vs current cache on that window; rebuild when the
+gain over the expected epoch exceeds rebuild cost. The greedy works on id
+sets only (candidates' top-K ids, window queries' top-k ids), so no 2x
+vector memory: ~2 KB of ids per candidate plus the window's query vectors
+(count these in the budget). Swap incrementally (evict leaving entries, then
+fetch new ones). Cheap proxies: hit-rate drop, clustered misses, many
+entries touched by inserts / deletes.
+
+Maintenance under data changes:
+- Insert x: for each ball (index over centers) with d(x, c) < radius: add x
+  and evict the ball's farthest member (stays exact top-K, smaller radius),
+  or keep both (top-(K+1)). Balls stay complete either way.
+- Delete x: drop it from any ball; the ball stays complete (K - 1 members
+  within the same radius). Optional exact reserve (Aker's delta) to refill.
+- Shell sample: maintain incrementally: an inserted x in some ball's shell
+  (radius < d <= stored R-th neighbor distance) joins the sample with
+  probability p; deleted x is dropped. Alternative: leave stale until rebuild.
+- Audited answers: same checks against each stored answer's k-th distance,
+  or expire them.
+
+Cost model: backend work in units of searches, distinguishing top-k, top-K
+and top-R fetches; count misses, audits and rebuild fetches. Cold start:
+warm-up period builds the first cache, model and lambda. Claim under drift:
+target holds in stationary stretches; measure violation depth and duration
+after each shift. Mixed k: one model, lambda per k, audits at k_max, entry K
+chosen for the k mix.
+Metrics over time: hit rate, realized retention per window (frequency /
+depth / duration below T), total backend work, number of rebuilds.
+
+Milestone 1: ESCI 1M, fixed k = 10, no data changes, abrupt workload shift
+(query clusters) plus spacev-real; compare static cache, fixed-interval
+rebuild, signal-triggered recalibration + shadow-rebuild triggering, LRU.
+
+TODO (not urgent, do not forget): stop assuming an exact backend. With an
+approximate backend (e.g. average recall 0.95 per search), cached entries'
+top-K and the shell sample are themselves slightly wrong (balls are no
+longer exactly complete), and retention should be measured against what the
+backend returns (or against exact ground truth, both reported). Test with a
+backend of controlled recall (e.g. drop / substitute a fraction of each
+returned list) and with a real ANN index.
+Baselines for all drift experiments: Aker (online, per-entry thresholds) and
+QVCache, in addition to static / periodic / LRU.
+
+## 5p. Online milestone 1 results (ESCI 1M, k = 10, T = 0.9, budget 10%)
+
+Code: `online_prepare.py` (exact top-500 ground truth, query clusters,
+streams), `online_sim.py` (static / periodic / triggered / LRU; ablation
+switches), `online_baselines.py` (Aker, QVCache), `online_summary.py`.
+Streams: random order (no shift) and an abrupt shift (20 k-means query
+clusters split into two halves of ~65k queries; half A then half B).
+Warm-up 20k queries, then batches of 1000; audits 10% (60% calibration role).
+
+Bugs found and fixed while building (each made results look better than
+they were): calibration audits reused to build caches (guarantee broke);
+rebuild candidates overlapping scoring queries (self-serving balls); shadow
+comparison on the proposal's own build queries; labeled-only drift test too
+slow after a shift (few served queries) -> added a label-free score test;
+score test comparing scores of two different caches after a rebuild.
+
+Results (shift stream; hit rate / served retention; after shift = phase B):
+- static 28.4% / 0.883 (phase B 0.790; 14 of 23 5k windows below T)
+- periodic rebuild every 10k: 32.3% / 0.908
+- triggered (score alarm + shadow rebuild): 35.6% / 0.911 (phase B 22.2% /
+  0.919; 1 of 23 windows below T, the one containing the shift)
+- LRU (K = 50): 27.6% / 0.912, but top-500 fetch per miss, 2.5M vectors
+- Aker 0.4% / 0.914; QVCache (D = 0.075) 1.3% / 0.822 (below T). ESCI has no
+  repeated queries, which removes Aker's main hit source; QVCache regions
+  are mostly unseen. Needs workloads with repetition and tuning.
+No-shift stream: static 31.1%, triggered 30.6% (no alarms, no rebuilds),
+periodic 27.1% (rebuilds from partly labeled data hurt), LRU 24.4%.
+
+Why phase B hit rate is lower: best offline cache built from phase B's own
+queries reaches oracle 41.4% / 7-feature model 34.7% (phase A: 62.6% /
+57.1%), so B is harder. Online: 6.2% before the first rebuild, 19.8% after it
+(built from only 5k post-shift queries), 27.9% after the second (30k
+window): slow adaptation and partly labeled rebuild data.
+
+Trigger ablation (2 seeds, both streams): the retention alarm never fired
+(redundant); the score alarm is what keeps the guarantee after a shift (1-2 vs
+~10 windows below T); shadow rebuilds are what recover hit rate (phase B ~23%
+vs 2.5-7%); per-batch recalibration adds nothing over recalibrating at alarms,
+checks and rebuilds. Periodic shadow checks cost ~39k extra top-500 fetches on
+the stable stream without ever rebuilding.
+
+Calibration size (independent re-splits, 200 draws): ~2000 calibration
+queries reach 95-97% of the 10k hit rate; below-T frequency 0-10% (tiny
+shortfalls) at small n, ~5% from 2000 on. Bernstein bound unusable.
+Budget split (cache vs shell, chosen on dev, 7 runs): never hurts, gains up
+to +10.7 points (ESCI 1M 30%, TriviaQA 0.3 5%), small on SPACEV.
+
+Next: alarm-scheduled rebuild checks (drop retention alarm, per-batch
+recalibration, fixed shadow schedule); Aker-trace workloads with repetition
+plus spacev-real; tune all baseline parameters.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes

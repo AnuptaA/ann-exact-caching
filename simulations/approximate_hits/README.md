@@ -51,6 +51,14 @@ training queries whose exact neighbors are known.
      samples, older feature sets): `eval_radius_scores.py`,
      `eval_radius_models.py`, `eval_focused.py`, `eval_gap.py`,
      `eval_ablation.py`, `eval_features_v2.py`.
+   - Final model at scale: `eval_final.py` (every checkpoint, memory-fair
+     baseline, calibration-size sweep), `eval_shell_size.py` (larger shells,
+     calibration-size study), `eval_shell_budget.py` (cache / shell split of a
+     memory budget chosen on dev).
+4. **Online simulation.** `online_prepare.py` (ground truth and query
+   streams), `online_sim.py` (static / periodic / triggered / LRU, warm-up,
+   audits, recalibration, drift alarms, shadow rebuilds), `online_baselines.py`
+   (Aker, QVCache), `online_summary.py`.
 3. **Summaries and figures.** `summarize*.py`, `plot_*.py`,
    `make_summary_figures.py` (writes `results/summary/`, including
    `fig4_aker.png` for the Aker traces), `plot_feature_diagram.py` (2-D
