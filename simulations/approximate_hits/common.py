@@ -5,7 +5,7 @@
 from pathlib import Path
 
 # set by the dispatcher, not part of a command's own configuration
-_DISPATCH_KEYS = {"run", "command", "workload", "evaluation", "sift_dir", "aker_dir"}
+_DISPATCH_KEYS = {"run", "command", "workload", "evaluation", "action", "report", "results_dir", "sift_dir", "aker_dir"}
 
 
 def config_of(args):

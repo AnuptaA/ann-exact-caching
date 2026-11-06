@@ -6,16 +6,13 @@ calibrated admission) for each workload x setting; prints tables and writes
 results/trends_T<T>.png (rows: workloads; columns: k sweep, database sweep).
 """
 
-import json
-import argparse
-from pathlib import Path
-
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-RESULTS = Path(__file__).parent / "results"
+from simulations.approximate_hits.report import common
+
 WORKLOADS = [
     ("esci", "ESCI, real queries"),
     ("syn_interp_zipf0.3", "simZipf 0.3"),
@@ -28,12 +25,12 @@ SIZES = [0.01, 0.10, 0.30]
 
 def run_dir(wl, k, db):
     if k == 10 and db == "50k":
-        return RESULTS / ("esci_score20k" if wl == "esci" else wl)
+        return common.RESULTS / ("esci_score20k" if wl == "esci" else wl)
     if db == "50k":
-        return RESULTS / "batch_k_db" / f"{wl}_k{k}"
+        return common.RESULTS / "batch_k_db" / f"{wl}_k{k}"
     if db == "200k":
-        return RESULTS / "batch_k_db" / f"{wl}_db200k_k10"
-    return RESULTS / "batch_db1m" / f"{wl}_db1m_k10"
+        return common.RESULTS / "batch_k_db" / f"{wl}_db200k_k10"
+    return common.RESULTS / "batch_db1m" / f"{wl}_db1m_k10"
 
 
 K_SETTINGS = [(1, "50k"), (10, "50k"), (50, "50k"), (100, "50k")]
@@ -43,19 +40,19 @@ DB_SETTINGS = [(10, "50k"), (10, "200k"), (10, "1m")]
 def curves(d, target):
     """(xs, oracle_online, guaranteed) for one run dir; None parts if missing."""
     oracle = guar = None
-    if (d / "results.json").exists():
-        for r in json.loads((d / "results.json").read_text())["results"]:
-            if abs(r["target"] - target) < 1e-9:
-                pts = sorted(r["points"], key=lambda p: p["cache_frac"])
-                oracle = ([p["cache_frac"] for p in pts],
-                          [p["test_hit_rate_online"] for p in pts])
-    if (d / "calibrated.json").exists():
-        for r in json.loads((d / "calibrated.json").read_text())["results"]:
-            if abs(r["target"] - target) < 1e-9:
-                rows = sorted((x for x in r["rows"] if "guaranteed_hit_rate" in x),
-                              key=lambda x: x["cache_frac"])
-                guar = ([x["cache_frac"] for x in rows],
-                        [x["guaranteed_hit_rate"] for x in rows])
+    results = common.load_json(d / "results.json")
+    for r in results["results"] if results else []:
+        if abs(r["target"] - target) < 1e-9:
+            pts = sorted(r["points"], key=lambda p: p["cache_frac"])
+            oracle = ([p["cache_frac"] for p in pts],
+                      [p["test_hit_rate_online"] for p in pts])
+    calibrated = common.load_json(d / "calibrated.json")
+    for r in calibrated["results"] if calibrated else []:
+        if abs(r["target"] - target) < 1e-9:
+            rows = sorted((x for x in r["rows"] if "guaranteed_hit_rate" in x),
+                          key=lambda x: x["cache_frac"])
+            guar = ([x["cache_frac"] for x in rows],
+                    [x["guaranteed_hit_rate"] for x in rows])
     return oracle, guar
 
 
@@ -66,10 +63,12 @@ def _at(curve, size):
     return curve[1][i]
 
 
-def main():
-    ap = argparse.ArgumentParser()
+def add_args(ap):
     ap.add_argument("--targets", type=float, nargs="+", default=[0.9, 0.95])
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     for target in args.targets:
         print(f"\n=== T={target}: hit % at ~1% / 10% / 30% cache "
               "(oracle online -> guaranteed calibrated; '-' = not yet available) ===")
@@ -114,11 +113,8 @@ def main():
         fig.suptitle(f"T={target}: guaranteed calibrated hit rate (dots) vs oracle online "
                      "(thin lines)", fontsize=11)
         fig.tight_layout(rect=(0, 0, 1, 0.98))
-        out = RESULTS / f"trends_T{target}.png"
+        out = common.RESULTS / f"trends_T{target}.png"
         fig.savefig(out, dpi=110)
         plt.close(fig)
         print(f"  wrote {out}")
 
-
-if __name__ == "__main__":
-    main()

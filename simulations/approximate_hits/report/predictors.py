@@ -6,23 +6,28 @@ states (model selection), and test hit rate / realized retention for the
 dev-selected model vs the baseline ridge.
 """
 
-import sys
-import json
 from pathlib import Path
 
-RESULTS = Path(__file__).parent / "results"
+from simulations.approximate_hits.report import common
 
 
-def main(paths):
-    if not paths:
-        paths = sorted(str(p) for p in RESULTS.rglob("predictors.json"))
+def add_args(ap):
+    ap.add_argument("paths", nargs="*",
+                    help="predictors.json files (default: all under the results directory)")
+    ap.set_defaults(run=run)
+
+
+def run(args):
+    paths = args.paths or sorted(str(p) for p in common.RESULTS.rglob("predictors.json"))
     for path in paths:
-        d = json.loads(Path(path).read_text())
+        d = common.load_json(path)
         states = d["states"]
         models = [m for m in d["models"] if all(m in s for s in states)]
         if not states or not models:
             continue
-        name = Path(path).resolve().parent.relative_to(RESULTS.resolve())
+        run_dir = Path(path).resolve().parent
+        name = (run_dir.relative_to(common.RESULTS.resolve())
+                if run_dir.is_relative_to(common.RESULTS.resolve()) else run_dir.name)
         print(f"\n== {name}  ({len(states)} states)")
         print(f"  {'model':<12}{'dev guar':>10}{'dev naive':>11}{'dev spear':>11}"
               f"{'test guar':>11}{'min test ret / T':>18}")
@@ -49,6 +54,3 @@ def main(paths):
                   f"{100 * s['ridge_base']['guaranteed_test_hit_rate']:6.2f} -> "
                   f"{100 * s[best]['guaranteed_test_hit_rate']:6.2f}")
 
-
-if __name__ == "__main__":
-    main(sys.argv[1:])

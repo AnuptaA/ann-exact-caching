@@ -7,25 +7,18 @@ Writes into results/summary/:
   fig4_aker.png               Aker traces (10M databases), T = 0.9
 """
 
-import json
-from pathlib import Path
-
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-RESULTS = Path(__file__).parent / "results"
+from simulations.approximate_hits.report import common
+
 VIOL_TOL = 0.01
-OUT = RESULTS / "summary"
-
-
-def _load(path):
-    return json.loads(path.read_text()) if path.exists() else None
 
 
 def _oracle_curves(run_dir, target):
-    d = _load(run_dir / "results.json")
+    d = common.load_json(run_dir / "results.json")
     for r in d["results"]:
         if abs(r["target"] - target) < 1e-9:
             pts = sorted(r["points"], key=lambda p: p["cache_frac"])
@@ -35,7 +28,7 @@ def _oracle_curves(run_dir, target):
 
 
 def _calibrated_curve(run_dir, target):
-    d = _load(run_dir / "calibrated.json")
+    d = common.load_json(run_dir / "calibrated.json")
     if d is None:
         return None
     for r in d["results"]:
@@ -48,7 +41,7 @@ def _calibrated_curve(run_dir, target):
 
 
 def _best_predictor_points(run_dir, target):
-    d = _load(run_dir / "predictors.json")
+    d = common.load_json(run_dir / "predictors.json")
     if d is None:
         return None
     states = d["states"]
@@ -100,10 +93,14 @@ def _panel(ax, run_dir, target, title, xlim=(5e-4, 0.35)):
     ax.set_ylabel("hit rate (fraction of test queries)")
 
 
+def out_dir():
+    return common.RESULTS / "summary"
+
+
 def fig2():
     fig, axes = plt.subplots(2, 2, figsize=(12, 9.5))
-    runs = [(RESULTS / "esci_score20k", "ESCI, 50k database"),
-            (RESULTS / "batch_db1m" / "esci_db1m_k10", "ESCI, 1M database")]
+    runs = [(common.RESULTS / "esci_score20k", "ESCI, 50k database"),
+            (common.RESULTS / "batch_db1m" / "esci_db1m_k10", "ESCI, 1M database")]
     for col, (run_dir, name) in enumerate(runs):
         for row, target in enumerate((0.9, 0.95)):
             _panel(axes[row, col], run_dir, target, f"{name}, T={target}")
@@ -111,7 +108,7 @@ def fig2():
     fig.suptitle("ESCI real queries, k = 10: guaranteed (95% confidence) vs oracle hit rate",
                  fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(OUT / "fig2_esci_hit_rate.png", dpi=120)
+    fig.savefig(out_dir() / "fig2_esci_hit_rate.png", dpi=120)
     plt.close(fig)
 
 
@@ -123,11 +120,11 @@ def fig3():
             ("syn_gauss0.1_zipf0.99_db1m_k10", "simZipf 0.99, small Gaussian")]
     fig, axes = plt.subplots(1, len(runs), figsize=(4.4 * len(runs), 4.4), sharey=True)
     for ax, (run, title) in zip(axes, runs):
-        _panel(ax, RESULTS / "batch_db1m" / run, 0.9, title)
+        _panel(ax, common.RESULTS / "batch_db1m" / run, 0.9, title)
     axes[0].legend(fontsize=7, loc="lower right")
     fig.suptitle("All workloads, 1M database, k = 10, T = 0.9", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(OUT / "fig3_workloads_1m.png", dpi=120)
+    fig.savefig(out_dir() / "fig3_workloads_1m.png", dpi=120)
     plt.close(fig)
 
 
@@ -144,7 +141,7 @@ def fig4():
     for r, row in enumerate(rows):
         for c, item in enumerate(row):
             ax = axes[r, c]
-            run_dir = RESULTS / "batch_aker" / item[0] if item else None
+            run_dir = common.RESULTS / "batch_aker" / item[0] if item else None
             if run_dir is None or not (run_dir / "results.json").exists():
                 ax.axis("off")
                 continue
@@ -152,13 +149,18 @@ def fig4():
     axes[0, 0].legend(fontsize=7, loc="lower right")
     fig.suptitle("Aker workloads, 10M databases, k = 10, T = 0.9", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
-    fig.savefig(OUT / "fig4_aker.png", dpi=120)
+    fig.savefig(out_dir() / "fig4_aker.png", dpi=120)
     plt.close(fig)
 
 
-if __name__ == "__main__":
-    OUT.mkdir(parents=True, exist_ok=True)
+def add_args(ap):
+    ap.set_defaults(run=run)
+
+
+def run(args):
+    out = out_dir()
+    out.mkdir(parents=True, exist_ok=True)
     fig2()
     fig3()
     fig4()
-    print(f"wrote figures to {OUT}")
+    print(f"wrote figures to {out}")

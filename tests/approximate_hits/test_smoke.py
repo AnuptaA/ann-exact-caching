@@ -176,6 +176,29 @@ def test_every_command_group_has_help():
         assert e.value.code == 0
 
 
+def test_every_report_command_has_help():
+    from simulations.approximate_hits.report import COMMANDS
+    for name in COMMANDS:
+        with pytest.raises(SystemExit) as e:
+            cli.main(["report", name, "--help"])
+        assert e.value.code == 0
+
+
+def test_report_tables_on_saved_results(esci_run, tmp_path, capsys):
+    cli.main(["report", "tables", str(esci_run / "results.json")])
+    cli.main(["report", "predictors", str(esci_run / "predictors.json")])
+    cli.main(["report", "transfer", str(esci_run), "--matrices"])
+    cli.main(["report", "--results-dir", str(tmp_path), "calibration"])
+    out = capsys.readouterr().out
+    assert "hit% / effective retention%" in out
+    assert "no results" in out
+
+
+def test_report_feature_diagram_writes_a_figure(tmp_path):
+    cli.main(["report", "--results-dir", str(tmp_path), "feature-diagram"])
+    assert (tmp_path / "summary" / "feature_diagram.png").exists()
+
+
 def test_online_prepare_run_and_summary(tmp_path):
     rng = np.random.default_rng(3)
     centers = rng.standard_normal((4, 6)) * 3

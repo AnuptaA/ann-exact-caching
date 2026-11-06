@@ -7,25 +7,14 @@ our guaranteed best predictor (T = 0.9), Aker cold / warm, and the Aker
 ceiling (static d < minD).
 """
 
-import json
-from pathlib import Path
-
 import numpy as np
 
-BATCH = Path(__file__).parent / "results" / "batch_aker"
+from simulations.approximate_hits.report import common
+
 TRACES = ["spacev-aker-0.3", "spacev-aker-0.6", "spacev-aker-0.99", "spacev-real",
           "triviaqa-aker-0.3", "triviaqa-aker-0.6", "triviaqa-aker-0.99"]
 SIZES = [0.001, 0.01, 0.05]
 TARGET = 0.9
-
-
-def _load(path):
-    return json.loads(path.read_text()) if path.exists() else None
-
-
-def _near(rows, size):
-    r = min(rows, key=lambda r: abs(r["cache_frac"] - size))
-    return r if abs(r["cache_frac"] - size) < 0.2 * size else None
 
 
 def _fmt(h, ret):
@@ -33,7 +22,7 @@ def _fmt(h, ret):
 
 
 def ours(run_dir):
-    d = _load(run_dir / "predictors.json")
+    d = common.load_json(run_dir / "predictors.json")
     states = d["states"]
     models = [m for m in d["models"] if all(m in s for s in states)]
     best = max(models, key=lambda m: np.mean([s[m]["guaranteed_dev_hit_rate"] for s in states]))
@@ -43,19 +32,25 @@ def ours(run_dir):
     return best, rows
 
 
-def main():
+def add_args(ap):
+    ap.set_defaults(run=run)
+
+
+def run(args):
     head = (f"{'trace':20s} {'cache':>6s} | {'oracle':>6s} | {'ours (ret)':>12s} | "
             f"{'Aker cold':>12s} | {'Aker warm':>12s} | {'ceiling':>12s} | eq hits")
     print(f"hit % (mean union retention over hits), T = {TARGET} cache\n{head}")
     for t in TRACES:
-        run = BATCH / t
-        aker = _load(run / "aker_thresholds.json")
-        ceil = _load(run / "aker_thresholds_ceiling.json")
-        if aker is None or ceil is None:
+        run_dir = common.RESULTS / "batch_aker" / t
+        aker = common.load_json(run_dir / "aker_thresholds.json")
+        ceil = common.load_json(run_dir / "aker_thresholds_ceiling.json")
+        if aker is None or ceil is None or not (run_dir / "predictors.json").exists():
             continue
-        best, our_rows = ours(run)
+        best, our_rows = ours(run_dir)
         for size in SIZES:
-            a, c, o = _near(aker["states"], size), _near(ceil["states"], size), _near(our_rows, size)
+            a = common.nearest(aker["states"], size, 0.2)
+            c = common.nearest(ceil["states"], size, 0.2)
+            o = common.nearest(our_rows, size, 0.2)
             if a is None:
                 continue
             ours_s = _fmt(o["h"], o["ret"]) if o else f"{'n/a':>12s}"
@@ -66,6 +61,3 @@ def main():
                   f"{100 * a['cold']['equality_hit_rate']:.1f}")
         print(f"{'':20s} (ours = {best})")
 
-
-if __name__ == "__main__":
-    main()

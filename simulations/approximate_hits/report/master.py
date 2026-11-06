@@ -4,8 +4,6 @@
 Reads results/<run>/results.json and writes results/master_online_<scale>.png.
 """
 
-import json
-import argparse
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-RESULTS = Path(__file__).parent / "results"
+from simulations.approximate_hits.report import common
 
 # (run folder, panel title)
 RUNS = [
@@ -35,7 +33,7 @@ def plot(scale: str, out: Path) -> None:
                              sharex=True, sharey=True, squeeze=False)
     handles, labels = None, None
     for ax, (run, title) in zip(axes.flat, RUNS):
-        data = json.loads((RESULTS / run / "results.json").read_text())
+        data = common.load_json(common.RESULTS / run / "results.json")
         results = data["results"]
         colors = plt.cm.viridis(np.linspace(0, 0.9, len(results)))
         for res, color in zip(results, colors):
@@ -75,15 +73,14 @@ def plot(scale: str, out: Path) -> None:
     plt.close(fig)
 
 
-def main():
-    ap = argparse.ArgumentParser()
+def add_args(ap):
     ap.add_argument("--scales", nargs="+", default=["loglog", "linear"])
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     for scale in args.scales:
-        out = RESULTS / f"master_online_{scale}.png"
+        out = common.RESULTS / f"master_online_{scale}.png"
         plot(scale, out)
         print(f"wrote {out}")
 
-
-if __name__ == "__main__":
-    main()

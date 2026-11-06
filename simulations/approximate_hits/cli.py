@@ -21,6 +21,8 @@ GROUPS = {
              "evaluate admission models and baselines on a saved run"),
     "online": ("simulations.approximate_hits.online",
                "online simulator: prepare, run, summary"),
+    "report": ("simulations.approximate_hits.report",
+               "figures and tables from saved results"),
 }
 
 

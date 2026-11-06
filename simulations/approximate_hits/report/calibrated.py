@@ -6,16 +6,13 @@ One panel per workload at a fixed target T. Reads results/<run>/calibrated.json
 prints a table including the realized test retention over hits.
 """
 
-import json
-import argparse
-from pathlib import Path
-
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-RESULTS = Path(__file__).parent / "results"
+from simulations.approximate_hits.report import common
+
 RUNS = [
     ("esci_score20k", "ESCI, real queries"),
     ("syn_interp_zipf0.3", "SIFT, simZipf s=0.3 (interp)"),
@@ -26,24 +23,12 @@ RUNS = [
 SIZES = [0.01, 0.05, 0.10, 0.30]
 
 
-def _rows(run, name, target):
-    path = RESULTS / run / name
-    if not path.exists():
-        return None
-    for t in json.loads(path.read_text())["results"]:
-        if abs(t["target"] - target) < 1e-9:
-            return t["rows"]
-    return None
-
-
-def _near(rows, size):
-    return min(rows, key=lambda r: abs(r["cache_frac"] - size))
-
-
-def main():
-    ap = argparse.ArgumentParser()
+def add_args(ap):
     ap.add_argument("--targets", type=float, nargs="+", default=[0.9, 0.95])
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     for target in args.targets:
         ncols = 3
         nrows = int(np.ceil(len(RUNS) / ncols))
@@ -52,8 +37,8 @@ def main():
         print(f"\n=== T={target}: hit % at ~1% / 5% / 10% / 30% cache "
               "(guaranteed: realized retention over hits in brackets) ===")
         for ax, (run, title) in zip(axes.flat, RUNS):
-            cal = _rows(run, "calibrated.json", target)
-            cert = _rows(run, "certificates.json", target)
+            cal = common.target_rows(common.RESULTS / run / "calibrated.json", target)
+            cert = common.target_rows(common.RESULTS / run / "certificates.json", target)
             if cal is None:
                 ax.set_title(f"{title}\n(missing)")
                 continue
@@ -76,7 +61,7 @@ def main():
                         color=color, label=label)
                 cells = []
                 for s in SIZES:
-                    r = _near(rows, s)
+                    r = common.nearest(rows, s)
                     cell = f"{100 * r[key]:6.2f}"
                     if key == "guaranteed_hit_rate":
                         ret = r.get("guaranteed_hit_retention")
@@ -102,11 +87,8 @@ def main():
         fig.suptitle(f"T={target}: oracle vs calibrated admission (95% guarantee) "
                      "vs certificates (caches selected for oracle)", fontsize=12)
         fig.tight_layout(rect=(0, 0.04, 1, 0.96))
-        out = RESULTS / f"calibrated_T{target}.png"
+        out = common.RESULTS / f"calibrated_T{target}.png"
         fig.savefig(out, dpi=120)
         plt.close(fig)
         print(f"  wrote {out}")
 
-
-if __name__ == "__main__":
-    main()

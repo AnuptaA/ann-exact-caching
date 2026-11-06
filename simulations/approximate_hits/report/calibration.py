@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """Summarize calibration_methods.json: failure rates and hit rates per method."""
 
-import json
-from pathlib import Path
-
-RESULTS = Path(__file__).parent / "results"
+from simulations.approximate_hits.report import common
 RUNS = [
     ("esci_score20k", "ESCI"),
     ("syn_interp_zipf0.3", "simZipf 0.3"),
@@ -22,12 +19,16 @@ LABELS = {
 }
 
 
-def main():
+def add_args(ap):
+    ap.set_defaults(run=run)
+
+
+def run(args):
     loaded = []
-    for run, label in RUNS:
-        path = RESULTS / run / "calibration_methods.json"
-        if path.exists():
-            loaded.append((label, json.loads(path.read_text())))
+    for run_name, label in RUNS:
+        data = common.load_json(common.RESULTS / run_name / "calibration_methods.json")
+        if data is not None:
+            loaded.append((label, data))
     if not loaded:
         print("no results")
         return
@@ -57,6 +58,3 @@ def main():
                 print(f"    {LABELS[m]:<22}" + "".join(
                     f"{100 * s[m]['mean_eval_hit_rate']:>10.2f}" for s in states))
 
-
-if __name__ == "__main__":
-    main()

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Summarize threshold_transfer.json files (eval_threshold_transfer.py).
+"""Summarize threshold_transfer.json files (eval transfer).
 
 Per run: realized test retention matrix for frozen (source GBT + source
 lambda), and hit rate relative to native for frozen and recal. Then a compact
 table of off-diagonal pairs grouped by the kind of cache change.
 
-  python summarize_threshold_transfer.py [--matrices] RUN_DIR...
+  report transfer [--matrices] RUN_DIR...
 """
 
-import sys
-import json
 from pathlib import Path
 
 import numpy as np
+
+from simulations.approximate_hits.report import common
 
 TOL = 0.01
 
@@ -48,30 +48,33 @@ def matrices(d):
                 for b in names))
 
 
-def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    show = "--matrices" in sys.argv
+def add_args(ap):
+    ap.add_argument("run_dirs", nargs="+")
+    ap.add_argument("--matrices", action="store_true")
+    ap.set_defaults(run=run)
+
+
+def run(args):
     rows = []
-    for run in map(Path, args):
-        path = run / "threshold_transfer.json"
-        if not path.exists():
+    for run_dir in map(Path, args.run_dirs):
+        d = common.load_json(run_dir / "threshold_transfer.json")
+        if d is None:
             continue
-        d = json.loads(path.read_text())
         target = d["args"]["target"]
-        if show:
-            print(f"\n=== {run.name} (T = {target}) ===")
+        if args.matrices:
+            print(f"\n=== {run_dir.name} (T = {target}) ===")
             matrices(d)
         for p in d["pairs"]:
             if p["source"] != p["dest"]:
-                rows.append((run.name, kind(p["source"], p["dest"]), p, target))
+                rows.append((run_dir.name, kind(p["source"], p["dest"]), p, target))
     print(f"\noff-diagonal pairs; viol = realized retention < T - {TOL}; "
           "hit ratios vs native (median)")
     print(f"{'run':20s} {'change':20s} {'n':>3s} | {'frozen viol':>11s} {'worst':>7s} "
           f"{'hit':>5s} | {'recal viol':>10s} {'worst':>7s} {'hit':>5s}")
     groups = {}
-    for run, k, p, t in rows:
-        groups.setdefault((run, k), []).append((p, t))
-    for (run, k), ps in groups.items():
+    for name, k, p, t in rows:
+        groups.setdefault((name, k), []).append((p, t))
+    for (name, k), ps in groups.items():
         cells = []
         for tag in ("frozen", "recal"):
             gaps = [p[f"{tag}_hit_retention"] - t for p, t in ps
@@ -81,8 +84,5 @@ def main():
             viol = np.mean([g < -TOL for g in gaps]) if gaps else 0.0
             worst = min(gaps) if gaps else float("nan")
             cells.append(f"{viol:11.0%} {worst:+7.3f} {np.median(ratio):5.2f}")
-        print(f"{run:20s} {k:20s} {len(ps):3d} | {cells[0]} | {cells[1][1:]}")
+        print(f"{name:20s} {k:20s} {len(ps):3d} | {cells[0]} | {cells[1][1:]}")
 
-
-if __name__ == "__main__":
-    main()

@@ -10,15 +10,14 @@ Left: per-ball stats. Right (zoom on the query): the shell sample.
 Writes results/summary/feature_diagram.png.
 """
 
-from pathlib import Path
-
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Wedge
 
-OUT = Path(__file__).parent / "results" / "summary" / "feature_diagram.png"
+from simulations.approximate_hits.report import common
+
 K = 5
 SHELL_RANK = 120
 P = 0.4
@@ -194,7 +193,12 @@ def feature_box(s):
     return "\n".join(L)
 
 
-if __name__ == "__main__":
+def add_args(ap):
+    ap.set_defaults(run=run)
+
+
+def run(args):
+    out = common.RESULTS / "summary" / "feature_diagram.png"
     s = analyze(find_query())
     fig = plt.figure(figsize=(17, 10.2))
     gs = fig.add_gridspec(2, 2, height_ratios=[3.1, 0.95])
@@ -215,7 +219,7 @@ if __name__ == "__main__":
                  "inside a ball is cached. Uncached points inside\nthe neighborhood (red dashed) "
                  "are intruders: each pushes a cached point out of the true top-5.", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.96), h_pad=0.5)
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUT, dpi=120)
-    print(f"wrote {OUT}")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=120)
+    print(f"wrote {out}")
     print(feature_box(s))

@@ -5,16 +5,13 @@ One panel per workload at a fixed target T. Reads results/<run>/certificates.jso
 and writes results/certificates_T<T>.png; also prints a table.
 """
 
-import json
-import argparse
-from pathlib import Path
-
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-RESULTS = Path(__file__).parent / "results"
+from simulations.approximate_hits.report import common
+
 RUNS = [
     ("esci_score20k", "ESCI, real queries"),
     ("syn_interp_zipf0.3", "SIFT, simZipf s=0.3 (interp)"),
@@ -33,20 +30,15 @@ SIZES = [0.01, 0.05, 0.10, 0.30]
 
 
 def load(run, target):
-    path = RESULTS / run / "certificates.json"
-    if not path.exists():
-        return None
-    data = json.loads(path.read_text())
-    for t in data["results"]:
-        if abs(t["target"] - target) < 1e-9:
-            return t["rows"]
-    return None
+    return common.target_rows(common.RESULTS / run / "certificates.json", target)
 
 
-def main():
-    ap = argparse.ArgumentParser()
+def add_args(ap):
     ap.add_argument("--targets", type=float, nargs="+", default=[0.9, 0.95])
-    args = ap.parse_args()
+    ap.set_defaults(run=run)
+
+
+def run(args):
     for target in args.targets:
         ncols = 3
         nrows = int(np.ceil(len(RUNS) / ncols))
@@ -90,11 +82,8 @@ def main():
         fig.suptitle(f"Online hit rate at T={target}: oracle retention vs provable "
                      "lower bounds (caches selected for oracle)", fontsize=12)
         fig.tight_layout(rect=(0, 0.04, 1, 0.96))
-        out = RESULTS / f"certificates_T{target}.png"
+        out = common.RESULTS / f"certificates_T{target}.png"
         fig.savefig(out, dpi=120)
         plt.close(fig)
         print(f"  wrote {out}")
 
-
-if __name__ == "__main__":
-    main()
