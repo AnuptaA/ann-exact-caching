@@ -42,7 +42,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import numpy as np
 
 from utils.base.knn import fetch_rows, pairwise_dist, sq_norms
-from simulations.approximate_hits.run_e2e_oracle_trace import AKER, WORKLOADS, SPLITS
+from utils.cache.workloads import AKER, WORKLOADS, TRACE_SPLITS
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -60,7 +60,7 @@ def load_run(run_dir: Path):
     data = json.loads((run_dir / "results.json").read_text())
     cfg = data["config"]
     z = np.load(run_dir / "topk.npz")
-    bounds = {s: tuple(int(x) for x in z[f"bounds_{s}"]) for s in SPLITS}
+    bounds = {s: tuple(int(x) for x in z[f"bounds_{s}"]) for s in TRACE_SPLITS}
     lo, hi = bounds["cand"]
     cand_gid = np.unique(z["inv"][lo:hi])  # as split_view: sorted distinct ids
     db = np.load(AKER / WORKLOADS[cfg["trace"]]["base"], mmap_mode="r")

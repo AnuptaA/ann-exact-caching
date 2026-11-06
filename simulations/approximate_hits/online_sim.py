@@ -75,8 +75,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits.eval_core import quantize
-from simulations.approximate_hits.eval_generalize import fit_logistic
+from utils.cache.shell import quantize
+from utils.cache.models import fit_logistic
 from utils.cache.population import GreedyPopulator, hits_from_histograms
 from utils.cache.calibration import hoeffding_upper, select, threshold_grid
 from utils.base.knn import sq_dist

@@ -27,12 +27,15 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits import eval_calibrated as ecal
-from simulations.approximate_hits import eval_core as ec
-from simulations.approximate_hits import eval_predictors as epred
-from simulations.approximate_hits import eval_simple as es
 from utils.cache.metrics import interp_log
 from utils.base.knn import knn_dists
+from utils.cache.entries import state_tables
+from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of
+from utils.cache.metrics import expand_index
+from utils.cache.models import logistic_scores
+from utils.cache.parallel import worker_pool
+from utils.cache.shell import SAMPLE_J, load_cand_ext, shell_features, shell_ids, shell_sample
+from utils.cache.workloads import EVAL_SPLITS, load_run_data
 from utils.cache.calibration import select, threshold_grid
 
 logging.basicConfig(level=logging.INFO,
@@ -40,21 +43,19 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
-SPLITS = ("fit", "dev", "cal", "test")
 DELTA = 0.05
 BITS = 4
-_R: dict = {}
 
 #-------------------------------------------------------------------------------
 
 
-def cumulative_cache_size(selected):
+def cumulative_cache_size(run, selected):
     """Number of distinct cached vectors after each prefix of the greedy order."""
-    seen = np.zeros(len(ecal._G["db"]), dtype=bool)
+    seen = np.zeros(len(run.db), dtype=bool)
     out = np.empty(len(selected), dtype=np.int64)
     total = 0
     for i, j in enumerate(selected):
-        ids = np.asarray(ecal._G["cached_ids"][j])
+        ids = np.asarray(run.cached_ids[j])
         new = ids[~seen[ids]]
         seen[new] = True
         total += len(new)
@@ -62,51 +63,47 @@ def cumulative_cache_size(selected):
     return out
 
 
-def prefix_for(frac):
+def prefix_for(frac, n_db, selected, cum):
     """Longest greedy prefix whose cache is at most frac of the database."""
-    n = int(np.searchsorted(_R["cum"], frac * len(ecal._G["db"]), side="right"))
-    return _R["selected"][:n]
+    n = int(np.searchsorted(cum, frac * n_db, side="right"))
+    return selected[:n]
 
 
-def full_shell_memory(bl, in_cache, R):
-    shells = [ec.shell_ids(i, k, R) for i, k in zip(bl["cand"], bl["K"]) if k < R]
+def full_shell_memory(run, bl, in_cache, R):
+    shells = [shell_ids(run, i, k, R) for i, k in zip(bl["cand"], bl["K"]) if k < R]
     if not shells:
         return 0.0
     ids = np.unique(np.concatenate(shells))
-    return (~in_cache[ids]).sum() * BITS / 32 / len(ecal._G["db"])
+    return (~in_cache[ids]).sum() * BITS / 32 / len(run.db)
 
 
-def _expand(y, w):
-    return np.repeat(np.arange(len(y)), w.astype(np.int64))
-
-
-def eval_option(task):
+def eval_option(task, run, args, selected, cum):
     budget, f, R = task
-    target, k = _R["args"].target, ecal._G["k"]
-    entries = prefix_for(f * budget)
+    target, k = args.target, run.k
+    entries = prefix_for(f * budget, len(run.db), selected, cum)
     if not entries:
         return None
-    st = ecal.state_tables(entries)
+    st = state_tables(run, entries)
     if len(st["cached"]) <= k:
         return None
-    bl = ec.balls_of(entries)
-    sets, topk = ecal._G["sets"], ecal._G["topk"]
-    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SPLITS}
-    w = {sp: sets[sp][1].astype(np.float64) for sp in SPLITS}
-    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SPLITS}
-    X = {sp: np.nan_to_num(ec.ball_features(sets[sp][0], nr[sp], bl, es.N_BALLS),
-                           nan=es.POOR_FIT) for sp in SPLITS}
-    cache_frac = len(st["cached"]) / len(ecal._G["db"])
+    bl = balls_of(run, entries)
+    sets, topk = run.sets, run.topk
+    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in EVAL_SPLITS}
+    w = {sp: sets[sp][1].astype(np.float64) for sp in EVAL_SPLITS}
+    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in EVAL_SPLITS}
+    X = {sp: np.nan_to_num(ball_features(sets[sp][0], nr[sp], bl, N_BALLS),
+                           nan=POOR_FIT) for sp in EVAL_SPLITS}
+    cache_frac = len(st["cached"]) / len(run.db)
     p, mem = 0.0, 0.0
     if f < 1:
-        full = full_shell_memory(bl, st["in_cache"], R)
+        full = full_shell_memory(run, bl, st["in_cache"], R)
         p = min(1.0, (budget - cache_frac) / full) if full > 0 else 0.0
-        samp = ec.shell_sample(bl, st["in_cache"], p, R, BITS) if p > 0 else None
+        samp = shell_sample(run, bl, st["in_cache"], p, R, BITS) if p > 0 else None
         mem = samp["memory"] if samp else 0.0
-        X = {sp: np.hstack([X[sp], ec.shell_features(sets[sp][0], nr[sp], samp)[:, [ec.SAMPLE_J]]])
-             for sp in SPLITS}
-    s = es.logistic_scores(X, y["fit"], w["fit"])
-    ex = {sp: _expand(y[sp], w[sp]) for sp in SPLITS}
+        X = {sp: np.hstack([X[sp], shell_features(sets[sp][0], nr[sp], samp)[:, [SAMPLE_J]]])
+             for sp in EVAL_SPLITS}
+    s = logistic_scores(X, y["fit"], w["fit"])
+    ex = {sp: expand_index(w[sp]) for sp in EVAL_SPLITS}
     lam = select("normal_fixed", s["cal"][ex["cal"]], y["cal"][ex["cal"]],
                  threshold_grid(s["fit"]), target, DELTA)
     out = {"budget": budget, "f": f, "R": R if f < 1 else None, "p": p,
@@ -133,19 +130,16 @@ def main():
     ap.add_argument("--workers", type=int, default=6)
     args = ap.parse_args()
     run_dir = Path(args.run_dir)
-    data, _ = epred.setup_run(run_dir, args.n_each)
-    _R["args"] = args
-    ec._R["draw"] = np.random.default_rng(1).random(len(ecal._G["db"]))  # as eval_core
+    data, _, run = load_run_data(run_dir, args.n_each)
     if max(args.Rs) > 500:
-        ec._R["cand_ext"] = ec.load_cand_ext(run_dir, max(args.Rs))
+        run.cand_ext = load_cand_ext(run, run_dir, max(args.Rs))
     res = next(r for r in data["results"] if abs(r["target"] - args.target) < 1e-9)
-    _R["selected"] = res["selected"]
-    _R["cum"] = cumulative_cache_size(res["selected"])
+    cum = cumulative_cache_size(run, res["selected"])
     tasks = [(b, 1.0, None) for b in args.budgets]
     tasks += [(b, f, R) for b in args.budgets for f in args.fs for R in args.Rs]
-    import multiprocessing as mp
-    with mp.get_context("fork").Pool(min(args.workers, len(tasks))) as pool:
-        rows = [r for r in pool.map(eval_option, tasks) if r is not None]
+    with worker_pool(eval_option, args.workers, len(tasks), run=run, args=args,
+                     selected=res["selected"], cum=cum) as pool:
+        rows = [r for r in pool.map(tasks) if r is not None]
     pts = sorted(res["points"], key=lambda p: p["cache_frac"])
     xs, ys = [p["cache_frac"] for p in pts], [p["test_hit_rate"] for p in pts]
     summary = []

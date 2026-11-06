@@ -33,10 +33,11 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits import eval_calibrated as ecal
-from simulations.approximate_hits.eval_certificates import build_entry_tables
-from simulations.approximate_hits.run_e2e_oracle_sift import load_inputs
-from utils.base.knn import exact_topk
+from utils.cache.entries import state_tables
+from utils.cache.legacy_features import features
+from utils.cache.models import fit_ridge
+from utils.cache.parallel import worker_pool
+from utils.cache.workloads import load_inputs, make_run_data
 from utils.cache.calibration import (
     METHODS, select, threshold_grid,
 )
@@ -46,23 +47,19 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
-_W: dict = {}  # worker inputs
-
 #-------------------------------------------------------------------------------
 
 
-def load_pool(run_dir, n_fit):
+def load_pool(run_dir, n_fit, n_pool_requests):
     data = json.loads((run_dir / "results.json").read_text())
     cfg = argparse.Namespace(**data["config"])
     if "zipf" in data["config"]:
-        from simulations.approximate_hits.run_e2e_oracle_synthetic import (
-            build_inputs, _dedup,
-        )
+        from utils.cache.workloads import build_inputs, dedup
         inp = build_inputs(cfg)
         wl = inp["wl"]
         rng = np.random.default_rng(cfg.seed + 3)  # independent of other draws
-        fit_ids, fit_w, _ = _dedup(wl.sample(n_fit, rng))
-        pool_ids, pool_w, _ = _dedup(wl.sample(_W["n_pool_requests"], rng))
+        fit_ids, fit_w, _ = dedup(wl.sample(n_fit, rng))
+        pool_ids, pool_w, _ = dedup(wl.sample(n_pool_requests, rng))
         sets = {"fit": (wl.vectors(fit_ids), fit_w),
                 "pool": (wl.vectors(pool_ids), pool_w),
                 "test": (wl.vectors(inp["test_ids"]), inp["test_w"])}
@@ -79,18 +76,17 @@ def load_pool(run_dir, n_fit):
     return data, cfg, db, cand_q, sets
 
 
-def eval_state(task):
+def eval_state(task, run, params):
     target, point, entries = task
-    G = ecal._G
-    st = ecal.state_tables(entries)
-    if len(st["cached"]) <= G["k"]:
+    st = state_tables(run, entries)
+    if len(st["cached"]) <= run.k:
         return None
     feats = {}
     for name in ("fit", "pool", "test"):
-        q, w = G["sets"][name]
-        y = st["in_cache"][G["topk"][name]].mean(axis=1)
-        feats[name] = (ecal.features(q, st), y, w.astype(np.float64))
-    predict = ecal.fit_ridge(*feats["fit"])
+        q, w = run.sets[name]
+        y = st["in_cache"][run.topk[name]].mean(axis=1)
+        feats[name] = (features(run, q, st), y, w.astype(np.float64))
+    predict = fit_ridge(*feats["fit"])
     s_fit = predict(feats["fit"][0])
     grid_desc = threshold_grid(s_fit)
 
@@ -102,15 +98,15 @@ def eval_state(task):
 
     s_pool, y_pool = expand("pool")
     s_test, y_test = expand("test")
-    rng = np.random.default_rng(_W["seed"])
+    rng = np.random.default_rng(params["seed"])
     stats = {m: {"fail": 0, "trials": 0, "eval_hit": [], "test_hit": [], "eval_ret": []}
              for m in METHODS}
-    for _ in range(_W["trials"]):
+    for _ in range(params["trials"]):
         perm = rng.permutation(len(s_pool))
-        cal, ev = perm[:_W["n_cal"]], perm[_W["n_cal"]:]
+        cal, ev = perm[:params["n_cal"]], perm[params["n_cal"]:]
         for m in METHODS:
             lam = select(m, s_pool[cal], y_pool[cal], grid_desc, target,
-                         _W["delta"], rng)
+                         params["delta"], rng)
             rec = stats[m]
             rec["trials"] += 1
             if lam is None:
@@ -150,16 +146,12 @@ def main():
     ap.add_argument("--workers", type=int, default=6)
     args = ap.parse_args()
     run_dir = Path(args.run_dir)
-    _W.update(n_pool_requests=args.n_pool_requests, trials=args.trials,
-              n_cal=args.n_cal, delta=args.delta, seed=args.seed)
+    params = dict(trials=args.trials, n_cal=args.n_cal, delta=args.delta, seed=args.seed)
 
-    data, cfg, db, cand_q, sets = load_pool(run_dir, args.n_fit)
+    data, cfg, db, cand_q, sets = load_pool(run_dir, args.n_fit, args.n_pool_requests)
     logger.info(f"{run_dir.name}: " + ", ".join(
         f"{k}={len(v[0])} distinct ({int(v[1].sum())} requests)" for k, v in sets.items()))
-    cached_ids, radius, _, _ = build_entry_tables(cand_q, db, cfg.k_values, 1)
-    topk = {name: exact_topk(q, db, cfg.k) for name, (q, _) in sets.items()}
-    ecal._G.update(k=cfg.k, k_values=cfg.k_values, db=db, cand_q=cand_q, sets=sets,
-                   topk=topk, cached_ids=cached_ids, radius=radius)
+    run = make_run_data(cfg, db, cand_q, sets)
 
     tasks = []
     for res in data["results"]:
@@ -169,12 +161,8 @@ def main():
             p = min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
             tasks.append((res["target"], p, res["selected"][:p["n_entries"]]))
     logger.info(f"{len(tasks)} states x {args.trials} trials")
-    if args.workers > 1:
-        import multiprocessing as mp
-        with mp.get_context("fork").Pool(args.workers) as pool:
-            out = pool.map(eval_state, tasks)
-    else:
-        out = [eval_state(t) for t in tasks]
+    with worker_pool(eval_state, args.workers, len(tasks), run=run, params=params) as pool:
+        out = pool.map(tasks)
     out = [o for o in out if o is not None]
     path = run_dir / "calibration_methods.json"
     path.write_text(json.dumps({"args": vars(args), "methods": METHODS, "states": out}))

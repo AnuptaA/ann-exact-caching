@@ -30,12 +30,15 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits import eval_calibrated as ecal
-from simulations.approximate_hits import eval_core as ec
-from simulations.approximate_hits import eval_predictors as epred
-from simulations.approximate_hits import eval_simple as es
 from utils.base.knn import knn_dists
 from utils.cache.metrics import interp_log
+from utils.cache.entries import state_tables
+from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of
+from utils.cache.metrics import expand_index
+from utils.cache.models import logistic_scores
+from utils.cache.parallel import worker_pool
+from utils.cache.shell import SAMPLE_J, load_cand_ext, shell_features, shell_ids, shell_sample
+from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -45,15 +48,9 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
-SPLITS = es.SPLITS
 DELTA = 0.05
-_R: dict = {}
 
 #-------------------------------------------------------------------------------
-
-
-def _expand(y, w):
-    return np.repeat(np.arange(len(y)), w.astype(np.int64))
 
 
 def admit(lam, s, y):
@@ -79,28 +76,27 @@ def calibration_sweep(s_cal, y_cal, grid, s_test, y_test, target, ns, draws, rng
     return out
 
 
-def eval_point(task):
+def eval_point(task, run, args):
     target, point, entries = task
-    args = _R["args"]
-    k = ecal._G["k"]
-    st = ecal.state_tables(entries)
+    k = run.k
+    st = state_tables(run, entries)
     if len(st["cached"]) <= k:
         return None
-    bl = ec.balls_of(entries)
-    sets, topk = ecal._G["sets"], ecal._G["topk"]
-    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SPLITS}
-    w = {sp: sets[sp][1].astype(np.float64) for sp in SPLITS}
-    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SPLITS}
-    B = {sp: np.nan_to_num(ec.ball_features(sets[sp][0], nr[sp], bl, es.N_BALLS),
-                           nan=es.POOR_FIT) for sp in SPLITS}
-    samp = ec.shell_sample(bl, st["in_cache"], args.p, args.R, args.b)
-    S = {sp: ec.shell_features(sets[sp][0], nr[sp], samp)[:, [ec.SAMPLE_J]] for sp in SPLITS}
-    ti, ci = _expand(y["test"], w["test"]), _expand(y["cal"], w["cal"])
+    bl = balls_of(run, entries)
+    sets, topk = run.sets, run.topk
+    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SCORE_SPLITS}
+    w = {sp: sets[sp][1].astype(np.float64) for sp in SCORE_SPLITS}
+    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SCORE_SPLITS}
+    B = {sp: np.nan_to_num(ball_features(sets[sp][0], nr[sp], bl, N_BALLS),
+                           nan=POOR_FIT) for sp in SCORE_SPLITS}
+    samp = shell_sample(run, bl, st["in_cache"], args.p, args.R, args.b)
+    S = {sp: shell_features(sets[sp][0], nr[sp], samp)[:, [SAMPLE_J]] for sp in SCORE_SPLITS}
+    ti, ci = expand_index(w["test"]), expand_index(w["cal"])
     out = {"cache_frac": point["cache_frac"], "oracle_hit_rate": point["test_hit_rate"],
            "sample_memory": samp["memory"] if samp else 0.0}
-    for name, X in (("model7", {sp: np.hstack([B[sp], S[sp]]) for sp in SPLITS}),
+    for name, X in (("model7", {sp: np.hstack([B[sp], S[sp]]) for sp in SCORE_SPLITS}),
                     ("balls_only", B)):
-        s = es.logistic_scores(X, y["fit"], w["fit"])
+        s = logistic_scores(X, y["fit"], w["fit"])
         grid = threshold_grid(s["fit"])
         lam = select(DEFAULT_METHOD, s["cal"][ci], y["cal"][ci], grid, target, DELTA)
         h, r = admit(lam, s["test"][ti], y["test"][ti])
@@ -153,16 +149,13 @@ def main():
     if args.summary:
         summarize(run_dir / "final.json")
         return
-    data, _ = epred.setup_run(run_dir, args.n_each)
-    _R["args"] = args
-    ec._R["draw"] = np.random.default_rng(1).random(len(ecal._G["db"]))  # as eval_core
+    data, _, run = load_run_data(run_dir, args.n_each)
     res = next(r for r in data["results"] if abs(r["target"] - args.target) < 1e-9)
     tasks = [(args.target, p, res["selected"][:p["n_entries"]])
              for p in sorted(res["points"], key=lambda p: p["cache_frac"]) if p["n_entries"]]
-    import multiprocessing as mp
     out = []
-    with mp.get_context("fork").Pool(min(args.workers, len(tasks))) as pool:
-        for s in pool.imap(eval_point, tasks):
+    with worker_pool(eval_point, args.workers, len(tasks), run=run, args=args) as pool:
+        for s in pool.imap(tasks):
             if s is None:
                 continue
             out.append(s)

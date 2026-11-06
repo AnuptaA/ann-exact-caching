@@ -8,11 +8,11 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits import eval_calibrated as ecal
-from simulations.approximate_hits import eval_core as ec
 from simulations.approximate_hits import eval_shell_budget as eb
 from simulations.approximate_hits import eval_shell_size as ess
 from utils.cache.calibration import select
+from utils.cache.shell import shell_ids
+from utils.cache.workloads import RunData
 
 
 def test_min30_skips_tiny_groups_and_default_unchanged():
@@ -27,20 +27,22 @@ def test_min30_skips_tiny_groups_and_default_unchanged():
 
 
 def test_shell_ids_uses_extended_lists_beyond_500():
-    ecal._G.update(k_values=[10, 500],
-                   cached_ids=[np.arange(10), np.arange(500), np.arange(10), np.arange(500)])
-    ec._R["cand_ext"] = np.tile(np.arange(2000), (2, 1))
-    assert np.array_equal(ec.shell_ids(1, 10, 500), np.arange(10, 500))
-    assert np.array_equal(ec.shell_ids(1, 10, 2000), np.arange(10, 2000))
+    run = RunData(k=10, k_values=[10, 500], db=None, cand_q=None, sets={}, topk={},
+                  cached_ids=[np.arange(10), np.arange(500), np.arange(10), np.arange(500)],
+                  radius=None, cand_ext=np.tile(np.arange(2000), (2, 1)))
+    assert np.array_equal(shell_ids(run, 1, 10, 500), np.arange(10, 500))
+    assert np.array_equal(shell_ids(run, 1, 10, 2000), np.arange(10, 2000))
 
 
 def test_cumulative_cache_and_prefix():
-    ecal._G.update(db=np.zeros((100, 2)),
-                   cached_ids=[np.array([0, 1, 2]), np.array([2, 3]), np.array([4, 5, 6, 7])])
-    eb._R["selected"] = [0, 1, 2]
-    eb._R["cum"] = eb.cumulative_cache_size([0, 1, 2])
-    assert eb._R["cum"].tolist() == [3, 4, 8]
-    assert eb.prefix_for(0.04) == [0, 1] and eb.prefix_for(0.02) == []
+    run = RunData(k=10, k_values=[10], db=np.zeros((100, 2)), cand_q=None, sets={}, topk={},
+                  cached_ids=[np.array([0, 1, 2]), np.array([2, 3]), np.array([4, 5, 6, 7])],
+                  radius=None)
+    selected = [0, 1, 2]
+    cum = eb.cumulative_cache_size(run, selected)
+    assert cum.tolist() == [3, 4, 8]
+    assert eb.prefix_for(0.04, 100, selected, cum) == [0, 1]
+    assert eb.prefix_for(0.02, 100, selected, cum) == []
 
 
 def test_cal_study_shapes():

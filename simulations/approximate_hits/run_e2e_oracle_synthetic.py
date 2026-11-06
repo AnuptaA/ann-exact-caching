@@ -31,12 +31,11 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import numpy as np
 
 from datasets.dataloaders import load_fvecs_fast
+from utils.cache.workloads import build_inputs
 from simulations.approximate_hits import run_e2e_oracle_sift as base
 from utils.cache.population import GreedyPopulator
-from simulations.approximate_hits.run_e2e_oracle_sift import (
-    DEFAULT_CHECKPOINTS, DEFAULT_K_VALUES, DEFAULT_TARGETS, SIFT1M_DIR,
-    plot_results, run_target, _print_target,
-)
+from simulations.approximate_hits.run_e2e_oracle_sift import DEFAULT_CHECKPOINTS, DEFAULT_K_VALUES, DEFAULT_TARGETS, plot_results, run_target, _print_target
+from utils.cache.workloads import SIFT1M_DIR
 from utils.base.knn import exact_topk
 
 logging.basicConfig(level=logging.INFO,
@@ -45,90 +44,6 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 #-------------------------------------------------------------------------------
-
-
-class SimZipfWorkload:
-    """Lazily materialized similar-query groups with Zipf group popularity."""
-
-    def __init__(self, base_queries, group_size, zipf_s, method,
-                 lambda_max, noise_rel, seed):
-        self.q = base_queries.astype(np.float64)
-        self.n_groups = len(base_queries)
-        self.group_size = group_size
-        self.method = method
-        self.noise_rel = noise_rel
-        self.seed = seed
-        rng = np.random.default_rng(seed)
-        # interpolation partners (never the anchor itself) and mixing weights
-        partners = rng.integers(0, self.n_groups - 1, size=(self.n_groups, group_size))
-        partners += partners >= np.arange(self.n_groups)[:, None]
-        self.partners = partners
-        self.lam = rng.uniform(0.0, lambda_max, size=(self.n_groups, group_size))
-        # Zipf popularity over a random rank order of groups
-        rank_of_group = rng.permutation(self.n_groups)
-        p = 1.0 / np.power(rank_of_group + 1.0, zipf_s)
-        self.group_prob = p / p.sum()
-
-    def sample(self, n, rng):
-        """Sample n requests; returns variant ids (group * group_size + j)."""
-        g = rng.choice(self.n_groups, size=n, p=self.group_prob)
-        j = rng.integers(0, self.group_size, size=n)
-        return g * self.group_size + j
-
-    def vectors(self, ids):
-        g = ids // self.group_size
-        j = ids % self.group_size
-        anchor = self.q[g]
-        if self.method == "interp":
-            lam = self.lam[g, j][:, None]
-            return (1.0 - lam) * anchor + lam * self.q[self.partners[g, j]]
-        out = np.empty_like(anchor)
-        dim = anchor.shape[1]
-        for i, vid in enumerate(ids.tolist()):
-            z = np.random.default_rng([self.seed, vid]).standard_normal(dim)
-            out[i] = anchor[i] + self.noise_rel * np.linalg.norm(anchor[i]) * z / np.sqrt(dim)
-        return out
-
-
-def _dedup(ids):
-    uniq, inv, counts = np.unique(ids, return_inverse=True, return_counts=True)
-    return uniq, counts.astype(np.int64), inv
-
-
-def build_inputs(args):
-    """Database and workload draws; deterministic given args (sizes, seed).
-
-    Returns a dict with db, the workload, deduplicated candidate / scoring /
-    test variant ids, their weights, the test access order, and stats.
-    """
-    # same database subsample as run_e2e_oracle_sift.py for the same seed
-    rng = np.random.default_rng(args.seed)
-    logger.info("Loading SIFT1M...")
-    sift_base = load_fvecs_fast(str(SIFT1M_DIR / "sift_base.fvecs"))
-    db = sift_base[rng.choice(len(sift_base), size=args.n_db, replace=False)]
-    base_queries = load_fvecs_fast(str(SIFT1M_DIR / "sift_query.fvecs"))
-
-    wl = SimZipfWorkload(base_queries, args.group_size, args.zipf, args.method,
-                         args.lambda_max, args.noise_rel, args.seed)
-    wrng = np.random.default_rng(args.seed + 1)
-    cand_ids, _, _ = _dedup(wl.sample(args.n_cand_requests, wrng))
-    score_ids, score_w, _ = _dedup(wl.sample(args.n_score_requests, wrng))
-    test_req = wl.sample(args.n_test_requests, wrng)
-    test_ids, test_w, test_seq = _dedup(test_req)
-
-    stats = {
-        "distinct_cand": int(len(cand_ids)),
-        "distinct_score": int(len(score_ids)),
-        "distinct_test": int(len(test_ids)),
-        "test_requests_exact_repeat_of_score": float(np.isin(test_req, score_ids).mean()),
-        "test_requests_group_in_cand": float(np.isin(
-            test_req // args.group_size, cand_ids // args.group_size).mean()),
-        "top1pct_groups_request_share": float(
-            np.sort(wl.group_prob)[::-1][:max(1, wl.n_groups // 100)].sum()),
-    }
-    return {"db": db, "wl": wl, "cand_ids": cand_ids, "score_ids": score_ids,
-            "score_w": score_w, "test_ids": test_ids, "test_w": test_w,
-            "test_seq": test_seq, "stats": stats}
 
 
 def main():

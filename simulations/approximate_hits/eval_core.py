@@ -44,14 +44,17 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits import eval_calibrated as ecal
-from simulations.approximate_hits import eval_predictors as epred
 from utils.cache.models import gbt_regressor
-from utils.base.knn import fetch_rows
 from utils.base.knn import pairwise_dist, sq_norms
 from utils.cache.entries import entry_kmax
 from utils.cache.metrics import best_cutoff_rate
 from utils.base.knn import knn_dists
+from utils.cache.entries import state_tables
+from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of
+from utils.cache.metrics import expand_index
+from utils.cache.parallel import worker_pool
+from utils.cache.shell import SAMPLE_J, load_cand_ext, shell_features, shell_ids, shell_sample
+from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -62,10 +65,7 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 EPS = 1e-12
-SAMPLE_J = 5
-COUNT_SCALES = (1.0, 1.1, 1.25)
 DEFAULT = {"n": 3, "p": 0.1, "R": 500, "b": 32}
-_R: dict = {}
 
 #-------------------------------------------------------------------------------
 
@@ -89,96 +89,6 @@ def configs():
     return out
 
 
-def balls_of(entries):
-    """One ball per cached past query (its largest K): centers, radii."""
-    cand, K = entry_kmax(entries, ecal._G["k_values"])
-    n_kv = len(ecal._G["k_values"])
-    t = np.array([ecal._G["k_values"].index(int(k)) for k in K])
-    rad = ecal._G["radius"][cand * n_kv + t]
-    cq = np.asarray(ecal._G["cand_q"][cand], dtype=np.float64)
-    return {"cand": cand, "K": K, "c": cq, "c_sq": sq_norms(cq), "r": rad}
-
-
-def ball_features(q, nr, bl, n):
-    """Relative offset and size for the n best-fitting balls."""
-    F = np.full((len(q), 2 * n), np.nan)
-    m = min(n, len(bl["r"]))
-    for s in range(0, len(q), 2048):
-        d = pairwise_dist(q[s:s + 2048], bl["c"], bl["c_sq"])
-        c = nr[s:s + 2048]
-        fit = (c[:, None] + d) / bl["r"][None, :]
-        part = (np.argpartition(fit, m - 1, axis=1)[:, :m] if m < fit.shape[1]
-                else np.tile(np.arange(fit.shape[1]), (len(d), 1)))
-        order = np.take_along_axis(part, np.argsort(np.take_along_axis(fit, part, axis=1),
-                                                    axis=1), axis=1)
-        rows = np.arange(len(d))
-        for t in range(m):
-            j = order[:, t]
-            F[s:s + 2048, 2 * t] = d[rows, j] / bl["r"][j]
-            F[s:s + 2048, 2 * t + 1] = c / bl["r"][j]
-    return F
-
-
-def quantize(x, bits):
-    """b-bit uniform scalar quantization per dimension (reconstructed)."""
-    if bits >= 32:
-        return x
-    lo, hi = x.min(axis=0), x.max(axis=0)
-    step = np.maximum(hi - lo, EPS) / (2 ** bits - 1)
-    return lo + np.round((x - lo) / step) * step
-
-
-def load_cand_ext(run_dir, R):
-    """Exact top-R database ids per candidate query (for shells deeper than the
-    cached top-500), computed once and saved to <run>/cand_top<R>.npy."""
-    from utils.base.knn import exact_topk
-    path = Path(run_dir) / f"cand_top{R}.npy"
-    if path.exists():
-        return np.load(path)
-    logger.info(f"exact top-{R} for {len(ecal._G['cand_q'])} candidate queries...")
-    ids = exact_topk(ecal._G["cand_q"], ecal._G["db"], R)
-    tmp = path.with_suffix(".tmp.npy")
-    np.save(tmp, ids)
-    tmp.rename(path)
-    return ids
-
-
-def shell_ids(cand, K, R):
-    """Database ids at ranks K+1..R around one candidate query. Uses the saved
-    deeper neighbor lists (_R["cand_ext"]) when R exceeds the cached top-500."""
-    n_kv = len(ecal._G["k_values"])
-    top = ecal._G["cached_ids"][cand * n_kv + n_kv - 1]
-    if R > len(top):
-        return np.asarray(_R["cand_ext"][cand][K:R])
-    return np.asarray(top[K:R])
-
-
-def shell_sample(bl, in_cache, p, R, bits):
-    shells = [shell_ids(i, k, R) for i, k in zip(bl["cand"], bl["K"]) if k < R]
-    ids = np.unique(np.concatenate(shells)) if shells else np.empty(0, np.int64)
-    ids = ids[~in_cache[ids]]
-    ids = ids[_R["draw"][ids] < p]
-    if len(ids) < SAMPLE_J:
-        return None
-    vecs = quantize(fetch_rows(ecal._G["db"], ids), bits)
-    return {"ids": ids, "vecs": vecs, "sq": sq_norms(vecs),
-            "memory": len(ids) * min(bits, 32) / 32 / len(ecal._G["db"])}
-
-
-def shell_features(q, nr, samp):
-    F = np.zeros((len(q), SAMPLE_J + len(COUNT_SCALES)))
-    if samp is None:
-        return F
-    for s in range(0, len(q), 1024):
-        d = pairwise_dist(q[s:s + 1024], samp["vecs"], samp["sq"])
-        c = nr[s:s + 1024][:, None]
-        near = np.sort(np.partition(d, SAMPLE_J - 1, axis=1)[:, :SAMPLE_J], axis=1)
-        F[s:s + 1024, :SAMPLE_J] = np.log((near + EPS) / c)
-        for i, t in enumerate(COUNT_SCALES):
-            F[s:s + 1024, SAMPLE_J + i] = np.log1p((d < t * c).sum(axis=1))
-    return F
-
-
 def oracle_at(points, frac):
     xs = np.array([p["cache_frac"] for p in points])
     ys = np.array([p["test_hit_rate"] for p in points])
@@ -189,18 +99,14 @@ def oracle_at(points, frac):
     return float(np.interp(np.log(frac), np.log(xs), ys))
 
 
-def _expand(split):
-    return np.repeat(np.arange(len(split["y"])), split["w"].astype(np.int64))
-
-
-def eval_state(task):
+def eval_state(task, run, args, points):
     target, point, entries = task
-    k = ecal._G["k"]
-    st = ecal.state_tables(entries)
+    k = run.k
+    st = state_tables(run, entries)
     if len(st["cached"]) <= k:
         return None
-    bl = balls_of(entries)
-    sets, topk = ecal._G["sets"], ecal._G["topk"]
+    bl = balls_of(run, entries)
+    sets, topk = run.sets, run.topk
     y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in ("fit", "cal", "test")}
     w = {sp: sets[sp][1].astype(np.float64) for sp in ("fit", "cal", "test")}
     nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], EPS)
@@ -208,8 +114,8 @@ def eval_state(task):
     ball_cache, shell_cache = {}, {}
     out = {"cache_frac": point["cache_frac"], "n_balls": len(bl["r"]),
            "oracle_hit_rate": point["test_hit_rate"]}
-    ti = _expand({"y": y["test"], "w": w["test"]})
-    ci = _expand({"y": y["cal"], "w": w["cal"]})
+    ti = expand_index(w["test"])
+    ci = expand_index(w["cal"])
     for name, (n, sh) in configs().items():
         blocks = {sp: [] for sp in ("fit", "cal", "test")}
         if n:
@@ -221,7 +127,7 @@ def eval_state(task):
         mem = 0.0
         if sh is not None:
             if sh not in shell_cache:
-                samp = shell_sample(bl, st["in_cache"], *sh)
+                samp = shell_sample(run, bl, st["in_cache"], *sh)
                 shell_cache[sh] = ({sp: shell_features(sets[sp][0], nr[sp], samp)
                                     for sp in blocks}, samp["memory"] if samp else 0.0)
             feats, mem = shell_cache[sh]
@@ -238,8 +144,7 @@ def eval_state(task):
                      "calibrated_hit_rate": float(adm.mean()),
                      "calibrated_hit_retention": float(yt[adm].mean()) if adm.any() else None,
                      "best_cutoff_hit_rate": best_cutoff_rate(st_, yt, target),
-                     "oracle_same_total_memory": oracle_at(_R["points"],
-                                                           point["cache_frac"] + mem)}
+                     "oracle_same_total_memory": oracle_at(points, point["cache_frac"] + mem)}
     return out
 
 
@@ -255,18 +160,16 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
     run_dir = Path(args.run_dir)
-    data, _ = epred.setup_run(run_dir, args.n_each)
-    _R["draw"] = np.random.default_rng(1).random(len(ecal._G["db"]))
+    data, _, run = load_run_data(run_dir, args.n_each)
     res = next(r for r in data["results"] if abs(r["target"] - args.target) < 1e-9)
-    _R["points"] = res["points"]
     tasks = []
     for size in args.sizes:
         p = min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
         tasks.append((args.target, p, res["selected"][:p["n_entries"]]))
-    import multiprocessing as mp
     out = []
-    with mp.get_context("fork").Pool(min(args.workers, len(tasks))) as pool:
-        for s in pool.imap(eval_state, tasks):
+    with worker_pool(eval_state, args.workers, len(tasks), run=run, args=args,
+                     points=res["points"]) as pool:
+        for s in pool.imap(tasks):
             if s is None:
                 continue
             out.append(s)

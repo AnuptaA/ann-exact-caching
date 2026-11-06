@@ -30,12 +30,15 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits import eval_calibrated as ecal
-from simulations.approximate_hits import eval_core as ec
-from simulations.approximate_hits import eval_predictors as epred
-from utils.cache.models import gbt_regressor
+from utils.cache.models import gbt_regressor, logistic_scores, standardize
 from utils.cache.metrics import best_cutoff_rate
 from utils.base.knn import knn_dists
+from utils.cache.entries import state_tables
+from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of
+from utils.cache.metrics import expand_index
+from utils.cache.parallel import worker_pool
+from utils.cache.shell import SAMPLE_J, load_cand_ext, shell_features, shell_ids, shell_sample
+from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -45,10 +48,6 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
-N_BALLS = 3
-POOR_FIT = 10.0
-SPLITS = ("fit", "cal", "test")
-_R: dict = {}
 
 #-------------------------------------------------------------------------------
 
@@ -61,7 +60,7 @@ def best_fit_l2(B):
 
 def analytic(B, S):
     """Fewer sampled points inside the neighborhood first; ties by best fit."""
-    count = np.expm1(S[:, ec.SAMPLE_J])                 # sampled within 1.0 x radius
+    count = np.expm1(S[:, SAMPLE_J])                 # sampled within 1.0 x radius
     fit = best_fit_l2(B)
     return -np.round(count) - fit / (1.0 + fit)          # tie-break term in (-1, 0]
 
@@ -69,74 +68,50 @@ def analytic(B, S):
 def monotone_cst(n_ball_cols, n_shell_cols):
     # balls: larger rel offset / size is worse; shell: farther nearest sample
     # vectors are better, larger counts are worse
-    return ([-1] * n_ball_cols + [1] * ec.SAMPLE_J
-            + [-1] * (n_shell_cols - ec.SAMPLE_J))
-
-
-def _standardize(X, ref):
-    mu, sd = ref.mean(axis=0), ref.std(axis=0) + 1e-9
-    return (X - mu) / sd
-
-
-def logistic_scores(X, y, w):
-    """Logistic regression on standardized X with retention as a soft label:
-    each row is a positive with weight y and a negative with weight 1 - y
-    (exact cross-entropy on fractional labels). Returns {split: score} for
-    every split in X (X["fit"] is used for fitting and standardization)."""
-    from sklearn.linear_model import LogisticRegression
-    Z = {sp: _standardize(X[sp], X["fit"]) for sp in X}
-    n = len(y)
-    lr = LogisticRegression(C=1.0, max_iter=2000)
-    lr.fit(np.vstack([Z["fit"], Z["fit"]]), np.r_[np.ones(n), np.zeros(n)],
-           sample_weight=np.r_[w * y, w * (1 - y)] + 1e-12)
-    return {sp: lr.decision_function(Z[sp]) for sp in X}
+    return ([-1] * n_ball_cols + [1] * SAMPLE_J
+            + [-1] * (n_shell_cols - SAMPLE_J))
 
 
 def scores(B, S, y, w):
     """name -> {split: score} for all models."""
     from sklearn.ensemble import HistGradientBoostingRegressor
     from sklearn.linear_model import Ridge
-    X = {sp: np.hstack([B[sp], S[sp]]) for sp in SPLITS}
+    X = {sp: np.hstack([B[sp], S[sp]]) for sp in SCORE_SPLITS}
     out = {}
     g = gbt_regressor(0).fit(X["fit"], y, sample_weight=w)
-    out["gbt"] = {sp: g.predict(X[sp]) for sp in SPLITS}
+    out["gbt"] = {sp: g.predict(X[sp]) for sp in SCORE_SPLITS}
     h = HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, max_depth=2,
                                       early_stopping=True, validation_fraction=0.1,
                                       random_state=0,
                                       monotonic_cst=monotone_cst(B["fit"].shape[1],
                                                                  S["fit"].shape[1]))
     h.fit(X["fit"], y, sample_weight=w)
-    out["gbt_shallow"] = {sp: h.predict(X[sp]) for sp in SPLITS}
-    Z = {sp: _standardize(X[sp], X["fit"]) for sp in SPLITS}
+    out["gbt_shallow"] = {sp: h.predict(X[sp]) for sp in SCORE_SPLITS}
+    Z = {sp: standardize(X[sp], X["fit"]) for sp in SCORE_SPLITS}
     r = Ridge(alpha=1.0).fit(Z["fit"], y, sample_weight=w)
-    out["linear"] = {sp: r.predict(Z[sp]) for sp in SPLITS}
+    out["linear"] = {sp: r.predict(Z[sp]) for sp in SCORE_SPLITS}
     out["logistic"] = logistic_scores(X, y, w)
-    out["analytic"] = {sp: analytic(B[sp], S[sp]) for sp in SPLITS}
-    out["analytic_balls"] = {sp: -best_fit_l2(B[sp]) for sp in SPLITS}
+    out["analytic"] = {sp: analytic(B[sp], S[sp]) for sp in SCORE_SPLITS}
+    out["analytic_balls"] = {sp: -best_fit_l2(B[sp]) for sp in SCORE_SPLITS}
     return out
 
 
-def _expand(y, w):
-    return np.repeat(np.arange(len(y)), w.astype(np.int64))
-
-
-def eval_state(task):
+def eval_state(task, run, args):
     target, point, entries = task
-    args = _R["args"]
-    k = ecal._G["k"]
-    st = ecal.state_tables(entries)
+    k = run.k
+    st = state_tables(run, entries)
     if len(st["cached"]) <= k:
         return None
-    bl = ec.balls_of(entries)
-    sets, topk = ecal._G["sets"], ecal._G["topk"]
-    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SPLITS}
-    w = {sp: sets[sp][1].astype(np.float64) for sp in SPLITS}
-    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SPLITS}
-    B = {sp: np.nan_to_num(ec.ball_features(sets[sp][0], nr[sp], bl, N_BALLS), nan=POOR_FIT)
-         for sp in SPLITS}
-    samp = ec.shell_sample(bl, st["in_cache"], args.p, args.R, args.b)
-    S = {sp: ec.shell_features(sets[sp][0], nr[sp], samp) for sp in SPLITS}
-    ti, ci = _expand(y["test"], w["test"]), _expand(y["cal"], w["cal"])
+    bl = balls_of(run, entries)
+    sets, topk = run.sets, run.topk
+    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SCORE_SPLITS}
+    w = {sp: sets[sp][1].astype(np.float64) for sp in SCORE_SPLITS}
+    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SCORE_SPLITS}
+    B = {sp: np.nan_to_num(ball_features(sets[sp][0], nr[sp], bl, N_BALLS), nan=POOR_FIT)
+         for sp in SCORE_SPLITS}
+    samp = shell_sample(run, bl, st["in_cache"], args.p, args.R, args.b)
+    S = {sp: shell_features(sets[sp][0], nr[sp], samp) for sp in SCORE_SPLITS}
+    ti, ci = expand_index(w["test"]), expand_index(w["cal"])
     out = {"cache_frac": point["cache_frac"], "oracle_hit_rate": point["test_hit_rate"],
            "sample_memory": samp["memory"] if samp else 0.0}
     for name, s in scores(B, S, y["fit"], w["fit"]).items():
@@ -165,18 +140,15 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
     run_dir = Path(args.run_dir)
-    data, _ = epred.setup_run(run_dir, args.n_each)
-    _R["args"] = args
-    ec._R["draw"] = np.random.default_rng(1).random(len(ecal._G["db"]))  # as eval_core
+    data, _, run = load_run_data(run_dir, args.n_each)
     res = next(r for r in data["results"] if abs(r["target"] - args.target) < 1e-9)
     tasks = []
     for size in args.sizes:
         p = min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
         tasks.append((args.target, p, res["selected"][:p["n_entries"]]))
-    import multiprocessing as mp
     out = []
-    with mp.get_context("fork").Pool(min(args.workers, len(tasks))) as pool:
-        for s in pool.imap(eval_state, tasks):
+    with worker_pool(eval_state, args.workers, len(tasks), run=run, args=args) as pool:
+        for s in pool.imap(tasks):
             if s is None:
                 continue
             out.append(s)

@@ -25,3 +25,9 @@ def interp_log(xs, ys, x):
     if x < xs[0] or x > xs[-1] * 1.001:
         return None
     return float(np.interp(np.log(x), np.log(xs), ys))
+
+
+def expand_index(w):
+    """Row index repeated once per request: row i appears w[i] times."""
+    return np.repeat(np.arange(len(w)), np.asarray(w).astype(np.int64))
+

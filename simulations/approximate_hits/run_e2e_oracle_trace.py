@@ -31,6 +31,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
+from utils.cache.workloads import WORKLOADS, build_trace, load_base, split_view
 from simulations.approximate_hits import run_e2e_oracle_sift as base
 from utils.cache.population import GreedyPopulator
 from simulations.approximate_hits.run_e2e_oracle_sift import (
@@ -43,97 +44,9 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
-AKER = Path("datasets/aker")
-SPLITS = ("cand", "score", "fit", "dev", "cal", "test")
-TRACE_FRACTIONS = {"cand": 0.08, "score": 0.32, "fit": 0.15, "dev": 0.15,
-                   "cal": 0.15, "test": 0.15}
 DEFAULT_CHECKPOINTS = [0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05]
 
-WORKLOADS = {
-    **{f"spacev-aker-{s}": {"base": "spacev-10m.npy",
-                            "trace": [f"spacev-sim-100k-{s}.npy"]}
-       for s in ("0.3", "0.6", "0.99")},
-    **{f"triviaqa-aker-{s}": {"base": "sphere-10m.npy",
-                              "trace": [f"triviaqa-sim-100k-{s}.npy"]}
-       for s in ("0.3", "0.6", "0.99")},
-    "spacev-real": {"base": "spacev-10m.npy",
-                    "trace": ["spacev1b/query_log.bin", "spacev1b/query.bin"]},
-}
-
 #-------------------------------------------------------------------------------
-
-
-def _read_spacev_bin(path: Path) -> np.ndarray:
-    with open(path, "rb") as f:
-        n, d = np.frombuffer(f.read(8), dtype=np.int32)
-        return np.frombuffer(f.read(int(n) * int(d)), dtype=np.int8).reshape(n, d)
-
-
-def _load_vectors(path: Path) -> np.ndarray:
-    return _read_spacev_bin(path) if path.suffix == ".bin" else np.load(path)
-
-
-def load_base(name: str) -> np.ndarray:
-    """Database vectors: int8 kept as is; floating data as float32."""
-    arr = np.load(AKER / WORKLOADS[name]["base"], mmap_mode="r")
-    if np.issubdtype(arr.dtype, np.integer):
-        return np.ascontiguousarray(arr)
-    out = np.empty(arr.shape, dtype=np.float32)
-    for b in range(0, len(arr), 500_000):
-        out[b:b + 500_000] = arr[b:b + 500_000]
-    return out
-
-
-def split_boundaries(name: str, parts) -> dict:
-    """Consecutive request ranges per split."""
-    if name == "spacev-real":
-        log_n, test_n = len(parts[0]), len(parts[1])
-        sizes = {"cand": 10000, "score": 34162, "fit": 16000, "dev": 17000,
-                 "cal": log_n - 10000 - 34162 - 16000 - 17000, "test": test_n}
-    else:
-        n = sum(len(p) for p in parts)
-        sizes = {s: int(TRACE_FRACTIONS[s] * n) for s in SPLITS}
-        sizes["test"] = n - sum(v for s, v in sizes.items() if s != "test")
-    bounds, start = {}, 0
-    for s in SPLITS:
-        bounds[s] = (start, start + sizes[s])
-        start += sizes[s]
-    return bounds
-
-
-def build_trace(name: str):
-    """Requests (in order) as indices into globally distinct vectors."""
-    parts = [_load_vectors(AKER / p) for p in WORKLOADS[name]["trace"]]
-    seq = np.concatenate(parts)
-    uniq, inv = np.unique(seq, axis=0, return_inverse=True)
-    inv = inv.reshape(-1)
-    return uniq, inv, split_boundaries(name, parts)
-
-
-def split_view(inv, bounds, split):
-    """Distinct global ids in a split, their weights, and the request order."""
-    lo, hi = bounds[split]
-    ids, local, counts = np.unique(inv[lo:hi], return_inverse=True, return_counts=True)
-    return ids, counts.astype(np.int64), local.reshape(-1)
-
-
-def load_trace_run(run_dir: Path):
-    """Everything an evaluation script needs from a saved trace run."""
-    data = json.loads((run_dir / "results.json").read_text())
-    cfg = argparse.Namespace(**data["config"])
-    db = load_base(cfg.trace)
-    z = np.load(run_dir / "topk.npz")
-    uniq, inv, topk_all = z["uniq"], z["inv"], z["topk"]
-    bounds = {s: tuple(z[f"bounds_{s}"]) for s in SPLITS}
-    cand_ids = split_view(inv, bounds, "cand")[0]
-    sets, topk, seqs = {}, {}, {}
-    for s in ("score", "fit", "dev", "cal", "test"):
-        ids, w, local = split_view(inv, bounds, s)
-        sets[s] = (uniq[ids], w)
-        topk[s] = topk_all[ids][:, :cfg.k]
-        seqs[s] = local
-    return {"data": data, "cfg": cfg, "db": db, "cand_q": uniq[cand_ids],
-            "cand_top": z["cand_top"], "sets": sets, "topk": topk, "seqs": seqs}
 
 
 #-------------------------------------------------------------------------------

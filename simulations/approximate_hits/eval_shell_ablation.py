@@ -29,13 +29,16 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits import eval_calibrated as ecal
-from simulations.approximate_hits import eval_core as ec
-from simulations.approximate_hits import eval_predictors as epred
-from simulations.approximate_hits import eval_simple as es
 from utils.cache.models import gbt_regressor
 from utils.cache.metrics import best_cutoff_rate
 from utils.base.knn import knn_dists
+from utils.cache.entries import state_tables
+from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of
+from utils.cache.metrics import expand_index
+from utils.cache.models import logistic_scores
+from utils.cache.parallel import worker_pool
+from utils.cache.shell import SAMPLE_J, load_cand_ext, shell_features, shell_ids, shell_sample
+from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -45,7 +48,6 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
-SPLITS = es.SPLITS
 SHELL_NAMES = ["d1", "d2", "d3", "d4", "d5", "n1.0", "n1.1", "n1.25"]
 CONFIGS = {
     "balls only": [],
@@ -59,13 +61,8 @@ CONFIGS = {
     "d1 + d2": ["d1", "d2"],
     "counts + d1": ["n1.0", "n1.1", "n1.25", "d1"],
 }
-_R: dict = {}
 
 #-------------------------------------------------------------------------------
-
-
-def _expand(y, w):
-    return np.repeat(np.arange(len(y)), w.astype(np.int64))
 
 
 def _rank(a):
@@ -95,33 +92,32 @@ def _evaluate(s, y, ti, ci, target, pred=None):
     return out
 
 
-def eval_state(task):
+def eval_state(task, run, args):
     target, point, entries = task
-    args = _R["args"]
-    k = ecal._G["k"]
-    st = ecal.state_tables(entries)
+    k = run.k
+    st = state_tables(run, entries)
     if len(st["cached"]) <= k:
         return None
-    bl = ec.balls_of(entries)
-    sets, topk = ecal._G["sets"], ecal._G["topk"]
-    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SPLITS}
-    w = {sp: sets[sp][1].astype(np.float64) for sp in SPLITS}
-    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SPLITS}
-    B = {sp: np.nan_to_num(ec.ball_features(sets[sp][0], nr[sp], bl, es.N_BALLS),
-                           nan=es.POOR_FIT) for sp in SPLITS}
-    samp = ec.shell_sample(bl, st["in_cache"], args.p, args.R, args.b)
-    S = {sp: ec.shell_features(sets[sp][0], nr[sp], samp) for sp in SPLITS}
+    bl = balls_of(run, entries)
+    sets, topk = run.sets, run.topk
+    y = {sp: st["in_cache"][topk[sp]].mean(axis=1) for sp in SCORE_SPLITS}
+    w = {sp: sets[sp][1].astype(np.float64) for sp in SCORE_SPLITS}
+    nr = {sp: np.maximum(knn_dists(sets[sp][0], st["db_c"], st["db_c_sq"], k)[:, k - 1], 1e-12) for sp in SCORE_SPLITS}
+    B = {sp: np.nan_to_num(ball_features(sets[sp][0], nr[sp], bl, N_BALLS),
+                           nan=POOR_FIT) for sp in SCORE_SPLITS}
+    samp = shell_sample(run, bl, st["in_cache"], args.p, args.R, args.b)
+    S = {sp: shell_features(sets[sp][0], nr[sp], samp) for sp in SCORE_SPLITS}
     col = {n: i for i, n in enumerate(SHELL_NAMES)}
-    ti, ci = _expand(y["test"], w["test"]), _expand(y["cal"], w["cal"])
+    ti, ci = expand_index(w["test"]), expand_index(w["cal"])
     out = {"cache_frac": point["cache_frac"], "oracle_hit_rate": point["test_hit_rate"],
            "sample_memory": samp["memory"] if samp else 0.0}
     for name, feats in CONFIGS.items():
-        X = {sp: np.hstack([B[sp], S[sp][:, [col[f] for f in feats]]]) for sp in SPLITS}
-        sc = es.logistic_scores(X, y["fit"], w["fit"])
+        X = {sp: np.hstack([B[sp], S[sp][:, [col[f] for f in feats]]]) for sp in SCORE_SPLITS}
+        sc = logistic_scores(X, y["fit"], w["fit"])
         out[name] = _evaluate(sc, y, ti, ci, target, pred=1 / (1 + np.exp(-sc["test"])))
-    X = {sp: np.hstack([B[sp], S[sp]]) for sp in SPLITS}
+    X = {sp: np.hstack([B[sp], S[sp]]) for sp in SCORE_SPLITS}
     g = gbt_regressor(0).fit(X["fit"], y["fit"], sample_weight=w["fit"])
-    sc = {sp: g.predict(X[sp]) for sp in SPLITS}
+    sc = {sp: g.predict(X[sp]) for sp in SCORE_SPLITS}
     out["GBT, all 8"] = _evaluate(sc, y, ti, ci, target, pred=sc["test"])
     return out
 
@@ -141,18 +137,15 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     args = ap.parse_args()
     run_dir = Path(args.run_dir)
-    data, _ = epred.setup_run(run_dir, args.n_each)
-    _R["args"] = args
-    ec._R["draw"] = np.random.default_rng(1).random(len(ecal._G["db"]))  # as eval_core
+    data, _, run = load_run_data(run_dir, args.n_each)
     res = next(r for r in data["results"] if abs(r["target"] - args.target) < 1e-9)
     tasks = []
     for size in args.sizes:
         p = min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
         tasks.append((args.target, p, res["selected"][:p["n_entries"]]))
-    import multiprocessing as mp
     out = []
-    with mp.get_context("fork").Pool(min(args.workers, len(tasks))) as pool:
-        for s in pool.imap(eval_state, tasks):
+    with worker_pool(eval_state, args.workers, len(tasks), run=run, args=args) as pool:
+        for s in pool.imap(tasks):
             if s is None:
                 continue
             out.append(s)

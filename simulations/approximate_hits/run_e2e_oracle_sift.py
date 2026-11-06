@@ -33,6 +33,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from datasets.dataloaders import load_fvecs_fast
+from utils.cache.workloads import load_inputs
 from utils.base.knn import exact_topk
 from utils.cache.population import (
     GreedyPopulator,
@@ -45,7 +46,6 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
-SIFT1M_DIR = Path("datasets/sift/raw_sift1m/sift")
 DEFAULT_TARGETS = [0.5, 0.7, 0.8, 0.9, 0.95, 1.0]
 DEFAULT_K_VALUES = [10, 20, 50, 100, 200, 500]
 DEFAULT_CHECKPOINTS = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3]
@@ -168,38 +168,6 @@ def plot_results(results, out_dir, n_db, title="SIFT"):
         plt.tight_layout()
         fig.savefig(out_dir / f"hit_rate_vs_cache_size_{scale}.png", dpi=120)
         plt.close(fig)
-
-
-def load_inputs(args):
-    """Database, candidate-generating, scoring, and test query vectors.
-
-    Deterministic given args (dataset, sizes, seed), so evaluation scripts can
-    rebuild a run's exact inputs from its saved config.
-    """
-    rng = np.random.default_rng(args.seed)
-    if args.dataset == "sift":
-        logger.info("Loading SIFT1M...")
-        base = load_fvecs_fast(str(SIFT1M_DIR / "sift_base.fvecs"))
-        learn = load_fvecs_fast(str(SIFT1M_DIR / "sift_learn.fvecs"))
-        test = load_fvecs_fast(str(SIFT1M_DIR / "sift_query.fvecs"))[:args.n_test]
-        db = base[rng.choice(len(base), size=args.n_db, replace=False)]
-        train_idx = rng.choice(len(learn), size=args.n_cand_queries + args.n_score_queries,
-                               replace=False)
-        cand_q = learn[train_idx[:args.n_cand_queries]]
-        score_q = learn[train_idx[args.n_cand_queries:]]
-    else:
-        # ESCI: database = pre-built product subsample; train and test are
-        # disjoint random splits of the real ESCI queries
-        esci_dir = Path(args.esci_dir)
-        logger.info(f"Loading ESCI from {esci_dir}...")
-        db = np.load(esci_dir / f"esci_db{args.n_db}_s{args.seed}.npy")
-        pool = np.load(esci_dir / "esci_queries.npy")
-        perm = rng.permutation(len(pool))
-        n_c, n_s = args.n_cand_queries, args.n_score_queries
-        test = pool[perm[:args.n_test]]
-        cand_q = pool[perm[args.n_test:args.n_test + n_c]]
-        score_q = pool[perm[args.n_test + n_c:args.n_test + n_c + n_s]]
-    return db, cand_q, score_q, test
 
 
 def main():

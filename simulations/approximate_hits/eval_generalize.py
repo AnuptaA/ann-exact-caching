@@ -36,12 +36,14 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits import eval_calibrated as ecal
-from simulations.approximate_hits import eval_core as ec
-from simulations.approximate_hits import eval_predictors as epred
 from utils.base.knn import pairwise_dist
 from utils.cache.entries import perturbed
 from utils.base.knn import exact_topk
+from utils.cache.entries import state_tables
+from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of
+from utils.cache.models import fit_logistic
+from utils.cache.shell import SAMPLE_J, shell_features, shell_sample
+from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -51,12 +53,8 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
-SPLITS = ("fit", "cal", "test")
-N_BALLS = 3
-POOR_FIT = 10.0
 SHELL = (0.25, 500, 4)
 DELTA = 0.05
-_R: dict = {}
 
 #-------------------------------------------------------------------------------
 
@@ -75,33 +73,22 @@ def optimal_rate(y, target):
     return float((np.flatnonzero(ok).max() + 1) / len(ys)) if ok.any() else 0.0
 
 
-def cache_data(entries, ks, topk):
+def cache_data(run, entries, ks, topk):
     """Per k: {split: (X, y)} for one cache state (X = the 7 features)."""
-    st = ecal.state_tables(entries)
-    bl = ec.balls_of(entries)
-    samp = ec.shell_sample(bl, st["in_cache"], *SHELL)
+    st = state_tables(run, entries)
+    bl = balls_of(run, entries)
+    samp = shell_sample(run, bl, st["in_cache"], *SHELL)
     out = {}
     for k in ks:
         out[k] = {}
-        for sp in SPLITS:
-            q = ecal._G["sets"][sp][0]
+        for sp in SCORE_SPLITS:
+            q = run.sets[sp][0]
             nr = cached_kth(q, st, k)
-            B = np.nan_to_num(ec.ball_features(q, nr, bl, N_BALLS), nan=POOR_FIT)
-            S = ec.shell_features(q, nr, samp)[:, [ec.SAMPLE_J]]
+            B = np.nan_to_num(ball_features(q, nr, bl, N_BALLS), nan=POOR_FIT)
+            S = shell_features(q, nr, samp)[:, [SAMPLE_J]]
             y = st["in_cache"][topk[sp][:, :k]].mean(axis=1)
             out[k][sp] = (np.hstack([B, S]), y)
     return out
-
-
-def fit_logistic(X, y):
-    """Logistic regression with retention as a soft label; returns a scorer."""
-    from sklearn.linear_model import LogisticRegression
-    mu, sd = X.mean(axis=0), X.std(axis=0) + 1e-9
-    n = len(y)
-    lr = LogisticRegression(C=1.0, max_iter=3000)
-    Z = (X - mu) / sd
-    lr.fit(np.vstack([Z, Z]), np.r_[np.ones(n), np.zeros(n)], sample_weight=np.r_[y, 1 - y] + 1e-12)
-    return lambda A: lr.decision_function((A - mu) / sd)
 
 
 def choose_lambda(score, fit_X, cal_X, cal_y, target):
@@ -133,7 +120,7 @@ def _with(X, v):
 #-------------------------------------------------------------------------------
 
 
-def mode_caches(data, args):
+def mode_caches(data, args, run, topk):
     res = {round(r["target"], 6): r for r in data["results"]}
     main = res[round(args.target, 6)]
     fam = {}
@@ -145,16 +132,16 @@ def mode_caches(data, args):
     fam[f"T={args.other_target:g} cache, {100 * args.base_size:g}%"] = (
         r["selected"][:p["n_entries"]], p["cache_frac"])
     p = min(main["points"], key=lambda p: abs(p["cache_frac"] - args.base_size))
-    n_kv = len(ecal._G["k_values"])
-    ent = perturbed(main["selected"][:p["n_entries"]], args.perturb, len(ecal._G["cand_q"]),
+    n_kv = len(run.k_values)
+    ent = perturbed(main["selected"][:p["n_entries"]], args.perturb, len(run.cand_q),
                     n_kv, np.random.default_rng(0))
     fam[f"{100 * args.base_size:g}%, {100 * args.perturb:g}% entries replaced"] = (
         ent, p["cache_frac"])
-    k = ecal._G["k"]
+    k = run.k
     D = {}
     for name, (entries, frac) in fam.items():
         logger.info(f"features for cache {name}...")
-        D[name] = (cache_data(entries, [k], _R["topk"])[k], frac)
+        D[name] = (cache_data(run, entries, [k], topk)[k], frac)
     T = args.target
     models = {n: fit_logistic(*d["fit"]) for n, (d, _) in D.items()}
     lam_own = {n: choose_lambda(models[n], d["fit"][0], *d["cal"], T) for n, (d, _) in D.items()}
@@ -185,14 +172,14 @@ def mode_caches(data, args):
     return {"caches": names, "pairs": pairs, "per_cache": per_cache}
 
 
-def mode_k(data, args):
+def mode_k(data, args, run, topk):
     res = next(r for r in data["results"] if abs(r["target"] - args.target) < 1e-9)
     T, ks = args.target, args.ks
     out = {}
     for size in args.sizes:
         p = min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
         logger.info(f"features for cache {100 * size:g}% at k = {ks}...")
-        D = cache_data(res["selected"][:p["n_entries"]], ks, _R["topk"])
+        D = cache_data(run, res["selected"][:p["n_entries"]], ks, topk)
         models = {k: fit_logistic(*D[k]["fit"]) for k in ks}
         lk = {k: np.log(k) for k in ks}
         Xf, yf = _stack([D[k]["fit"] for k in ks], [lk[k] for k in ks])
@@ -203,7 +190,7 @@ def mode_k(data, args):
         for k in ks:
             d = D[k]
             src = models[args.source_k]
-            Xf_k, Xc_k, Xt_k = (_with(d[sp][0], lk[k]) for sp in SPLITS)
+            Xf_k, Xc_k, Xt_k = (_with(d[sp][0], lk[k]) for sp in SCORE_SPLITS)
             rows[str(k)] = {
                 "oracle": optimal_rate(d["test"][1], T),
                 "native": admit(models[k], choose_lambda(models[k], d["fit"][0], *d["cal"], T),
@@ -230,16 +217,13 @@ def main():
     ap.add_argument("--n-each", type=int, default=20000)
     args = ap.parse_args()
     run_dir = Path(args.run_dir)
-    data, _ = epred.setup_run(run_dir, args.n_each)
-    ec._R["draw"] = np.random.default_rng(1).random(len(ecal._G["db"]))  # as eval_core
+    data, _, run = load_run_data(run_dir, args.n_each)
     if args.mode == "k":
         logger.info(f"exact top-{max(args.ks)} for the query splits...")
-        _R["topk"] = {sp: exact_topk(ecal._G["sets"][sp][0], ecal._G["db"], max(args.ks))
-                      for sp in SPLITS}
-        out = mode_k(data, args)
+        topk = {sp: exact_topk(run.sets[sp][0], run.db, max(args.ks)) for sp in SCORE_SPLITS}
+        out = mode_k(data, args, run, topk)
     else:
-        _R["topk"] = {sp: ecal._G["topk"][sp] for sp in SPLITS}
-        out = mode_caches(data, args)
+        out = mode_caches(data, args, run, run.topk)
     path = run_dir / f"generalize_{args.mode}.json"
     path.write_text(json.dumps({"args": vars(args), "results": out}, indent=1))
     logger.info(f"wrote {path}")

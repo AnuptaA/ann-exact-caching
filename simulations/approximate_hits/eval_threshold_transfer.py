@@ -30,9 +30,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits import eval_calibrated as ecal
-from simulations.approximate_hits import eval_predictors as epred
 from utils.cache.entries import perturbed
+from utils.cache.legacy_features import build_state
+from utils.cache.metrics import expand_index
+from utils.cache.models import gbt
+from utils.cache.parallel import worker_pool
+from utils.cache.workloads import load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
 )
@@ -49,13 +52,13 @@ def _point(res, size):
     return min(res["points"], key=lambda p: abs(p["cache_frac"] - size))
 
 
-def _cache_frac(entries, n_db):
-    ids = [ecal._G["cached_ids"][j] for j in entries]
-    return len(np.unique(np.concatenate(ids))) / n_db if ids else 0.0
+def _cache_frac(run, entries):
+    ids = [run.cached_ids[j] for j in entries]
+    return len(np.unique(np.concatenate(ids))) / len(run.db) if ids else 0.0
 
 
-def cache_family(data, args, n_db):
-    """[(name, task for epred.build_state)] for all caches of the experiment."""
+def cache_family(data, args, run):
+    """[(name, task for build_state)] for all caches of the experiment."""
     by_t = {round(r["target"], 6): r for r in data["results"]}
     main = by_t[round(args.target, 6)]
     fam = []
@@ -69,12 +72,12 @@ def cache_family(data, args, n_db):
                     (args.target, p, r["selected"][:p["n_entries"]])))
     p = _point(main, args.base_size)
     base = main["selected"][:p["n_entries"]]
-    n_kv = len(ecal._G["k_values"])
-    n_cand = len(ecal._G["cand_q"])
+    n_kv = len(run.k_values)
+    n_cand = len(run.cand_q)
     rng = np.random.default_rng(args.seed)
     for frac in args.perturb:
         ent = perturbed(base, frac, n_cand, n_kv, rng)
-        q = {"cache_frac": _cache_frac(ent, n_db), "test_hit_rate": None,
+        q = {"cache_frac": _cache_frac(run, ent), "test_hit_rate": None,
              "test_hit_rate_online": None}
         fam.append((f"perturb{100 * frac:g}%@{100 * args.base_size:g}%", (args.target, q, ent)))
     return fam
@@ -85,7 +88,7 @@ def _X(split):
 
 
 def _admit(scores, split, lam):
-    idx = epred._expand(split)
+    idx = expand_index(split["w"])
     s, y = scores[idx], split["y"][idx]
     adm = s >= lam if lam is not None else np.zeros(len(s), dtype=bool)
     return float(adm.mean()), (float(y[adm].mean()) if adm.any() else None)
@@ -93,7 +96,7 @@ def _admit(scores, split, lam):
 
 def _lambda(model, src, cal, target, delta):
     grid = threshold_grid(model.predict(_X(src["fit"])))
-    idx = epred._expand(cal)
+    idx = expand_index(cal["w"])
     return select(DEFAULT_METHOD, model.predict(_X(cal))[idx], cal["y"][idx],
                   grid, target, delta)
 
@@ -113,19 +116,18 @@ def main():
     args = ap.parse_args()
     run_dir = Path(args.run_dir)
 
-    data, cfg = epred.setup_run(run_dir, args.n_each)
-    fam = cache_family(data, args, len(ecal._G["db"]))
+    data, cfg, run = load_run_data(run_dir, args.n_each)
+    fam = cache_family(data, args, run)
     logger.info(f"Building features for {len(fam)} caches...")
-    import multiprocessing as mp
-    with mp.get_context("fork").Pool(min(args.workers, len(fam))) as pool:
-        built = pool.map(epred.build_state, [task for _, task in fam])
+    with worker_pool(build_state, args.workers, len(fam), run=run) as pool:
+        built = pool.map([task for _, task in fam])
     caches = [(name, st) for (name, _), st in zip(fam, built) if st is not None]
 
     logger.info("Fitting one GBT per cache...")
     models = {}
     for name, st in caches:
         fit = st["fit"]
-        models[name] = epred._gbt("reg").fit(_X(fit), fit["y"], sample_weight=fit["w"])
+        models[name] = gbt("reg").fit(_X(fit), fit["y"], sample_weight=fit["w"])
     lam_own = {name: _lambda(models[name], st, st["cal"], args.target, args.delta)
                for name, st in caches}
 
