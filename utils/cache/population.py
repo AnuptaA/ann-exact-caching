@@ -292,3 +292,41 @@ class GreedyPopulator:
             self.score.histogram(), self.target, self.k)[0])
         if self.eval is not None:
             self.eval.add_vectors(new_v)
+
+
+K_VALUES = (10, 20, 50, 100, 200, 500)
+
+
+def greedy_entries(D, cand, score, score_w, budget, k, target):
+    """Greedy cache (dict center -> K) and its oracle hits on the scoring set.
+
+    cand: list of (center query, largest K whose top-K ids are known); each
+    expands to the K_VALUES up to that K.
+    """
+    top = D["top"]
+    pairs = [(c, K) for c, kmax in cand for K in K_VALUES if K <= kmax]
+    pop = GreedyPopulator([top[c, :K] for c, K in pairs], top[score, :k], len(D["db"]), k,
+                          target, score_weights=np.asarray(score_w, dtype=np.int64))
+    while pop.step(int(budget)) is not None:
+        pass
+    entries = {}
+    for j in pop.selected:
+        c, K = pairs[j]
+        entries[int(c)] = max(entries.get(int(c), 0), K)
+    return entries, int(pop.score_hits)
+
+
+def oracle_hits(cache, score, score_w, k, target):
+    counts = cache.cached[cache.D["top"][score, :k]].sum(axis=1)
+    hist = np.bincount(counts, weights=score_w, minlength=k + 1).astype(np.int64)
+    return int(hits_from_histograms(hist, target, k)[0])
+
+
+def hits_of_entries(D, entries, score, score_w, k, target):
+    """Oracle hits on a scoring set of a cache given as {center: K}."""
+    cached = np.zeros(len(D["db"]), dtype=bool)
+    for c, K in entries.items():
+        cached[D["top"][c, :K]] = True
+    counts = cached[D["top"][score, :k]].sum(axis=1)
+    hist = np.bincount(counts, weights=score_w, minlength=k + 1).astype(np.int64)
+    return int(hits_from_histograms(hist, target, k)[0])

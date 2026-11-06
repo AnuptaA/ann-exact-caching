@@ -23,21 +23,33 @@ def balls_of(run, entries):
     return {"cand": cand, "K": K, "c": cq, "c_sq": sq_norms(cq), "r": rad}
 
 
+def fit_balls(nr, de, radius, n, fill):
+    """Relative offset (de / r) and size (nr / r) of the n best-fitting balls.
+
+    nr: neighborhood radius per query; de: distance to every ball center
+    (queries x balls); radius: ball radii. Balls are ranked by the worst-case
+    fit (nr + de) / r; columns of missing balls (fewer than n) hold `fill`.
+    Shared by the offline evaluation and the online simulator.
+    """
+    F = np.full((len(nr), 2 * n), fill, dtype=np.float64)
+    m = min(n, de.shape[1])
+    fit = (nr[:, None] + de) / radius[None, :]
+    cand = (np.argpartition(fit, m - 1, axis=1)[:, :m] if m < fit.shape[1]
+            else np.tile(np.arange(m), (len(nr), 1)))
+    order = np.take_along_axis(cand, np.argsort(np.take_along_axis(fit, cand, axis=1),
+                                                axis=1), axis=1)
+    rows = np.arange(len(nr))
+    for t in range(m):
+        j = order[:, t]
+        F[:, 2 * t] = de[rows, j] / radius[j]
+        F[:, 2 * t + 1] = nr / radius[j]
+    return F
+
+
 def ball_features(q, nr, bl, n):
-    """Relative offset and size for the n best-fitting balls."""
-    F = np.full((len(q), 2 * n), np.nan)
-    m = min(n, len(bl["r"]))
+    """Relative offset and size for the n best-fitting balls (NaN where missing)."""
+    out = np.empty((len(q), 2 * n))
     for s in range(0, len(q), 2048):
         d = pairwise_dist(q[s:s + 2048], bl["c"], bl["c_sq"])
-        c = nr[s:s + 2048]
-        fit = (c[:, None] + d) / bl["r"][None, :]
-        part = (np.argpartition(fit, m - 1, axis=1)[:, :m] if m < fit.shape[1]
-                else np.tile(np.arange(fit.shape[1]), (len(d), 1)))
-        order = np.take_along_axis(part, np.argsort(np.take_along_axis(fit, part, axis=1),
-                                                    axis=1), axis=1)
-        rows = np.arange(len(d))
-        for t in range(m):
-            j = order[:, t]
-            F[s:s + 2048, 2 * t] = d[rows, j] / bl["r"][j]
-            F[s:s + 2048, 2 * t + 1] = c / bl["r"][j]
-    return F
+        out[s:s + 2048] = fit_balls(nr[s:s + 2048], d, bl["r"], n, np.nan)
+    return out
