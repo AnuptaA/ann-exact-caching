@@ -11,7 +11,6 @@ from utils.base.perturbation import (
     generate_perturbed_vector,
     euclidean_distance_from_angle,
     cosine_distance_from_angle,
-    verify_perturbation,
     ALPHA,
     BETA
 )
@@ -97,18 +96,6 @@ def test_distance_conversions():
     assert np.isclose(cos_dist_0, 0.0, atol=1e-6), f"Expected 0, got {cos_dist_0}"
 
 #-------------------------------------------------------------------------------
-
-def test_verify_perturbation():
-    """Test perturbation verification."""
-    v = np.random.randn(32)
-    expected_angle = np.pi / 4
-
-    v_prime = generate_perturbed_vector(v, perturbation_level="medium", seed=42)
-    result = verify_perturbation(v, v_prime, expected_angle, tolerance=np.pi)
-
-    assert 'actual_angle_deg' in result
-    assert 'actual_euclidean' in result
-    assert 'actual_cosine' in result
 
 #-------------------------------------------------------------------------------
 

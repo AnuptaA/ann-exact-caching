@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Unit tests for propose_candidates and propose_candidates_ball, including the
+"""Unit tests for propose_candidates_ball, including the
 point-equivalent case (propose_candidates_ball with K=0). See
 docs/POPULATION_DESIGN.md."""
 
@@ -11,7 +11,6 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import numpy as np
 
 from utils.base.population import (
-    propose_candidates,
     propose_candidates_ball,
     _precompute_kth_base_dist,
     _pairwise_cache_dists,
@@ -504,19 +503,6 @@ def test_propose_candidates_to_cache_entry():
         assert entry.top_k_vectors == [], "index-only entries carry no private vector copy"
         assert entry.top_k_matrix is None, "index-only entries carry no private matrix copy"
         assert list(entry.top_k_indices) == np.where(cand.R_c)[0].tolist()
-
-
-def test_propose_candidates_alpha_unchanged():
-    bm = _make_benchmark()
-    alphas = [2.0, 3.0]
-    cands = propose_candidates(
-        bm['cache'], bm['r_Q'], bm['tv'], bm['ti'], bm['hg'],
-        bm['cache'], bm['r_Q'], bm['test'], bm['test_r_t'],
-        bm['base'], alpha_values=alphas, metric='angular',
-    )
-    for cand in cands:
-        assert cand.alpha is not None, "alpha-based proposal must set alpha"
-        assert cand.alpha in alphas
 
 #-------------------------------------------------------------------------------
 # Internal geometry helpers used by ball-like proposals

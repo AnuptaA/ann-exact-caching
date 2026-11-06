@@ -9,32 +9,11 @@ import numpy as np
 from simulations.core.simulate import (
     QueryResult,
     SimulationResult,
-    DistanceCalculationTracker,
     CacheSimulator
 )
 from utils.base import get_distance_function
 
 #-------------------------------------------------------------------------------
-
-def test_distance_tracker():
-    """Test distance calculation tracking."""
-
-    distance_func = get_distance_function("euclidean")
-    tracker = DistanceCalculationTracker(distance_func)
-
-    a = np.random.randn(32)
-    b = np.random.randn(32)
-
-    assert tracker.count == 0, f"Initial count should be 0, got {tracker.count}"
-
-    _ = tracker(a, b)
-    _ = tracker(a, b)
-    _ = tracker(b, a)
-
-    assert tracker.count == 3, f"Count should be 3, got {tracker.count}"
-
-    tracker.reset()
-    assert tracker.count == 0, f"Count after reset should be 0, got {tracker.count}"
 
 
 #-------------------------------------------------------------------------------

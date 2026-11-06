@@ -13,7 +13,6 @@ import pytest
 
 from simulations.population.population_runner import run_population_benchmark as _run_benchmark
 from utils.base.population import (
-    propose_candidates,
     propose_candidates_ball,
 )
 from tests.helpers import create_mini_benchmark_with_population_data
@@ -309,38 +308,5 @@ def test_e2e_sigma_output_structure(dataset):
             )
             assert 0.0 <= result['hit_rate'] <= 1.0
             assert 0.0 <= result['mean_recall'] <= 1.0
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-
-
-@pytest.mark.parametrize('dataset', ['sift', 'esci'])
-def test_e2e_runner_alpha_backward_compat(dataset):
-    """Alpha-based propose_candidates must still work through run_population_benchmark."""
-    tmpdir = Path(tempfile.mkdtemp(prefix=f'{dataset}_alpha_compat_'))
-    try:
-        _make_mini(dataset, tmpdir)
-        out_base = tmpdir / 'out'
-        propose_fn = functools.partial(propose_candidates, alpha_values=[5.0])
-        _run_benchmark(
-            benchmark_name='test_benchmark',
-            load_benchmark_fn=LOAD_BENCHMARK_FN[dataset],
-            metric=METRIC,
-            output_dir=out_base,
-            benchmark_base_dir=tmpdir,
-            propose_fn=propose_fn,
-            budget_values=[50],
-            strategies=['random'],
-            algorithms=['lemma1_no_union'],
-            seed=SEED,
-            run_ts='run',
-            override_K=1,
-        )
-        summary_path = (
-            out_base / 'run' / 'test_benchmark' / 'B50' / 'non_oracle' / 'random' / 'summary.json'
-        )
-        assert summary_path.exists(), "Alpha-based runner broke after refactor"
-        summary = json.loads(summary_path.read_text())
-        result = next(r for r in summary['results'] if r['algorithm'] == 'lemma1_no_union')
-        assert 0.0 <= result['hit_rate'] <= 1.0
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

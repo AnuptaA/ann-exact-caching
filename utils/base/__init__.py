@@ -16,7 +16,6 @@ from .perturbation import (
     sample_perturbation_angle,
     euclidean_distance_from_angle,
     cosine_distance_from_angle,
-    verify_perturbation,
     PerturbationLevel,
     ALPHA,
     BETA
@@ -37,7 +36,6 @@ __all__ = [
     'sample_perturbation_angle',
     'euclidean_distance_from_angle',
     'cosine_distance_from_angle',
-    'verify_perturbation',
     'PerturbationLevel',
     'ALPHA',
     'BETA',

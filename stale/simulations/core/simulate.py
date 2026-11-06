@@ -101,20 +101,6 @@ class SimulationResult:
 
 #-------------------------------------------------------------------------------
 
-class DistanceCalculationTracker:
-    """Wrapper to count distance calculations."""
-    
-    def __init__(self, distance_func):
-        self.distance_func = distance_func
-        self.count = 0
-    
-    def __call__(self, a, b):
-        self.count += 1
-        return self.distance_func(a, b)
-    
-    def reset(self):
-        self.count = 0
-
 #-------------------------------------------------------------------------------
 
 class CacheSimulator:

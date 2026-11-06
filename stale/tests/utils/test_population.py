@@ -7,7 +7,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 from utils.base import MainMemory, angular_distance, euclidean_distance
-from utils.base.population import CandidateEntry, propose_candidates
+from utils.base.population import CandidateEntry
 
 #-------------------------------------------------------------------------------
 
@@ -171,113 +171,10 @@ def test_to_cache_entry_cig_soundness():
 
 #-------------------------------------------------------------------------------
 
-def test_propose_candidates_coverage_correctness():
-    """covered_test_indices matches the manual CIG coverage check."""
-    for metric in ('angular', 'euclidean'):
-        base, obs, test = _make_dataset(n_base=30, n_obs=3, n_test=8)
-        r_Q, tv, ti, hg = _gt_for_queries(obs, base, K=3)
-        test_r_Q, _, _, _ = _gt_for_queries(test, base, K=3)
-        test_r_t = test_r_Q
-
-        alpha = 1.3
-        candidates = propose_candidates(
-            obs, r_Q, tv, ti, hg,
-            obs, r_Q,
-            test, test_r_t,
-            base, alpha_values=[alpha], metric=metric,
-        )
-
-        dist_fn = angular_distance if metric == 'angular' else euclidean_distance
-
-        for cand in candidates:
-            r_c = cand.r_c
-            expected = np.zeros(len(test), dtype=bool)
-            for j, tq in enumerate(test):
-                d = dist_fn(tq, cand.query)
-                if d + test_r_t[j] <= r_c:
-                    expected[j] = True
-            assert np.array_equal(cand.covered_test_indices, expected), \
-                f"Coverage mismatch for metric={metric}: got {cand.covered_test_indices}, expected {expected}"
+#-------------------------------------------------------------------------------
 
 #-------------------------------------------------------------------------------
 
-def test_propose_candidates_alpha_scaling():
-    """Larger alpha produces equal or more R_c entries for the same query."""
-    # Use test queries as train (no source exclusion) to ensure both alphas produce candidates.
-    base, obs, test = _make_dataset(n_base=50)
-    r_Q, tv, ti, hg = _gt_for_queries(obs, base, K=3)
-    test_r_t = np.zeros(len(test), dtype=np.float32)
-
-    candidates = propose_candidates(
-        obs, r_Q, tv, ti, hg,
-        test, test_r_t,
-        test, test_r_t,
-        base, alpha_values=[1.0, 2.0], metric='angular',
-    )
-
-    # group by query
-    by_query: dict = {}
-    for c in candidates:
-        key = tuple(c.query.tolist())
-        by_query.setdefault(key, {})[c.alpha] = c
-
-    found = False
-    for key, by_alpha in by_query.items():
-        if 1.0 in by_alpha and 2.0 in by_alpha:
-            assert int(by_alpha[2.0].R_c.sum()) >= int(by_alpha[1.0].R_c.sum()), \
-                "Larger alpha must produce >= |R_c|"
-            found = True
-
-    assert found, "Need at least one query with both alphas to test scaling"
-
 #-------------------------------------------------------------------------------
 
-def test_propose_source_query_excluded():
-    """Source query index must not appear in any candidate's covered_train_indices."""
-    base, obs, _ = _make_dataset(n_base=30, n_obs=5, n_test=10, seed=0)
-    r_Q, tv, ti, hg = _gt_for_queries(obs, base, K=3)
-    # With obs as both train and test, source i is discarded from train coverage.
-    candidates = propose_candidates(
-        obs, r_Q, tv, ti, hg,
-        obs, r_Q,
-        obs, r_Q,
-        base, alpha_values=[5.0], metric='angular',
-    )
-    assert len(candidates) > 0, "Expected at least one candidate; increase alpha or check test data"
-    for c in candidates:
-        src_idx = next(idx for idx, q in enumerate(obs) if np.allclose(q, c.query))
-        assert not c.covered_train_indices[src_idx], \
-            f"Source index {src_idx} found in covered_train_indices for candidate {src_idx}"
-
 #-------------------------------------------------------------------------------
-
-def test_propose_empty_covered_pruned():
-    """Candidates whose train covered set is empty after source exclusion are pruned."""
-    base, obs, _ = _make_dataset(n_base=30, n_obs=3, n_test=10)
-    r_Q, tv, ti, hg = _gt_for_queries(obs[:1], base, K=3)
-    # 1 train query = the source itself; after discard(0), train_covered is empty, so pruned
-    candidates = propose_candidates(
-        obs[:1], r_Q[:1], tv[:1], ti[:1], hg[:1],
-        obs[:1], r_Q[:1],
-        obs[:1], r_Q[:1],
-        base, alpha_values=[1.2], metric='angular',
-    )
-    assert candidates == [], f"Expected empty list; got {len(candidates)} candidates"
-
-#-------------------------------------------------------------------------------
-
-def test_propose_candidates_deterministic():
-    """Same inputs always produce the same output."""
-    base, obs, test = _make_dataset()
-    r_Q, tv, ti, hg = _gt_for_queries(obs, base, K=3)
-    test_r_t = np.zeros(len(test), dtype=np.float32)
-
-    kwargs = dict(alpha_values=[1.0, 1.2], metric='angular')
-    c1 = propose_candidates(obs, r_Q, tv, ti, hg, obs, r_Q, test, test_r_t, base, **kwargs)
-    c2 = propose_candidates(obs, r_Q, tv, ti, hg, obs, r_Q, test, test_r_t, base, **kwargs)
-
-    assert len(c1) == len(c2), "Different lengths on repeat call"
-    for a, b in zip(c1, c2):
-        assert np.array_equal(a.R_c, b.R_c), "R_c differs on repeat call"
-        assert np.array_equal(a.covered_train_indices, b.covered_train_indices)
-        assert np.array_equal(a.covered_test_indices, b.covered_test_indices)

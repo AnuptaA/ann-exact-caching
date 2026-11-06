@@ -29,7 +29,6 @@ RUN_LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 .PHONY: population-proposal-exact
 .PHONY: debug-ball-geometry debug-sigma-sensitivity debug-distance-concentration debug-population
 .PHONY: analyze-hit-policy
-.PHONY: collect-intersection-fraction collect-overlap-threshold
 .PHONY: dataset-characterize full-pipeline
 .PHONY: test test-utils test-synthetic test-sift test-esci
 .PHONY: test-hit-policy test-population test-containment test-proposal
@@ -51,7 +50,6 @@ help:
 	@echo "              {esci,sift}-population-ball[-exact]"
 	@echo "              debug-population       (ball-geometry + sigma-sensitivity + distance-concentration diagnostics)"
 	@echo "              debug-ball-geometry | debug-sigma-sensitivity | debug-distance-concentration"
-	@echo "              collect-intersection-fraction | collect-overlap-threshold"
 	@echo "Characterize: dataset-characterize  (query-clustering ratio benchmark)"
 	@echo "              full-pipeline         (dataset-characterize then population)"
 	@echo "Tests:        test  (full suite)  |  test-utils | test-synthetic | test-sift | test-esci"
@@ -174,12 +172,6 @@ debug-population: debug-ball-geometry debug-sigma-sensitivity debug-distance-con
 
 analyze-hit-policy: synthetic-analyze sift-hit-policy-analyze esci-hit-policy-analyze
 	$(PYTHON) simulations/pdf/collect_results.py
-
-collect-intersection-fraction:
-	$(PYTHON) simulations/pdf/collect_intersection_fraction.py
-
-collect-overlap-threshold:
-	$(PYTHON) simulations/pdf/collect_overlap_threshold.py
 
 # ── Characterization ──────────────────────────────────────────────────────────
 

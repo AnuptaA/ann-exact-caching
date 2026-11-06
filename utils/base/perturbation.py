@@ -135,57 +135,5 @@ def cosine_distance_from_angle(theta: float) -> float:
 
 #-------------------------------------------------------------------------------
 
-def verify_perturbation(
-    v: np.ndarray,
-    v_prime: np.ndarray,
-    expected_angle: float,
-    tolerance: float = 1e-6
-) -> dict:
-    """
-    Verify that perturbation satisfies expected properties.
-    
-    Args:
-        v: Original vector
-        v_prime: Perturbed vector
-        expected_angle: Expected angular distance in radians
-        tolerance: Numerical tolerance
-        
-    Returns:
-        Dictionary with verification results
-    """
-    # normalize
-    v_norm = v / np.linalg.norm(v)
-    v_prime_norm = v_prime / np.linalg.norm(v_prime)
-    
-    # compute actual angle
-    cos_theta = np.clip(np.dot(v_norm, v_prime_norm), -1.0, 1.0)
-    actual_angle = np.arccos(cos_theta)
-    
-    # compute distances
-    euclidean_dist = np.linalg.norm(v_norm - v_prime_norm)
-    expected_euclidean = euclidean_distance_from_angle(expected_angle)
-    
-    cosine_dist = 1 - cos_theta
-    expected_cosine = cosine_distance_from_angle(expected_angle)
-    
-    angle_error = abs(actual_angle - expected_angle)
-    euclidean_error = abs(euclidean_dist - expected_euclidean)
-    cosine_error = abs(cosine_dist - expected_cosine)
-    
-    return {
-        "expected_angle_deg": np.degrees(expected_angle),
-        "actual_angle_deg": np.degrees(actual_angle),
-        "angle_error_deg": np.degrees(angle_error),
-        "expected_euclidean": expected_euclidean,
-        "actual_euclidean": euclidean_dist,
-        "euclidean_error": euclidean_error,
-        "expected_cosine": expected_cosine,
-        "actual_cosine": cosine_dist,
-        "cosine_error": cosine_error,
-        "angle_ok": angle_error < tolerance,
-        "euclidean_ok": euclidean_error < tolerance,
-        "cosine_ok": cosine_error < tolerance,
-    }
-
 #-------------------------------------------------------------------------------
 

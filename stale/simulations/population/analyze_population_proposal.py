@@ -58,14 +58,6 @@ def _pct_fmt(ax, axis: str = 'y') -> None:
         ax.xaxis.set_major_formatter(fmt)
 
 
-def _pct_fmt_fine(ax, axis: str = 'y') -> None:
-    fmt = mticker.FuncFormatter(lambda v, _: f'{v:.2%}')
-    if axis == 'y':
-        ax.yaxis.set_major_formatter(fmt)
-    else:
-        ax.xaxis.set_major_formatter(fmt)
-
-
 def _cache_size_from_name(name: str) -> int:
     m = re.search(r'_c(\d+)k', name)
     return int(m.group(1)) if m else 0
@@ -73,13 +65,6 @@ def _cache_size_from_name(name: str) -> int:
 
 def _budget_int(b: str) -> int:
     return int(b[1:])
-
-
-def _dedup_legend(ax, **kwargs) -> None:
-    handles, labels = ax.get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    if by_label:
-        ax.legend(by_label.values(), by_label.keys(), **kwargs)
 
 
 def _shared_legend(fig, axes_2d, n_rows, n_cols, **kwargs) -> None:
