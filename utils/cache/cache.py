@@ -34,6 +34,9 @@ class Cache:
 
     def add(self, c, K):
         """Add (or resize) an entry; vectors already cached are not refetched."""
+        width = self.D["top"].shape[1]
+        if not 1 <= K <= width:
+            raise ValueError(f"entry size K={K} must be between 1 and the stored top-{width}")
         ids = self.members(c, K)
         self.vectors_fetched += int((self.ref[ids] == 0).sum())
         self.ref[ids] += 1
@@ -56,6 +59,11 @@ class Cache:
                 self.add(c, K)
         for c in [c for c in self.entries if c not in entries]:
             self.remove(c)
+
+    @property
+    def can_serve(self):
+        """A k-result answer needs at least k cached vectors."""
+        return bool(self.entries) and self.n_cached() >= self.k
 
     @property
     def cached(self):
@@ -110,11 +118,13 @@ class Cache:
 
     def features(self, qidx):
         """7 features, neighborhood radius and the k nearest cached ids."""
-        self.prepare()
-        Q, k = self.D["q"], self.k
         n = len(qidx)
         X = np.full((n, 2 * N_BALLS + 1), POOR_FIT, dtype=np.float64)
-        near = np.empty((n, k), dtype=np.int64)
+        near = np.full((n, self.k), -1, dtype=np.int64)
+        if not self.can_serve:
+            return X, near          # nothing to answer from: worst-case features, no neighbors
+        self.prepare()
+        Q, k = self.D["q"], self.k
         for s in range(0, n, CHUNK):
             q = Q[qidx[s:s + CHUNK]]
             m = len(q)

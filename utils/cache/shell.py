@@ -20,6 +20,8 @@ COUNT_SCALES = (1.0, 1.1, 1.25)
 
 def quantize(x, bits):
     """b-bit uniform scalar quantization per dimension (reconstructed)."""
+    if bits < 1:
+        raise ValueError(f"bits must be at least 1, got {bits}")
     if bits >= 32:
         return x
     lo, hi = x.min(axis=0), x.max(axis=0)
@@ -32,7 +34,11 @@ def load_cand_ext(run, run_dir, R):
     cached top-500), computed once and saved to <run>/cand_top<R>.npy."""
     path = Path(run_dir) / f"cand_top{R}.npy"
     if path.exists():
-        return np.load(path)
+        ids = np.load(path)
+        if ids.shape == (len(run.cand_q), R):
+            return ids
+        logger.warning(f"{path} has shape {ids.shape}, expected "
+                       f"{(len(run.cand_q), R)}; recomputing")
     logger.info(f"exact top-{R} for {len(run.cand_q)} candidate queries...")
     ids = exact_topk(run.cand_q, run.db, R)
     tmp = path.with_suffix(".tmp.npy")
@@ -47,6 +53,10 @@ def shell_ids(run, cand, K, R):
     n_kv = len(run.k_values)
     top = run.cached_ids[cand * n_kv + n_kv - 1]
     if R > len(top):
+        if run.cand_ext is None or run.cand_ext.shape[1] < R:
+            have = None if run.cand_ext is None else run.cand_ext.shape[1]
+            raise ValueError(f"shell depth R={R} exceeds the cached top-{len(top)}; "
+                             f"load_cand_ext(run, run_dir, {R}) first (cand_ext width {have})")
         return np.asarray(run.cand_ext[cand][K:R])
     return np.asarray(top[K:R])
 

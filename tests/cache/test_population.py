@@ -7,8 +7,11 @@ import pytest
 
 from utils.cache.population import (
     GreedyPopulator,
+    greedy_entries,
     hits_from_histograms,
+    hits_of_entries,
     online_hits,
+    oracle_hits,
 )
 
 #-------------------------------------------------------------------------------
@@ -189,3 +192,63 @@ def test_clone_for_target_matches_fresh_instance():
     assert template.cache_size == 0
     assert not template.cached.any()
     assert np.array_equal(template.new_vectors, np.array([len(c) for c in cands]))
+
+
+def test_populator_rejects_bad_inputs():
+    topk = np.array([[0, 1], [2, 3]])
+    with pytest.raises(ValueError, match="no candidate"):
+        GreedyPopulator([], topk, 10, 2, 0.9)
+    with pytest.raises(ValueError, match="target"):
+        GreedyPopulator([np.array([0, 1])], topk, 10, 2, 1.5)
+    with pytest.raises(ValueError, match="outside"):
+        GreedyPopulator([np.array([0, 1])], np.array([[0, 99]]), 10, 2, 0.9)
+    with pytest.raises(ValueError, match="outside"):
+        GreedyPopulator([np.array([0, 1])], topk, 10, 2, 0.9, eval_topk=np.array([[-1, 0]]))
+
+
+def test_budget_smaller_than_any_entry_selects_nothing():
+    pop = GreedyPopulator([np.array([0, 1, 2]), np.array([3, 4, 5])], np.array([[0, 1], [3, 4]]),
+                          10, 2, 0.5)
+    assert pop.step(2) is None and pop.selected == [] and pop.cache_size == 0
+
+
+def test_no_scoring_queries_means_greedy_stops_immediately():
+    pop = GreedyPopulator([np.array([0, 1])], np.empty((0, 2), dtype=int), 5, 2, 0.5)
+    assert pop.step(10) is None
+
+
+def test_target_extremes_on_a_full_cache():
+    topk = np.array([[0, 1], [2, 3]])
+    pop = GreedyPopulator([np.array([0, 1]), np.array([2, 3])], topk, 4, 2, 1.0)
+    while pop.step(4) is not None:
+        pass
+    assert pop.score_hits == 2                       # perfect retention satisfies T = 1
+    pop0 = GreedyPopulator([np.array([0, 1]), np.array([2, 3])], topk, 4, 2, 0.0)
+    assert pop0.score_hits == 2                      # T = 0: every query is a hit even uncached
+
+
+def test_greedy_entries_empty_candidates_and_small_kmax():
+    D = {"db": np.zeros((20, 2)), "top": np.tile(np.arange(20), (4, 1))}
+    assert greedy_entries(D, [], np.array([0]), np.ones(1), 10, 2, 0.5) == ({}, 0)
+    assert greedy_entries(D, [(0, 5)], np.array([0]), np.ones(1), 10, 2, 0.5) == ({}, 0)
+
+
+def test_oracle_hits_and_hits_of_entries_agree_with_brute_force():
+    class FakeCache:
+        pass
+    rng = np.random.default_rng(0)
+    n_db, k = 50, 4
+    top = np.array([rng.permutation(n_db)[:20] for _ in range(12)])
+    entries = {0: 10, 1: 20}
+    cached = np.zeros(n_db, dtype=bool)
+    for c, K in entries.items():
+        cached[top[c, :K]] = True
+    cache = FakeCache()
+    cache.cached, cache.D = cached, {"top": top, "db": np.zeros((n_db, 1))}
+    score, w = np.arange(2, 12), np.ones(10)
+    counts = cached[top[score, :k]].sum(axis=1)
+    want = _brute_hits(counts, 0.5, k)
+    assert oracle_hits(cache, score, w, k, 0.5) == want
+    assert hits_of_entries(cache.D, entries, score, w, k, 0.5) == want
+    assert oracle_hits(cache, np.array([], dtype=int), np.array([]), k, 0.5) == 0
+

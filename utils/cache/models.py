@@ -15,6 +15,8 @@ def gbt_regressor(seed):
 
 
 def fit_ridge(F, y, w, alpha=1.0):
+    if np.sum(w) <= 0:
+        raise ValueError("weights must have a positive sum")
     mu = np.average(F, axis=0, weights=w)
     sd = np.sqrt(np.average((F - mu) ** 2, axis=0, weights=w)) + 1e-9
 
@@ -60,6 +62,8 @@ def fit_logistic(X, y, w=None, max_iter=3000):
     """
     from sklearn.linear_model import LogisticRegression
     w = np.ones(len(y)) if w is None else w
+    if len(y) == 0 or np.sum(w) <= 0:
+        raise ValueError("need at least one row with positive weight")
     mu, sd = X.mean(axis=0), X.std(axis=0) + 1e-9
     n = len(y)
     lr = LogisticRegression(C=1.0, max_iter=max_iter)

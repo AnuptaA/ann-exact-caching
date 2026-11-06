@@ -160,6 +160,8 @@ class Sim:
                if not cal and ((not srv) or aud)]
         if not lab:
             return None
+        if a.audit_rate * (1 - a.cal_share) <= 0:
+            raise ValueError("rebuilding needs build-role audits: audit_rate > 0 and cal_share < 1")
         w_srv = int(round((1 - a.audit_rate * a.cal_share)
                           / (a.audit_rate * (1 - a.cal_share))))
         qs = np.array([q for q, _ in lab], dtype=np.int64)
@@ -215,8 +217,23 @@ class Sim:
 
     # -- main loop ---------------------------------------------------------
 
+    def validate(self):
+        a = self.a
+        if len(self.stream) <= a.warmup:
+            raise ValueError(f"stream of {len(self.stream)} queries is not longer than the "
+                             f"warm-up ({a.warmup})")
+        if a.warmup < 5:
+            raise ValueError("warm-up needs at least 5 queries (five-way split)")
+        if not 1 <= self.k <= a.R:
+            raise ValueError(f"k={self.k} must be between 1 and R={a.R}")
+        if not 1 <= a.k_lru <= a.R:
+            raise ValueError(f"k_lru={a.k_lru} must be between 1 and R={a.R}")
+        if not 0.0 <= a.audit_rate <= 1.0 or not 0.0 <= a.cal_share < 1.0:
+            raise ValueError("audit_rate must be in [0, 1] and cal_share in [0, 1)")
+
     def run(self, method):
         a, rng, cache = self.a, self.rng, self.cache
+        self.validate()
         self.warmup()
         last_rebuild = last_check = a.warmup
         p_lru = cache.p
@@ -226,6 +243,7 @@ class Sim:
             X, near = cache.features(qb)
             score = self.model(X)
             serve = score >= self.lam if self.lam is not None else np.zeros(len(qb), bool)
+            serve &= cache.can_serve
             y = cache.retention(qb)
             audit = rng.random(len(qb)) < a.audit_rate
             cal = audit & (rng.random(len(qb)) < a.cal_share)

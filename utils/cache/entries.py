@@ -22,10 +22,14 @@ def entry_kmax(entries, k_values):
 
 def perturbed(entries, frac, n_cand, n_kv, rng):
     """Replace a fraction of entries by random unselected candidates, same K."""
+    if not 0.0 <= frac <= 1.0:
+        raise ValueError(f"frac must be in [0, 1], got {frac}")
     entries = list(entries)
     taken = set(entries)  # never re-pick an original or an earlier replacement
     for pos in rng.choice(len(entries), int(round(frac * len(entries))), replace=False):
         t = entries[pos] % n_kv
+        if sum(1 for j in taken if j % n_kv == t) >= n_cand:
+            raise ValueError(f"no unselected candidate left for k index {t}")
         while True:
             j = int(rng.integers(n_cand)) * n_kv + t
             if j not in taken:
@@ -44,7 +48,15 @@ def build_entry_tables(cand_q, db, k_values, m_max, cached_top=None):
     computed (left empty), which is all the calibrated / predictor
     evaluations need.
     """
-    k_max = max(k_values)
+    k_values = list(k_values)
+    if not k_values or k_values[0] < 1 or any(a >= b for a, b in zip(k_values, k_values[1:])):
+        raise ValueError(f"k_values must be positive and strictly increasing, got {k_values}")
+    k_max = k_values[-1]
+    if cached_top is not None and cached_top.shape[1] < k_max:
+        raise ValueError(f"saved neighbors have {cached_top.shape[1]} columns, "
+                         f"but max(k_values) = {k_max}")
+    if cached_top is not None and len(cached_top) != len(cand_q):
+        raise ValueError(f"{len(cached_top)} saved neighbor rows for {len(cand_q)} candidates")
     if cached_top is None:
         cached_top = exact_topk(cand_q, db, k_max)
     big = exact_topk(cand_q, db, k_max + m_max) if m_max > 1 else None

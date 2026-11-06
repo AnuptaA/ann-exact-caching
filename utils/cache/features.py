@@ -9,6 +9,7 @@ from utils.cache.entries import entry_kmax
 
 N_BALLS = 3
 POOR_FIT = 10.0
+EPS = 1e-12
 
 #-------------------------------------------------------------------------------
 
@@ -31,6 +32,7 @@ def fit_balls(nr, de, radius, n, fill):
     fit (nr + de) / r; columns of missing balls (fewer than n) hold `fill`.
     Shared by the offline evaluation and the online simulator.
     """
+    radius = np.maximum(radius, EPS)  # duplicate-vector balls can have radius 0
     F = np.full((len(nr), 2 * n), fill, dtype=np.float64)
     m = min(n, de.shape[1])
     fit = (nr[:, None] + de) / radius[None, :]
@@ -57,5 +59,7 @@ def ball_features(q, nr, bl, n):
 
 def neighborhood_radius(q, st, k, eps=1e-12):
     """Distance from each query to its k-th nearest cached vector (floored at eps)."""
+    if len(st["db_c"]) < k:
+        raise ValueError(f"only {len(st['db_c'])} cached vectors, fewer than k={k}")
     return np.maximum(knn_dists(q, st["db_c"], st["db_c_sq"], k)[:, k - 1], eps)
 

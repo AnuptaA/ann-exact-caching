@@ -62,10 +62,14 @@ def threshold_grid(fit_scores: np.ndarray, n_points: int = 100) -> np.ndarray:
     Built from data independent of the calibration set, so the grid (and the
     fixed testing order) is set before calibration labels are seen.
     """
+    if len(fit_scores) == 0 or not np.isfinite(fit_scores).all():
+        raise ValueError("fit scores must be non-empty and finite")
     return np.unique(np.quantile(fit_scores, np.linspace(0.0, 0.99, n_points)))[::-1]
 
 
 def hoeffding_upper(y, level):
+    if len(y) == 0 or not 0.0 < level < 1.0:
+        raise ValueError("need a non-empty sample and a level in (0, 1)")
     return float(np.mean(y) + np.sqrt(np.log(1 / level) / (2 * len(y))))
 
 
@@ -81,6 +85,14 @@ def select(method: str, s_cal: np.ndarray, y_cal: np.ndarray,
 
     s_cal, y_cal are request-level (repeat a query once per occurrence).
     """
+    if method not in METHODS:
+        raise ValueError(f"unknown method {method!r}; choose from {METHODS}")
+    if not 0.0 < delta < 1.0:
+        raise ValueError(f"delta must be in (0, 1), got {delta}")
+    if len(s_cal) != len(y_cal):
+        raise ValueError(f"{len(s_cal)} scores but {len(y_cal)} retention values")
+    if np.isnan(s_cal).any() or np.isnan(y_cal).any():
+        raise ValueError("NaN in calibration scores or retention")
     if method == "normal_split":
         rng = rng if rng is not None else np.random.default_rng(0)
         half = rng.permutation(len(s_cal))

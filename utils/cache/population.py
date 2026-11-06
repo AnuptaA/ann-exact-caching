@@ -166,6 +166,13 @@ class GreedyPopulator:
         score_weights: Optional[np.ndarray] = None,
         eval_weights: Optional[np.ndarray] = None,
     ):
+        if len(cand_vectors) == 0:
+            raise ValueError("no candidate entries")
+        if not 0.0 <= target <= 1.0:
+            raise ValueError(f"target must be in [0, 1], got {target}")
+        for name, arr in (("score_topk", score_topk), ("eval_topk", eval_topk)):
+            if arr is not None and len(arr) and (arr.max() >= n_db or arr.min() < 0):
+                raise ValueError(f"{name} holds ids outside [0, {n_db})")
         self.k = k
         self.target = target
         self.n_db = n_db
@@ -209,7 +216,8 @@ class GreedyPopulator:
         self.score = _QueryTracker(score_topk, n_db, k, score_weights)
         self.eval = (_QueryTracker(eval_topk, n_db, k, eval_weights)
                      if eval_topk is not None else None)
-        self.score_hits = 0
+        # at T = 0 uncached queries already count as hits; for T > 0 this is 0
+        self.score_hits = int(hits_from_histograms(self.score.histogram(), target, k)[0])
         self.last_predicted_hits = None
 
     def clone_for_target(self, target: float) -> "GreedyPopulator":
@@ -305,6 +313,8 @@ def greedy_entries(D, cand, score, score_w, budget, k, target):
     """
     top = D["top"]
     pairs = [(c, K) for c, kmax in cand for K in K_VALUES if K <= kmax]
+    if not pairs:
+        return {}, 0
     pop = GreedyPopulator([top[c, :K] for c, K in pairs], top[score, :k], len(D["db"]), k,
                           target, score_weights=np.asarray(score_w, dtype=np.int64))
     while pop.step(int(budget)) is not None:

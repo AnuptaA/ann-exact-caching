@@ -39,6 +39,14 @@ WORKLOADS = {
 #-------------------------------------------------------------------------------
 
 
+def _take(perm, start, n, pool_size, what):
+    """perm[start:start + n], refusing to silently return a short slice."""
+    if start + n > pool_size:
+        raise ValueError(f"{what}: need queries [{start}, {start + n}) but the pool has "
+                         f"only {pool_size}")
+    return perm[start:start + n]
+
+
 def load_inputs(args):
     """Database, candidate-generating, scoring, and test query vectors.
 
@@ -50,7 +58,10 @@ def load_inputs(args):
         logger.info("Loading SIFT1M...")
         base = load_fvecs_fast(str(SIFT1M_DIR / "sift_base.fvecs"))
         learn = load_fvecs_fast(str(SIFT1M_DIR / "sift_learn.fvecs"))
-        test = load_fvecs_fast(str(SIFT1M_DIR / "sift_query.fvecs"))[:args.n_test]
+        test = load_fvecs_fast(str(SIFT1M_DIR / "sift_query.fvecs"))
+        if args.n_test > len(test):
+            raise ValueError(f"n_test={args.n_test} exceeds the {len(test)} SIFT queries")
+        test = test[:args.n_test]
         db = base[rng.choice(len(base), size=args.n_db, replace=False)]
         train_idx = rng.choice(len(learn), size=args.n_cand_queries + args.n_score_queries,
                                replace=False)
@@ -65,9 +76,9 @@ def load_inputs(args):
         pool = np.load(esci_dir / "esci_queries.npy")
         perm = rng.permutation(len(pool))
         n_c, n_s = args.n_cand_queries, args.n_score_queries
-        test = pool[perm[:args.n_test]]
-        cand_q = pool[perm[args.n_test:args.n_test + n_c]]
-        score_q = pool[perm[args.n_test + n_c:args.n_test + n_c + n_s]]
+        test = pool[_take(perm, 0, args.n_test, len(pool), "test")]
+        cand_q = pool[_take(perm, args.n_test, n_c, len(pool), "candidates")]
+        score_q = pool[_take(perm, args.n_test + n_c, n_s, len(pool), "scoring")]
     return db, cand_q, score_q, test
 
 
@@ -76,6 +87,8 @@ class SimZipfWorkload:
 
     def __init__(self, base_queries, group_size, zipf_s, method,
                  lambda_max, noise_rel, seed):
+        if len(base_queries) < 2 or group_size < 1:
+            raise ValueError("need at least 2 base queries and a group size of at least 1")
         self.q = base_queries.astype(np.float64)
         self.n_groups = len(base_queries)
         self.group_size = group_size
@@ -186,6 +199,9 @@ def split_boundaries(name: str, parts) -> dict:
         n = sum(len(p) for p in parts)
         sizes = {s: int(TRACE_FRACTIONS[s] * n) for s in TRACE_SPLITS}
         sizes["test"] = n - sum(v for s, v in sizes.items() if s != "test")
+    short = [s for s, v in sizes.items() if v < 1]
+    if short:
+        raise ValueError(f"trace {name!r} is too short for splits {short}: sizes {sizes}")
     bounds, start = {}, 0
     for s in TRACE_SPLITS:
         bounds[s] = (start, start + sizes[s])
@@ -241,6 +257,23 @@ class RunData:
     radius: np.ndarray             # per entry index: ball radius
     cand_ext: Optional[np.ndarray] = None   # exact top-R ids per candidate (deeper shells)
 
+    def __post_init__(self):
+        kv = list(self.k_values)
+        if not kv or kv[0] < 1 or any(a >= b for a, b in zip(kv, kv[1:])):
+            raise ValueError(f"k_values must be positive and strictly increasing, got {kv}")
+        if self.k < 1:
+            raise ValueError(f"k must be at least 1, got {self.k}")
+        n_ent = None if self.cand_q is None else len(self.cand_q) * len(kv)
+        for name, arr in (("cached_ids", self.cached_ids), ("radius", self.radius)):
+            if n_ent is not None and arr is not None and len(arr) != n_ent:
+                raise ValueError(f"{name} has {len(arr)} entries, expected {n_ent}")
+        for name, (q, wts) in self.sets.items():
+            if len(q) != len(wts):
+                raise ValueError(f"split {name}: {len(q)} queries but {len(wts)} weights")
+            if name in self.topk and (len(self.topk[name]) != len(q)
+                                      or self.topk[name].shape[1] < self.k):
+                raise ValueError(f"split {name}: top-k table does not match the queries or k")
+
     @cached_property
     def draw(self):
         """Fixed uniform draw per database vector (shell-sample membership)."""
@@ -294,7 +327,7 @@ def load_splits(run_dir: Path, n_each: int):
     start = cfg.n_test + cfg.n_cand_queries + cfg.n_score_queries
     sets = {}
     for i, name in enumerate(("fit", "dev", "cal")):
-        q = pool[perm[start + i * n_each:start + (i + 1) * n_each]]
+        q = pool[_take(perm, start + i * n_each, n_each, len(pool), f"{name} queries")]
         sets[name] = (q, np.ones(len(q), dtype=np.int64))
     sets["test"] = (test_q, np.ones(len(test_q), dtype=np.int64))
     return data, cfg, db, cand_q, sets
@@ -322,8 +355,8 @@ def load_fit_cal_splits(run_dir: Path, n_fit: int, n_calib: int):
         pool = np.load(Path(cfg.esci_dir) / "esci_queries.npy")
         perm = np.random.default_rng(cfg.seed).permutation(len(pool))
         start = cfg.n_test + cfg.n_cand_queries + cfg.n_score_queries
-        fit_q = pool[perm[start:start + n_fit]]
-        cal_q = pool[perm[start + n_fit:start + n_fit + n_calib]]
+        fit_q = pool[_take(perm, start, n_fit, len(pool), "fit queries")]
+        cal_q = pool[_take(perm, start + n_fit, n_calib, len(pool), "calibration queries")]
         sets = {
             "fit": (fit_q, np.ones(len(fit_q), dtype=np.int64)),
             "cal": (cal_q, np.ones(len(cal_q), dtype=np.int64)),

@@ -2,6 +2,7 @@
 """Tests for the online cache state (utils.cache.cache)."""
 
 import numpy as np
+import pytest
 
 from utils.base.knn import knn_dists
 from utils.cache.cache import Cache
@@ -86,3 +87,41 @@ def test_ball_features_agree_with_offline_extractor():
     nr = knn_dists(q, c.cv.astype(np.float64), (c.cv.astype(np.float64) ** 2).sum(1), 5)[:, 4]
     B = np.nan_to_num(ball_features(q, nr + 1e-12, bl, N_BALLS), nan=POOR_FIT)
     assert np.allclose(X[:, :2 * N_BALLS], B, atol=1e-4)
+
+
+def test_entry_size_must_fit_the_stored_neighbors():
+    D = _data(R=60)
+    c = Cache(D, k=5, R=60, bits=4, budget=1e9)
+    for bad in (0, 61):
+        with pytest.raises(ValueError, match="between 1 and"):
+            c.add(0, bad)
+
+
+def test_cache_with_fewer_than_k_vectors_cannot_serve_and_features_do_not_crash():
+    D = _data()
+    c = Cache(D, k=5, R=60, bits=4, budget=1e9)
+    X, near = c.features(np.arange(6))                       # no entries at all
+    assert not c.can_serve and X.shape == (6, 7) and (near == -1).all()
+    assert np.allclose(X, 10.0)
+    c.add(0, 3)                                              # 3 cached vectors < k = 5
+    assert not c.can_serve
+    X, near = c.features(np.arange(6))
+    assert np.allclose(X, 10.0) and (near == -1).all()
+    c.add(1, 10)
+    assert c.can_serve
+    X, near = c.features(np.arange(6))
+    assert (near >= 0).all() and not np.allclose(X, 10.0)
+
+
+def test_remove_and_resize_keep_reference_counts_consistent():
+    D = _data()
+    c = Cache(D, k=5, R=60, bits=4, budget=1e9)
+    c.add(0, 20)
+    c.add(1, 20)
+    c.add(0, 10)                                              # shrink an entry
+    assert (c.ref >= 0).all()
+    c.remove(1)
+    assert c.n_cached() == 10 and set(np.flatnonzero(c.ref > 0)) == set(D["top"][0, :10])
+    c.remove(0)
+    assert c.n_cached() == 0 and (c.ref == 0).all()
+

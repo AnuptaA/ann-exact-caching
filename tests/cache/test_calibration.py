@@ -6,8 +6,7 @@ import numpy as np
 import pytest
 
 from utils.cache.calibration import (
-    hoeffding_upper,
-    METHODS, grid_stats, select,
+    METHODS, grid_stats, hoeffding_upper, lcb_eb, lcb_normal, select, threshold_grid,
 )
 
 
@@ -62,4 +61,55 @@ def test_guaranteed_methods_rarely_miss_target(target):
 def test_hoeffding_upper_matches_formula():
     up = hoeffding_upper(np.full(100, 0.8), 0.05)
     assert np.isclose(up, 0.8 + np.sqrt(np.log(20) / 200))
+
+
+def test_select_rejects_bad_inputs():
+    s, y = np.linspace(0, 1, 50), np.ones(50)
+    grid = threshold_grid(s)
+    with pytest.raises(ValueError, match="unknown method"):
+        select("typo_fixed", s, y, grid, 0.9, 0.05)
+    for bad in (0.0, 1.0, -0.1):
+        with pytest.raises(ValueError, match="delta"):
+            select("normal_fixed", s, y, grid, 0.9, bad)
+    with pytest.raises(ValueError, match="scores but"):
+        select("normal_fixed", s, y[:-1], grid, 0.9, 0.05)
+    with pytest.raises(ValueError, match="NaN"):
+        select("normal_fixed", np.r_[s[:-1], np.nan], y, grid, 0.9, 0.05)
+
+
+def test_select_on_empty_calibration_set_admits_nothing():
+    assert select("normal_fixed", np.array([]), np.array([]), np.array([0.5]), 0.9, 0.05) is None
+    assert select("naive", np.array([]), np.array([]), np.array([0.5]), 0.9, 0.05) is None
+
+
+def test_select_with_all_equal_scores_and_perfect_retention():
+    s, y = np.zeros(100), np.ones(100)
+    grid = threshold_grid(s)
+    assert grid.tolist() == [0.0]
+    assert select("normal_fixed", s, y, grid, 0.9, 0.05) == 0.0
+
+
+def test_threshold_grid_validates_and_is_strict_to_lenient():
+    with pytest.raises(ValueError):
+        threshold_grid(np.array([]))
+    with pytest.raises(ValueError):
+        threshold_grid(np.array([0.1, np.nan]))
+    g = threshold_grid(np.random.default_rng(0).random(500))
+    assert (np.diff(g) < 0).all() and len(g) == 100
+
+
+def test_lcb_bounds_below_mean_and_tolerate_tiny_samples():
+    assert lcb_normal(100, 0.9, 0.1, 0.05) < 0.9
+    assert lcb_eb(100, 0.9, 0.1, 0.05) < 0.9
+    with np.errstate(all="ignore"):
+        assert not lcb_eb(1, 1.0, 0.0, 0.05) >= 0.9          # n = 1: bound is -inf, never passes
+        assert np.isnan(lcb_normal(0, np.nan, np.nan, 0.05)) or lcb_normal(0, 1.0, 0.0, 0.05) != 1.0
+
+
+def test_hoeffding_validates_arguments():
+    with pytest.raises(ValueError):
+        hoeffding_upper([], 0.05)
+    for bad in (0.0, 1.0):
+        with pytest.raises(ValueError):
+            hoeffding_upper([0.5], bad)
 

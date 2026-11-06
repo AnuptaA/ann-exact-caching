@@ -36,11 +36,17 @@ def fetch_rows(db, ids):
     return rows
 
 
+def _check_k(k, n, what="database"):
+    if not 1 <= k <= n:
+        raise ValueError(f"k={k} must be between 1 and the {what} size {n}")
+
+
 def exact_topk(queries: np.ndarray, db: np.ndarray, k: int, chunk: int = 1000) -> np.ndarray:
     """Exact top-k ids (sorted by distance) under squared Euclidean distance.
 
     Large databases (> 2M vectors) use exact_topk_blocked to bound memory.
     """
+    _check_k(k, len(db))
     if len(db) > 2_000_000:
         return exact_topk_blocked(queries, db, k)
     db64 = db.astype(np.float64)
@@ -67,6 +73,7 @@ def exact_topk_blocked(queries: np.ndarray, db: np.ndarray, k: int,
     the screen, so the result is exact. Ties are broken by lower id. Output
     rows are sorted by (distance, id).
     """
+    _check_k(k, len(db))
     n, dim = db.shape
     xa = np.empty((n, dim + 1), dtype=np.float32)
     db_sq = np.empty(n, dtype=np.float64)
@@ -117,6 +124,7 @@ def exact_topk_blocked(queries: np.ndarray, db: np.ndarray, k: int,
 
 def knn_dists(q, db_c, db_c_sq, k, chunk=2048):
     """Sorted distances from each query to its k nearest rows of db_c (float64)."""
+    _check_k(k, len(db_c), "cached set")
     out = np.empty((len(q), k))
     for s in range(0, len(q), chunk):
         d = pairwise_dist(q[s:s + chunk], db_c, db_c_sq)
