@@ -1,4 +1,4 @@
 # Minimal isolated environment for the third-party DPR checkpoint (TriviaQA encoding)
 numpy
-torch
-transformers
+torch>=2.6
+transformers>=4.50

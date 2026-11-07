@@ -17,8 +17,21 @@ logger = logging.getLogger(__name__)
 
 def _triviaqa_encode(args):
     questions = np.load(args.questions, allow_pickle=False).tolist()
-    encode = triviaqa.dpr_query_encoder(Path(args.encoder_dir), device=args.device)
+    encode = triviaqa.dpr_query_encoder(Path(args.encoder_dir), device=args.device,
+                                        tokenizer_dir=Path(args.tokenizer_dir) if args.tokenizer_dir else None)
     np.save(args.out, triviaqa.encode_questions(questions, encode))
+
+
+def _triviaqa_evidence(args):
+    from workloads.q1.datasets import triviaqa_evidence as ev
+    encoders = {"dpr_web (Sphere query encoder, used)": triviaqa.dpr_query_encoder(
+        Path(args.encoder_dir), device="cpu",
+        tokenizer_dir=Path(args.tokenizer_dir) if args.tokenizer_dir else None)}
+    if args.compare:
+        encoders["bge-base-en-v1.5 (Aker's payload encoder, raw CLS)"] = ev.hub_cls_encoder("BAAI/bge-base-en-v1.5")
+        encoders["dpr single-nq (public DPR question encoder)"] = ev.hub_dpr_encoder(
+            "facebook/dpr-question_encoder-single-nq-base")
+    ev.run_evidence(args.sphere_parquet, args.questions_parquet, encoders, args.out, args.n_questions)
 
 
 def _universe(args):
@@ -64,9 +77,20 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("triviaqa-encode", help="encode questions with the DPR query encoder")
     p.add_argument("--questions", required=True)
     p.add_argument("--encoder-dir", required=True)
+    p.add_argument("--tokenizer-dir", default=None, help="folder with vocab.txt (no download)")
     p.add_argument("--out", required=True)
     p.add_argument("--device", default="cpu")
     p.set_defaults(run=_triviaqa_encode)
+
+    p = sub.add_parser("triviaqa-evidence", help="answer-passage lift of the question encoders (log only)")
+    p.add_argument("--sphere-parquet", required=True, help="a Hermes SPHERE_100K parquet (vector, raw)")
+    p.add_argument("--questions-parquet", required=True, help="TriviaQA rc.nocontext split (question, answer)")
+    p.add_argument("--encoder-dir", required=True)
+    p.add_argument("--tokenizer-dir", default=None)
+    p.add_argument("--out", required=True)
+    p.add_argument("--n-questions", type=int, default=300)
+    p.add_argument("--compare", action="store_true", help="also encode with bge and public DPR (needs the network)")
+    p.set_defaults(run=_triviaqa_evidence)
 
     p = sub.add_parser("universe", help="10K groups of 50 members from the official queries")
     p.add_argument("--official", required=True, help=".npy of the official query vectors")

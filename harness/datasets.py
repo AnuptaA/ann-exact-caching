@@ -40,6 +40,7 @@ def _sphere_fetch(raw: Path) -> None:
     sphere.fetch(raw)
     triviaqa.fetch_questions(raw)
     triviaqa.fetch_encoder(raw)
+    triviaqa.fetch_tokenizer(raw)
 
 
 def _sphere_embed(raw: Path, env: dict) -> None:
@@ -52,10 +53,12 @@ def _sphere_embed(raw: Path, env: dict) -> None:
     if out.exists():
         return
     clean = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(REPO), "HOME": str(raw),
-             "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+             "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+             "TORCH_FORCE_WEIGHTS_ONLY_LOAD": "1"}
     subprocess.run([env["encode_python"], "-m", "workloads.q1", "triviaqa-encode",
                     "--questions", str(raw / "triviaqa_questions.npy"),
                     "--encoder-dir", str(raw / "dpr_web_query_encoder_hf"),
+                    "--tokenizer-dir", str(raw / "bert-base-uncased"),
                     "--out", str(out.with_suffix(".part.npy")), "--device", env["device"]],
                    check=True, cwd=REPO, env=clean)
     out.with_suffix(".part.npy").rename(out)

@@ -23,6 +23,8 @@ SPLIT_URLS = {
     "test": f"{HF}/rc.nocontext/test/0000.parquet",
 }
 ENCODER_URL = "https://dl.fbaipublicfiles.com/sphere/dpr_web_query_encoder_hf.tar.gz"
+VOCAB_URL = "https://huggingface.co/google-bert/bert-base-uncased/resolve/main/vocab.txt"
+MIN_TORCH = (2, 6)     # torch.load defaults to weights_only=True from 2.6
 DIM = 768
 EXPECTED_DISTINCT = 95_000
 COUNT_TOLERANCE = 0.1
@@ -68,11 +70,36 @@ def encode_questions(questions: list[str], encode, batch_size: int = 128) -> np.
     return out
 
 
-def dpr_query_encoder(checkpoint_dir: Path, max_length: int = 64, device: str = "cpu"):
-    """Callable list[str] -> (n, 768) ndarray using the DPR question encoder (CLS)."""
+def fetch_tokenizer(dest: Path) -> Path:
+    """The BERT uncased vocabulary, fetched up front so the isolated encoding step needs no network."""
+    from workloads.q1.datasets import common
+    target = Path(dest) / "bert-base-uncased"
+    target.mkdir(parents=True, exist_ok=True)
+    common.download_file(VOCAB_URL, target / "vocab.txt")
+    (target / "tokenizer_config.json").write_text(json.dumps({"do_lower_case": True}))
+    return target
+
+
+def check_safe_torch() -> None:
+    """Refuse to load a third-party pickle with a torch that does not default to weights_only."""
     import torch
-    from transformers import AutoTokenizer, DPRQuestionEncoder
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    major, minor = (int(x) for x in torch.__version__.split("+")[0].split(".")[:2])
+    if (major, minor) < MIN_TORCH:
+        raise RuntimeError(f"torch {torch.__version__} is too old to load checkpoints safely; "
+                           f"need >= {MIN_TORCH[0]}.{MIN_TORCH[1]}")
+
+
+def dpr_query_encoder(checkpoint_dir: Path, max_length: int = 64, device: str = "cpu",
+                      tokenizer_dir: Path | None = None):
+    """Callable list[str] -> (n, 768) ndarray using the DPR question encoder (CLS).
+
+    With tokenizer_dir (a folder from fetch_tokenizer) nothing is downloaded.
+    """
+    import torch
+    from transformers import AutoTokenizer, BertTokenizerFast, DPRQuestionEncoder
+    check_safe_torch()
+    tokenizer = (BertTokenizerFast.from_pretrained(str(tokenizer_dir)) if tokenizer_dir is not None
+                 else AutoTokenizer.from_pretrained("bert-base-uncased"))
     model = DPRQuestionEncoder.from_pretrained(str(checkpoint_dir)).to(device).eval()
 
     def encode(texts):

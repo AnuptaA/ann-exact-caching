@@ -262,3 +262,18 @@ def test_download_verifies_the_final_size(server, tmp_path, monkeypatch):
     with pytest.raises(OSError, match="bytes written"):
         common.download_slice(f"{url}/f", tmp_path / "x.bin", 0, 100, chunk_bytes=100)
     assert not (tmp_path / "x.bin").exists()
+
+
+def test_answer_lift_supports_inner_product_and_nested_formatting():
+    rng = np.random.default_rng(0)
+    passages = [f"passage about topic_{i % 50:02d}_" for i in range(500)]
+    centers = rng.normal(size=(50, 8)).astype(np.float32) * 5
+    pv = centers[np.arange(500) % 50] + rng.normal(size=(500, 8)).astype(np.float32) * 0.1
+    questions = centers[:20] + rng.normal(size=(20, 8)).astype(np.float32) * 0.1
+    answers = [[f"topic_{i:02d}_"] for i in range(20)]
+    ip = triviaqa_evidence.answer_lift(questions, pv, passages, answers, top=10, n_base=200, metric="ip")
+    assert ip["precision"] > 0.5
+    with pytest.raises(ValueError):
+        triviaqa_evidence.answer_lift(questions, pv, passages, answers, metric="cosine")
+    text = triviaqa_evidence.format_evidence({"Euclidean": {"enc": ip}, "Inner product": {"enc": ip}}, {"k": "v"})
+    assert "## Euclidean" in text and "## Inner product" in text and "- k: v" in text

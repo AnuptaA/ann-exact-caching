@@ -170,3 +170,38 @@ def test_cuda_request_without_a_gpu_and_cpu_esci_embedding_are_refused(tmp_path,
     ctx = pipeline.make_context("esci", tmp_path, device="numpy")
     with pytest.raises(pipeline.StageError, match="many hours"):
         pipeline.stage_embed(ctx)
+
+
+def test_sphere_embedding_runs_in_a_separate_stripped_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-leak")
+    stub = tmp_path / "encode_python"
+    stub.write_text("#!/bin/sh\n"
+                    "env | sort > \"$(dirname \"$0\")/seen_env.txt\"\n"
+                    "echo \"$@\" > \"$(dirname \"$0\")/seen_args.txt\"\n"
+                    "out=\"\"; while [ $# -gt 0 ]; do [ \"$1\" = --out ] && out=\"$2\"; shift; done\n"
+                    "echo data > \"$out\"\n")
+    stub.chmod(0o755)
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    datasets._sphere_embed(raw, {"device": "cuda", "encode_python": str(stub)})
+    env = (tmp_path / "seen_env.txt").read_text()
+    assert "AWS_SECRET_ACCESS_KEY" not in env and "TORCH_FORCE_WEIGHTS_ONLY_LOAD=1" in env
+    assert "HF_HUB_OFFLINE=1" in env and "TRANSFORMERS_OFFLINE=1" in env
+    args = (tmp_path / "seen_args.txt").read_text()
+    assert "-m workloads.q1 triviaqa-encode" in args and f"--tokenizer-dir {raw}/bert-base-uncased" in args
+    assert "--device cuda" in args and (raw / "triviaqa_enc.npy").exists()
+    assert not (raw / "triviaqa_enc.part.npy").exists()
+
+
+def test_tokenizer_fetch_and_safe_torch_guard(tmp_path, monkeypatch):
+    import sys
+    import types
+    from workloads.q1.datasets import common, triviaqa
+    monkeypatch.setattr(common, "download_file", lambda url, dest, **kw: Path(dest).write_text("vocab") or Path(dest))
+    out = triviaqa.fetch_tokenizer(tmp_path)
+    assert (out / "vocab.txt").exists() and json.loads((out / "tokenizer_config.json").read_text()) == {"do_lower_case": True}
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(__version__="2.5.1+cu121"))
+    with pytest.raises(RuntimeError, match="too old"):
+        triviaqa.check_safe_torch()
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(__version__="2.7.0+cu128"))
+    triviaqa.check_safe_torch()

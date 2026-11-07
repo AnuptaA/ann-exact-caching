@@ -42,6 +42,23 @@ Last updated with the EC2 preparation. Differences from the Aker paper and the l
   Results go to `$Q1_DATA/results/<commit>/`; a result from another commit is redone.
 - The local macOS build used FAISS 1.15.1 headers; the EC2 script uses the system package or v1.8.0.
 
+## TriviaQA / SPHERE query encoder
+- SPHERE queries are the 96,005 distinct TriviaQA questions encoded with Sphere's `dpr_web_query_encoder_hf`
+  (BERT-base CLS, no projection, not normalized; norms about 10.6). The `embed` stage runs
+  `python -m workloads.q1 triviaqa-encode` with `.venv-encode` in a stripped environment (no credentials,
+  `HF_HUB_OFFLINE`, `TORCH_FORCE_WEIGHTS_ONLY_LOAD=1`); the tokenizer vocabulary is fetched in the `fetch` stage
+  so the encoding step needs no network. It is a separate process and venv, not a sandbox: same user and
+  filesystem, and the network is not blocked. `torch >= 2.6` is required (the code refuses older versions).
+- Checked locally on 40 real questions through this exact path (offline, no cache): vectors identical to the
+  hub-tokenizer route. The full 96K-question encoding has not run.
+- The checkpoint is loaded through transformers' `from_pretrained` with torch's weights-only default. The full
+  `dpr_web_biencoder.cp` (omegaconf pickle) was never loaded.
+- Evidence log: `workloads/q1/datasets/triviaqa_encoder_evidence.md` (300 questions, 50K SPHERE_100K passages).
+  Euclidean (the Q1 metric): dpr_web 12.3x, bge 11.7x, public DPR 3.7x lift, so dpr_web does not clearly beat
+  bge under Euclidean. Inner product (DPR's training metric): dpr_web 19.7x, bge 13.0x, public DPR 13.4x.
+  The encoder choice stands as instructed; note that Q1 uses Euclidean distance on vectors a DPR model was trained
+  to compare with inner product.
+
 ## Findings
 - Upstream `StackFloatBuffer` freed its `alloca` buffer on constructor return, so converted query vectors were
   garbage and approximate lookups never hit with clang on macOS (patch 5). Linux impact unknown.
