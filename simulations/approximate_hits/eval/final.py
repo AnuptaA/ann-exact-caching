@@ -34,7 +34,7 @@ from utils.cache.features import shell_block, split_inputs
 from utils.cache.metrics import expand_index
 from utils.cache.models import logistic_scores
 from utils.cache.parallel import worker_pool
-from utils.cache.shell import SAMPLE_J
+from utils.cache.shell import ensure_shell_depth, SAMPLE_J
 from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
@@ -133,6 +133,7 @@ def run(args):
         summarize(run_dir / "final.json")
         return
     data, _, run = load_run_data(run_dir, args.n_each)
+    ensure_shell_depth(run, run_dir, args.R)
     res = result_for_target(data, args.target)
     tasks = [(args.target, p, res["selected"][:p["n_entries"]])
              for p in sorted(res["points"], key=lambda p: p["cache_frac"]) if p["n_entries"]]

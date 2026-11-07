@@ -47,6 +47,13 @@ def load_cand_ext(run, run_dir, R):
     return ids
 
 
+def ensure_shell_depth(run, run_dir, R):
+    """Load the exact top-R lists when R exceeds the neighbor lists saved with the run."""
+    n_kv = len(run.k_values)
+    if R > len(run.cached_ids[n_kv - 1]) and (run.cand_ext is None or run.cand_ext.shape[1] < R):
+        run.cand_ext = load_cand_ext(run, run_dir, R)
+
+
 def shell_ids(run, cand, K, R):
     """Database ids at ranks K+1..R around one candidate query. Uses the saved
     deeper neighbor lists (run.cand_ext) when R exceeds the cached top-500."""

@@ -7,7 +7,7 @@ import pytest
 from utils.base.knn import sq_norms
 from utils.cache.features import fit_balls, neighborhood_radius
 from utils.cache.shell import (
-    COUNT_SCALES, SAMPLE_J, load_cand_ext, quantize, shell_features, shell_ids, shell_sample,
+    COUNT_SCALES, SAMPLE_J, ensure_shell_depth, load_cand_ext, quantize, shell_features, shell_ids, shell_sample,
 )
 from utils.cache.workloads import RunData
 
@@ -88,3 +88,14 @@ def test_neighborhood_radius_needs_k_cached_vectors():
     with pytest.raises(ValueError, match="fewer than k"):
         neighborhood_radius(db_c[:2], st, 5)
     assert (neighborhood_radius(db_c[:2], st, 1) < 1e-6).all()     # self distance, never negative
+
+
+def test_ensure_shell_depth_loads_extended_lists_only_when_needed(tmp_path):
+    run, order = _run()
+    ensure_shell_depth(run, tmp_path, 50)                 # within the saved top-50: nothing to load
+    assert run.cand_ext is None and not list(tmp_path.glob("cand_top*.npy"))
+    ensure_shell_depth(run, tmp_path, 80)
+    assert run.cand_ext.shape == (3, 80) and np.array_equal(shell_ids(run, 1, 10, 80), order[1, 10:80])
+    kept = run.cand_ext
+    ensure_shell_depth(run, tmp_path, 60)                 # already deep enough
+    assert run.cand_ext is kept

@@ -34,6 +34,7 @@ from utils.cache.features import shell_block, split_inputs
 from utils.cache.metrics import expand_index
 from utils.cache.models import logistic_scores
 from utils.cache.parallel import worker_pool
+from utils.cache.shell import ensure_shell_depth
 from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import calibrated_lambda
 
@@ -121,6 +122,7 @@ def add_args(ap):
 def run(args):
     run_dir = Path(args.run_dir)
     data, _, run = load_run_data(run_dir, args.n_each)
+    ensure_shell_depth(run, run_dir, args.R)
     res = result_for_target(data, args.target)
     tasks = state_tasks(res, args.sizes, args.target)
     out = []

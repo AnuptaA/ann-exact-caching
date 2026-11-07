@@ -42,7 +42,7 @@ from utils.base.knn import exact_topk
 from utils.cache.entries import state_tables
 from utils.cache.features import N_BALLS, POOR_FIT, ball_features, balls_of
 from utils.cache.models import fit_logistic
-from utils.cache.shell import SAMPLE_J, shell_features, shell_sample
+from utils.cache.shell import SAMPLE_J, ensure_shell_depth, shell_features, shell_sample
 from utils.cache.workloads import SCORE_SPLITS, load_run_data
 from utils.cache.calibration import (
     DEFAULT_METHOD, select, threshold_grid,
@@ -217,6 +217,7 @@ def run(args):
         raise SystemExit(f"--source-k {args.source_k} must be one of --ks {args.ks}")
     run_dir = Path(args.run_dir)
     data, _, run = load_run_data(run_dir, args.n_each)
+    ensure_shell_depth(run, run_dir, SHELL[1])
     if args.mode == "k":
         logger.info(f"exact top-{max(args.ks)} for the query splits...")
         topk = {sp: exact_topk(run.sets[sp][0], run.db, max(args.ks)) for sp in SCORE_SPLITS}
