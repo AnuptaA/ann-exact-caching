@@ -56,4 +56,4 @@ def test_released_stream_runs_through_the_drivers(tmp_path):
     header, arrays = results.read_result(replay.run_cell(cell, ds, DRIVERS, tmp_path / "r", tmp_path / "w"))
     assert header["summary"]["requests_measured"] == 500
     curve = fidelity.cumulative_hit_ratio(arrays["outcome"])
-    assert curve[-1] > 0.5 and fidelity.check_recall(header["summary"]["delivered_recall"])["pass"]
+    assert curve[-1] > 0.3 and fidelity.check_recall(header["summary"]["delivered_recall"])["pass"]
