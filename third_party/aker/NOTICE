@@ -1,0 +1,8 @@
+Aker (https://github.com/sjoon-oh/aker), MIT license, see LICENSE.
+Vendored at branch `release`, commit e7639a52aec1320a47c5fa0b833c7214024931c9.
+Copied: inc/, src/, CMakeLists.txt, bootstrap/, test/, LICENSE.
+xxHash (https://github.com/Cyan4973/xxHash, BSD 2-Clause), commit
+66979328cf3f15cecdc61ea58c9f81e6071f8983: xxhash.h, xxhash.c, xxh3.h and the
+x86 dispatch files under extern/xxHash/ (replaces the upstream submodule).
+Not vendored: pgvector-bench/, docker/, apps/, the YCSB-C submodule, README.
+Local changes are listed in PATCHES.md.
