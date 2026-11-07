@@ -16,7 +16,7 @@ SHELL := /bin/bash
 .PHONY: populate-esci populate-sift eval-core eval-final eval-shell
 .PHONY: online-prepare online-run online-summary figures
 .PHONY: test-q1 build-replay
-.PHONY: q1-bg q1-setup q1-guard q1-preflight q1-generate q1-stage q1-run q1-run-all q1-collect q1-fidelity q1-snapshot q1-restore q1-smoke q1-pg-start q1-pg-stop
+.PHONY: q1-bg q1-status q1-setup q1-guard q1-preflight q1-generate q1-stage q1-run q1-run-all q1-collect q1-fidelity q1-snapshot q1-restore q1-smoke q1-pg-start q1-pg-stop
 .PHONY: test test-cache test-approximate
 
 all: help
@@ -179,12 +179,20 @@ q1-restore:
 	Q1_DATA=$(Q1_DATA) Q1_PGDATA=$(Q1_PGDATA) Q1_PG_PORT=$(Q1_PG_PORT) bash harness/deploy/pg.sh restore $(SNAPSHOT)
 
 # Run any target detached from the SSH session: make q1-bg TARGET="q1-generate DATASET=esci"
+# Own session (setsid when present), no terminal input, jobserver flags and pipes dropped (so make -j q1-bg
+# returns at once); one log and pid file per run.
 q1-bg:
 	@test -n "$(TARGET)" || { echo 'set TARGET="<make target and variables>"'; exit 1; }
 	@mkdir -p $(Q1_DATA)/logs
-	@log="$(Q1_DATA)/logs/$$(echo "$(TARGET)" | tr ' =/' '___')-$$(date +%Y%m%d-%H%M%S).log"; \
-		nohup $(MAKE) $(TARGET) > "$$log" 2>&1 & echo $$! > "$(Q1_DATA)/logs/last.pid"; \
-		echo "started pid $$(cat $(Q1_DATA)/logs/last.pid); follow with: tail -f $$log"
+	@name="$$(echo "$(TARGET)" | tr ' =/' '___')-$$(date +%Y%m%d-%H%M%S)"; \
+		log="$(Q1_DATA)/logs/$$name.log"; \
+		if command -v setsid >/dev/null 2>&1; then launcher="setsid nohup"; else launcher="nohup"; fi; \
+		env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL $$launcher $(MAKE) $(TARGET) > "$$log" 2>&1 < /dev/null 3>&- 4>&- 5>&- 6>&- & \
+		echo $$! > "$(Q1_DATA)/logs/$$name.pid"; cp "$(Q1_DATA)/logs/$$name.pid" "$(Q1_DATA)/logs/last.pid"; \
+		echo "started pid $$(cat $(Q1_DATA)/logs/$$name.pid); follow with: tail -f $$log; progress: make q1-status"
+
+q1-status:
+	@$(PY) -m harness status --data-dir $(Q1_DATA)
 
 # Smoke test of the whole stack on a tiny synthetic dataset (not part of Q1 results).
 q1-smoke: q1-guard

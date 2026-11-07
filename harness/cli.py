@@ -105,6 +105,11 @@ def _preflight(args):
 
 
 
+def _status(args):
+    from harness import status
+    print(status.format_status(Path(args.data_dir)))
+
+
 def _answer_table(args):
     import psycopg
     from harness.backend import answer_table, pgvector
@@ -196,6 +201,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dsn", default=None)
     p.set_defaults(run=_preflight)
 
+
+    p = sub.add_parser("status", help="background runs and generation progress")
+    p.add_argument("--data-dir", required=True)
+    p.set_defaults(run=_status)
 
     p = sub.add_parser("answer-table", help="build the backend answer table (resumable, shardable)")
     p.add_argument("--dataset-dir", required=True)

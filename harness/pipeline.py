@@ -8,6 +8,7 @@ when it finishes; a rerun skips finished stages. --force clears a stage and all 
 import contextlib
 import json
 import logging
+import logging.handlers
 import os
 import platform
 import subprocess
@@ -34,6 +35,8 @@ STAGES = ("fetch", "embed", "to_f32", "inputs", "groundtruth", "pg_load", "pg_in
           "tune_ef", "answer_table", "backend_recall")
 LIST_SIZE = 200   # entries up to 50 (1,2,5 x K) plus shell ranks up to 200; ef_search >= L
 TUNE_QUERIES = 2000
+LOG_MAX_BYTES = 20 * 2 ** 20
+LOG_BACKUPS = 5
 
 
 @dataclass
@@ -119,7 +122,8 @@ def tail(path: Path, lines: int = LOG_TAIL_LINES) -> str:
 def file_log(ctx: "Context"):
     """Also write INFO logs to <data>/<dataset>/.logs/generate.log while a pipeline runs."""
     ctx.logs.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(ctx.logs / "generate.log")
+    handler = logging.handlers.RotatingFileHandler(ctx.logs / "generate.log", maxBytes=LOG_MAX_BYTES,
+                                                   backupCount=LOG_BACKUPS)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger()
     old_level = root.level
