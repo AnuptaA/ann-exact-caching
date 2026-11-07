@@ -14,9 +14,10 @@ Last updated with the EC2 preparation. Differences from the Aker paper and the l
 - Equality hit (strict): served by an entry stored under this exact vector id. Filter hits and linked
   repeats are approximate.
 - Stale exact-caching code lives in `stale/`. Native PostgreSQL 16 + pgvector v0.8.0 on EC2.
-- The list length L (neighbors stored per query, `Q1_LIST_SIZE`, default 50) is provisional: it is decided
-  after a microbenchmark of entry sizes {1,2,5} x K versus {1,2,5,10} x K versus the old K sweep.
-  Changing L reruns only the `answer_table` and `backend_recall` stages and the cheap `q1-run-*` cells.
+- Entry sizes are {1,2,5} x K (K = 10: up to 50 neighbors); the list length is L = 200 (`Q1_LIST_SIZE`), which covers
+  shell ranks up to R = 200 and sets ef_search >= 200 (pgvector limit 1000). Based on the L microbenchmark below
+  (one workload; confirm on SIFT1M if desired). Changing L reruns only the `answer_table` and `backend_recall`
+  stages and the cheap `q1-run-*` cells.
 
 ## Decided during implementation (approved unless noted)
 - Drivers are built by `harness/cpp/CMakeLists.txt` (two static executables, Release, warnings off,
@@ -31,7 +32,7 @@ Last updated with the EC2 preparation. Differences from the Aker paper and the l
 - ESCI official queries are the 130,193 distinct query texts (130,652 ids); the base is all 1,814,924 products.
 - TriviaQA: train + validation + test, de-duplicated by stripped text: 96,005 questions.
 - `ef_search` is tuned on a 2K sample of official queries (ground truth reused), grid 10..400, rule
-  max(smallest ef reaching recall 0.9, L).
+  max(smallest ef reaching recall 0.9, L), with L = 200.
 - Proximity thresholds are computed once per (dataset, stream, seed) and shared across budgets; the
   universe-wide percentile is stored as a diagnostic.
 - PostgreSQL: shared_buffers about 25% of RAM, wal_level minimal, parallel maintenance workers 7;
@@ -54,7 +55,7 @@ Last updated with the EC2 preparation. Differences from the Aker paper and the l
 ## Not verified yet
 Linux build and `setup_instance.sh`, CUDA paths, Python 3.10, behavior and memory at 1M-10M scale, agreement
 with the paper (`make q1-fidelity`), DPR_web context encoder reproducing the sphere vectors, Hermes'
-TriviaQA encoder, whether L = 50 is enough for the final learned system.
+TriviaQA encoder, backend recall and latency at ef_search >= 200 on the real datasets (recorded by the tune stage).
 
 ## L microbenchmark (2026-11-07, ESCI 50K, K=10, T=0.9, 5K candidates, 20K scoring queries, seed 42)
 `populate esci` then `eval final` (7-feature logistic model, calibrated threshold), one run at a time.
@@ -69,4 +70,4 @@ TriviaQA encoder, whether L = 50 is enough for the final learned system.
   above 5% (20%: +4.4).
 - Reading: {1,2,5} x K is enough for entries; the shell depth is what sets L. R=200 captures the memory-fair
   gain of R=500 on this workload, so L = 200 looks sufficient; L = 500 buys nothing memory-fair. One workload and
-  one seed: confirm on SIFT1M before fixing `Q1_LIST_SIZE`.
+  one seed. Decision (owner, 2026-11-07): entries {1,2,5} x K and L = 200.

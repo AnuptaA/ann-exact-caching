@@ -32,7 +32,7 @@ LOG_TAIL_LINES = 40
 
 STAGES = ("fetch", "embed", "to_f32", "inputs", "groundtruth", "pg_load", "pg_index",
           "tune_ef", "answer_table", "backend_recall")
-LIST_SIZE = 50
+LIST_SIZE = 200   # entries up to 50 (1,2,5 x K) plus shell ranks up to 200; ef_search >= L
 TUNE_QUERIES = 2000
 
 

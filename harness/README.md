@@ -34,7 +34,7 @@ Logs: `$Q1_DATA/<dataset>/.logs/generate.log` (all stages, with progress and ETA
 `answer_table_<i>.log` per shard, `env.json` (versions, commit), `.failed/<stage>.json` after a failure.
 A failed stage stops `make` with the stage name and the log tail. Results: `$Q1_DATA/results/<commit>/`.
 
-Variables: `Q1_DATA` (default /data/q1), `Q1_LIST_SIZE` (L, default 50), `Q1_ALLOW_SLOW=1` (accept CPU ground
+Variables: `Q1_DATA` (default /data/q1), `Q1_LIST_SIZE` (L, default 200), `Q1_ALLOW_SLOW=1` (accept CPU ground
 truth or CPU ESCI embedding), `Q1_PG_DSN`, `Q1_PG_WORKERS` (parallel answer-table processes), `Q1_DEVICE` (auto, cuda, numpy), `DATASETS` (restrict a run to some datasets),
 `Q1_DRIVERS`, `GT_QUERY_CHUNK`/`GT_BASE_CHUNK`.
 

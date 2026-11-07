@@ -153,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default="auto", help="auto, numpy, cuda or mps (ground truth)")
     p.add_argument("--encode-python", default=sys.executable)
     p.add_argument("--pg-workers", type=int, default=4)
-    p.add_argument("--list-size", type=int, default=50, help="neighbors stored per query (L)")
+    p.add_argument("--list-size", type=int, default=200, help="neighbors stored per query (L)")
     p.add_argument("--allow-slow", action="store_true", help="accept ground truth on the numpy device")
     p.add_argument("--driver-dir", default="build/replay")
     p.add_argument("--gt-query-chunk", type=int, default=None, help="default 1024; 8192 on cuda")
