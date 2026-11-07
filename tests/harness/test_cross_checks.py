@@ -145,3 +145,26 @@ def test_startup_check_rejects_wrong_values():
             replay.check_startup(bad, settings, 1000, 50)
     with pytest.raises(RuntimeError, match="PARAM/FILTER"):
         replay.check_startup({}, settings, 1000, 50)
+
+
+def test_measurement_window_is_requests_30000_to_99999():
+    from workloads.q1 import streams
+    assert streams.N_REQUESTS == 100_000 and streams.HISTORY_FRACTION == 0.3
+    assert streams.history_split(100_000, 0.3) == 30_000
+    assert len(range(streams.history_split(100_000, 0.3), 100_000)) == 70_000
+
+
+@needs_driver
+def test_hits_return_the_stored_list_unchanged_and_all_requests_are_replayed(toy, tmp_path):
+    ds = replay.DatasetDir(toy, "toy")
+    cell = manifest.Cell("toy", "zipf_0.99", "aker", "paper", 10)
+    header, arrays = results.read_result(replay.run_cell(cell, ds, DRIVERS, tmp_path / "r", tmp_path / "w"))
+    ids = ds.streams["zipf_0.99"]
+    returned = np.fromfile(tmp_path / "w" / cell.cell_id / "result_ids.i64", dtype="<i8").reshape(len(ids), K)
+    assert len(arrays["outcome"]) == len(ids)                      # baselines see the whole stream
+    stored = {tuple(ds.answer_ids[u][:K]) for u in np.unique(ids)}
+    hits = np.flatnonzero(arrays["outcome"] != 0)
+    assert len(hits) > 0
+    assert all(tuple(returned[i]) in stored for i in hits)         # a stored list, same order, no re-ranking
+    equality = np.flatnonzero(arrays["outcome"] == 1)
+    assert all(tuple(returned[i]) == tuple(ds.answer_ids[ids[i]][:K]) for i in equality)
