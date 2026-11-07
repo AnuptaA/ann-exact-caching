@@ -20,6 +20,12 @@ def _shard_arg(text: str) -> tuple[int, int]:
 
 def _cells(args):
     cells = manifest.build_grid(args.datasets, args.streams, seeds=tuple(args.seeds))
+    if getattr(args, "systems", None):
+        cells = [c for c in cells if c.system in args.systems]
+    if getattr(args, "settings", None):
+        cells = [c for c in cells if c.setting in args.settings]
+    if getattr(args, "budgets", None):
+        cells = [c for c in cells if c.budget_percent in args.budgets]
     return manifest.shard(cells, *args.shard)
 
 
@@ -61,6 +67,23 @@ def pipeline_datasets():
 def _stages(args):
     from harness import pipeline
     print(" ".join(pipeline.STAGES))
+
+
+def _collect(args):
+    from harness import collect
+    table = collect.rows(args.out_dir)
+    print(collect.format_table(table))
+    if args.csv:
+        collect.write_csv(args.out_dir, args.csv)
+
+
+def _fidelity(args):
+    from harness import fidelity
+    import json
+    out = fidelity.run_fidelity(Path(args.data_dir), args.dsn, Path(args.driver_dir), Path(args.out_dir),
+                                Path(args.work_dir), args.ef_search, device=args.device,
+                                inspect_pickle=args.inspect_pickle)
+    print(json.dumps(out, indent=1))
 
 
 def _preflight(args):
@@ -137,6 +160,9 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--streams", nargs="+", default=None)
         p.add_argument("--seeds", type=int, nargs="+", default=[0])
         p.add_argument("--shard", type=_shard_arg, default=(0, 1), help="i/n")
+        p.add_argument("--systems", nargs="+", default=None, choices=["aker", "proximity"])
+        p.add_argument("--settings", nargs="+", default=None, help="paper, p0.1, p1")
+        p.add_argument("--budgets", type=int, nargs="+", default=None, help="1 5 10")
 
     p = sub.add_parser("grid", help="list the cell ids of this shard")
     grid_args(p)
@@ -163,6 +189,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gt-query-chunk", type=int, default=1024)
     p.add_argument("--gt-base-chunk", type=int, default=262144)
     p.set_defaults(run=_generate)
+
+    p = sub.add_parser("collect", help="table (and optional CSV) of all result cells")
+    p.add_argument("--out-dir", required=True)
+    p.add_argument("--csv", default=None)
+    p.set_defaults(run=_collect)
+
+    p = sub.add_parser("fidelity", help="Aker on the released SPACEV stream (report only)")
+    p.add_argument("--data-dir", required=True)
+    p.add_argument("--dsn", required=True)
+    p.add_argument("--driver-dir", required=True)
+    p.add_argument("--out-dir", required=True)
+    p.add_argument("--work-dir", required=True)
+    p.add_argument("--ef-search", type=int, required=True, help="the spacev tune.json choice")
+    p.add_argument("--device", default="numpy")
+    p.add_argument("--inspect-pickle", action="store_true")
+    p.set_defaults(run=_fidelity)
 
     p = sub.add_parser("stages", help="list the generation stages in order")
     p.set_defaults(run=_stages)

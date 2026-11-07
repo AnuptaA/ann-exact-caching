@@ -77,3 +77,22 @@ def test_tiny_dataset_through_every_stage_with_real_pgvector(tmp_path):
     rec = json.loads((ctx.root / "backend_recall.json").read_text())
     assert 0.85 <= rec["mean_recall_all_ids"] <= 1.0
     assert pipeline.run_pipeline(ctx) == []                                    # resumable
+
+
+@pytest.mark.skipif(not os.environ.get("PGVECTOR_TEST_DSN"), reason="needs PostgreSQL + pgvector")
+def test_fidelity_run_on_the_tiny_database(tmp_path):
+    from harness import data, fidelity
+    ctx = _ctx(tmp_path, dsn=os.environ["PGVECTOR_TEST_DSN"], pg_workers=2)
+    pipeline.run_pipeline(ctx)
+    official = data.read_f32bin(ctx.root / "official.f32bin")
+    rng = np.random.default_rng(0)
+    payload = np.asarray(official[rng.integers(0, 40, size=800)])        # a stream with repeats
+    np.save(tmp_path / "payload.npy", payload)
+    driver_dir = Path(__file__).resolve().parents[2] / "build" / "replay"
+    if not (driver_dir / "ak_replay_standard").exists():
+        pytest.skip("drivers not built")
+    out = fidelity.run_fidelity(tmp_path, os.environ["PGVECTOR_TEST_DSN"], driver_dir, tmp_path / "out",
+                                tmp_path / "work", ef_search=100, dataset="tiny",
+                                payload_path=tmp_path / "payload.npy")
+    assert set(out["report"]) == {"1%", "5%"} and Path(out["plot"]).exists()
+    assert out["report"]["5%"]["delivered_recall"] >= 0.8 and out["report"]["5%"]["hit_rate"] > 0.3

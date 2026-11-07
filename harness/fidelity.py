@@ -37,7 +37,7 @@ def load_released_pickle(path: Path):
 
 
 class FidelityData:
-    """Duck-typed dataset for run_cell: the released stream over distinct vectors."""
+    """Duck-typed dataset for run_cell: the released stream over its distinct vectors."""
 
     history_fraction = 0.0   # measure every request
 
@@ -45,7 +45,8 @@ class FidelityData:
                  list_size: int = 50, gt_device: str = "numpy"):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
-        self.base = data.read_f32bin(data.write_f32bin(self.root / "base.f32bin", np.load(base_path, mmap_mode="r")))
+        self.base_path = Path(base_path)
+        self.base = data.read_f32bin(self.base_path)
         unique, inverse = np.unique(np.asarray(payload, dtype=np.float32), axis=0, return_inverse=True)
         self.unique = unique
         self.streams = {"released": inverse.astype(np.int64).ravel()}
@@ -87,3 +88,45 @@ def plot_hit_ratio(curves: dict, path: Path) -> Path:
     fig.savefig(path, dpi=120)
     plt.close(fig)
     return Path(path)
+
+
+RELEASED_URL = "https://huggingface.co/datasets/sjoon-oh/aker/resolve/main/spacev-sim-100k-0.99"
+
+
+def run_fidelity(data_dir: Path, dsn: str, driver_dir: Path, out_dir: Path, work_dir: Path,
+                 ef_search: int, list_size: int = 50, device: str = "numpy",
+                 inspect_pickle: bool = False, dataset: str = "spacev",
+                 payload_path: Path | None = None) -> dict:
+    """Aker (paper settings) on the released SPACEV stream at pools of 1% and 5%.
+
+    Needs the prepared spacev dataset and its PostgreSQL database. Reports recall,
+    the pass/fail against the criterion and writes the cumulative hit-ratio plot.
+    """
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+    from workloads.q1.datasets import common
+    from harness.backend.pgvector import PgvectorBackend, check_version
+    from harness.runner import manifest, replay, results
+    root = Path(data_dir) / "fidelity"
+    if payload_path is None:
+        payload_path = common.download_file(RELEASED_URL + ".npy", root / "spacev-sim-100k-0.99.npy")
+    if inspect_pickle:
+        pkl = common.download_file(RELEASED_URL + ".pkl", root / "spacev-sim-100k-0.99.pkl")
+        obj = load_released_pickle(pkl)
+        print(f"released pickle: {type(obj).__name__}, "
+              f"{len(obj) if hasattr(obj, '__len__') else ''} items")
+    payload = np.load(payload_path)
+    with psycopg.connect(make_conninfo(dsn, dbname=f"q1_{dataset}"), autocommit=True) as conn:
+        check_version(conn)
+        ds = FidelityData(root / "tables", Path(data_dir) / dataset / "base.f32bin", payload,
+                          PgvectorBackend(conn), ef_search, list_size, device)
+    report, curves = {}, {}
+    for pct in (1, 5):
+        cell = manifest.Cell(f"{dataset}-fidelity", "released", "aker", "paper", pct)
+        header, arrays = results.read_result(
+            replay.run_cell(cell, ds, driver_dir, out_dir, work_dir))
+        s = header["summary"]
+        curves[f"pool {pct}%"] = cumulative_hit_ratio(arrays["outcome"])
+        report[f"{pct}%"] = {**s, **check_recall(s["delivered_recall"])}
+    plot = plot_hit_ratio(curves, Path(out_dir) / "fidelity_hit_ratio.png")
+    return {"report": report, "plot": str(plot), "requests": int(len(payload))}

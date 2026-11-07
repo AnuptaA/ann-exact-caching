@@ -78,7 +78,9 @@ def test_exact_repeats_are_equality_hits_and_misses_have_backend_recall(dataset,
     miss = arrays["outcome"] == 0
     assert (arrays["recall"][miss] == 1.0).all()        # exact backend: misses are perfect
     assert header["summary"]["equality_hit_rate"] > 0.5  # 600 requests over 30 base queries
-    assert header["kind_mismatch"] == 0
+    # a library exact/linked hit implies the vector was seen earlier, so it is also an equality hit
+    assert header["library_exact_hits_in_window"] <= header["equality_hits_in_window"]
+    assert 0 < header["peak_pool_vectors_sampled"] <= header["settings"]["pool_size"]
 
 
 @needs_driver
@@ -120,3 +122,38 @@ def test_cli_run_resumes_and_shards(dataset, tmp_path, capsys):
     stamp = [p.stat().st_mtime_ns for p in (tmp_path / "r").glob("*.npz")]
     cli.main(run_args)                                      # resume: nothing is rerun
     assert stamp == [p.stat().st_mtime_ns for p in (tmp_path / "r").glob("*.npz")]
+
+
+def test_peak_pool_parsing():
+    log = ("100 ANNSCache Status\n  Vector pool: VectorSlotPool Status: 10 inserted out of total 40, "
+           "observed elements: 10\n200 x\n  Vector pool: VectorSlotPool Status: 37 inserted out of total 40, "
+           "observed elements: 37\n")
+    assert replay.peak_pool_vectors(log) == 37 and replay.peak_pool_vectors("") == 0
+
+
+@needs_driver
+def test_proximity_thresholds_are_cached_and_budgets_share_them(dataset, tmp_path):
+    ds = replay.DatasetDir(dataset, "toy")
+    work = tmp_path / "w"
+    for budget in (1, 5):
+        cell = manifest.Cell("toy", "zipf_0.99", "proximity", "p1", budget)
+        header, _ = results.read_result(replay.run_cell(cell, ds, DRIVERS, tmp_path / "r", work))
+        assert header["settings"]["global_thresh"] == header["thresholds"]["history"]["1.0"]
+    cached = list((work / "thresholds").glob("toy-zipf_0.99-s0.json"))
+    assert len(cached) == 1
+    info = header["thresholds"]
+    assert info["universe_wide"]["1.0"] > 0 and info["distinct_history_queries"] > 1
+
+
+@needs_driver
+def test_collect_table_and_csv(dataset, tmp_path):
+    from harness import collect
+    ds = replay.DatasetDir(dataset, "toy")
+    for cell in (manifest.Cell("toy", "uniform", "aker", "paper", 10),
+                 manifest.Cell("toy", "zipf_0.99", "proximity", "p0.1", 5)):
+        replay.run_cell(cell, ds, DRIVERS, tmp_path / "r", tmp_path / "w")
+    table = collect.rows(tmp_path / "r")
+    assert len(table) == 2 and {r["system"] for r in table} == {"aker", "proximity"}
+    assert collect.write_csv(tmp_path / "r", tmp_path / "out.csv") == 2
+    assert "hit_rate" in (tmp_path / "out.csv").read_text().splitlines()[0]
+    assert "uniform" in collect.format_table(table)

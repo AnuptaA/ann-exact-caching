@@ -40,7 +40,8 @@ def test_cumulative_ratio_recall_check_and_plot(tmp_path):
 def test_released_stream_runs_through_the_drivers(tmp_path):
     rng = np.random.default_rng(0)
     base = rng.integers(-20, 20, size=(2000, 6)).astype(np.int8)
-    np.save(tmp_path / "base.npy", base)
+    from harness import data
+    data.write_f32bin(tmp_path / "base.f32bin", base)
     distinct = rng.integers(-20, 20, size=(40, 6)).astype(np.int8)
     payload = distinct[rng.integers(0, 40, size=500)]
 
@@ -51,7 +52,7 @@ def test_released_stream_runs_through_the_drivers(tmp_path):
             d = ((q[:, None, :] - base.astype(np.float32)[None]) ** 2).sum(2)
             return np.argsort(d, axis=1, kind="stable")[:, :k]
 
-    ds = fidelity.FidelityData(tmp_path / "fid", tmp_path / "base.npy", payload, Exact(), 50, list_size=20)
+    ds = fidelity.FidelityData(tmp_path / "fid", tmp_path / "base.f32bin", payload, Exact(), 50, list_size=20)
     cell = manifest.Cell("fid", "released", "aker", "paper", 10)
     header, arrays = results.read_result(replay.run_cell(cell, ds, DRIVERS, tmp_path / "r", tmp_path / "w"))
     assert header["summary"]["requests_measured"] == 500
