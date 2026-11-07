@@ -7,6 +7,24 @@ every session disables seq scans and asserts that the HNSW index is used.
 import numpy as np
 
 EF_SEARCH_MAX = 1000   # pgvector's upper limit for hnsw.ef_search
+EXPECTED_VERSION = "0.8.0"
+
+
+def extension_version(conn) -> str:
+    with conn.cursor() as cur:
+        cur.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+        row = cur.fetchone()
+    if row is None:
+        raise RuntimeError("the vector extension is not installed in this database")
+    return row[0]
+
+
+def check_version(conn, expected: str = EXPECTED_VERSION) -> str:
+    """Fail unless pgvector is the expected version (override only on purpose)."""
+    found = extension_version(conn)
+    if found != expected:
+        raise RuntimeError(f"pgvector {found} installed, expected {expected}")
+    return found
 
 
 def expected_result_count(ef_search: int, limit: int, n_vectors: int) -> int:

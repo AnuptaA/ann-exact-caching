@@ -156,3 +156,55 @@ def test_copy_lines_format():
     from harness.backend import load
     rows = np.array([[1.0, 2.5], [3.0, -4.0]], dtype=np.float32)
     assert list(load.copy_lines(rows, 7)) == ["7\t[1,2.5]\n", "8\t[3,-4]\n"]
+
+
+def _pg_table(conn, base, name="t_q1"):
+    from harness.backend import load
+    with conn.cursor() as cur:
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        cur.execute(f"DROP TABLE IF EXISTS {name}")
+        cur.execute(f"CREATE TABLE {name} (id bigint PRIMARY KEY, embedding vector({base.shape[1]}))")
+        with cur.copy(f"COPY {name} (id, embedding) FROM STDIN") as cp:
+            for line in load.copy_lines(base, 0):
+                cp.write(line)
+
+
+@pytest.mark.skipif(not os.environ.get("PGVECTOR_TEST_DSN"), reason="needs PostgreSQL + pgvector")
+def test_real_pgvector_l2_support_proc_is_squared_and_version_is_080():
+    import psycopg
+    with psycopg.connect(os.environ["PGVECTOR_TEST_DSN"], autocommit=True) as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT p.proname FROM pg_amproc ap JOIN pg_opclass oc ON ap.amprocfamily = oc.opcfamily "
+                    "JOIN pg_proc p ON p.oid = ap.amproc JOIN pg_am am ON am.oid = oc.opcmethod "
+                    "WHERE am.amname = 'hnsw' AND oc.opcname = 'vector_l2_ops'")
+        assert [r[0] for r in cur.fetchall()] == ["vector_l2_squared_distance"]
+        assert pgvector.extension_version(conn) == pgvector.EXPECTED_VERSION
+
+
+@pytest.mark.skipif(not os.environ.get("PGVECTOR_TEST_DSN"), reason="needs PostgreSQL + pgvector")
+def test_real_small_ef_search_is_not_exact_and_sized_build_does_not_warn():
+    import psycopg
+    from workloads.q1.groundtruth import exact_topk_chunk
+    rng = np.random.default_rng(0)
+    base = rng.normal(size=(6000, 32)).astype(np.float32)
+    with psycopg.connect(os.environ["PGVECTOR_TEST_DSN"], autocommit=True) as conn:
+        _pg_table(conn, base)
+        small, sized = build_index.NoticeWatcher(), build_index.NoticeWatcher()
+        conn.add_notice_handler(small)
+        cur = conn.cursor()
+        for sql in build_index.create_index_sql("t_q1", "embedding", "t_q1_embedding_hnsw", 16, 64, 1, 2):
+            cur.execute(sql)
+        assert small.check(fail=False) is False            # 1 MB: "graph no longer fits"
+        with pytest.raises(RuntimeError):
+            small.check()
+        cur.execute("DROP INDEX t_q1_embedding_hnsw")
+        conn.add_notice_handler(sized)
+        mem = build_index.maintenance_work_mem_mb(6000, 32, 16)
+        for sql in build_index.create_index_sql("t_q1", "embedding", "t_q1_embedding_hnsw", 16, 64, mem, 2):
+            cur.execute(sql)
+        assert sized.check(fail=False)
+        queries = rng.normal(size=(50, 32)).astype(np.float32)
+        _, dist = exact_topk_chunk(queries, base, k=10)
+        rows = ef_tuning.sweep(pgvector.PgvectorBackend(conn, table="t_q1"), queries, base, dist[:, 9],
+                               grid=(10, 40, 400))
+        assert rows[0]["recall"] < 1.0 and rows[0]["recall"] < rows[-1]["recall"]
