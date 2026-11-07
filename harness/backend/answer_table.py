@@ -6,6 +6,7 @@ taken from the backend. Resumable per block; blocks are written atomically.
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -27,7 +28,9 @@ def build_answer_table(backend, vectors, base, out_dir: Path, list_size: int, ef
     meta_path = out_dir / "meta.json"
     if meta_path.exists() and json.loads(meta_path.read_text()) != meta:
         raise ValueError(f"{meta_path} belongs to a different table")
-    meta_path.write_text(json.dumps(meta))
+    tmp_meta = meta_path.with_name(f"meta.{os.getpid()}.tmp")   # shards write the same content
+    tmp_meta.write_text(json.dumps(meta))
+    tmp_meta.replace(meta_path)
     for b, start in enumerate(range(0, len(vectors), block)):
         if b % shard[1] != shard[0]:
             continue

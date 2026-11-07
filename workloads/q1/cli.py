@@ -23,15 +23,7 @@ def _esci(args):
 
 
 def _triviaqa_questions(args):
-    out = Path(args.out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    paths = {}
-    from workloads.q1.datasets import common
-    for split, url in triviaqa.SPLIT_URLS.items():
-        paths[split] = common.download_file(url, out / f"triviaqa_{split}.parquet")
-    questions, report = triviaqa.load_questions(paths)
-    np.save(out / "triviaqa_questions.npy", np.array(questions, dtype=str))
-    print(json.dumps(report))
+    print(json.dumps(triviaqa.fetch_questions(Path(args.out_dir))))
 
 
 def _triviaqa_encode(args):

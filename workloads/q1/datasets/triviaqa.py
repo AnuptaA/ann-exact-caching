@@ -7,7 +7,9 @@ isolated environment (own venv or container, no credentials), loading with
 torch's safe weights-only path.
 """
 
+import json
 import logging
+import tarfile
 from pathlib import Path
 
 import numpy as np
@@ -79,3 +81,33 @@ def dpr_query_encoder(checkpoint_dir: Path, max_length: int = 64, device: str = 
         with torch.no_grad():
             return model(**batch).pooler_output.cpu().numpy()
     return encode
+
+
+def fetch_questions(out_dir: Path) -> dict:
+    """Download the three splits, de-duplicate, write triviaqa_questions.npy; returns the counts."""
+    from workloads.q1.datasets import common
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    paths = {split: common.download_file(url, out / f"triviaqa_{split}.parquet")
+             for split, url in SPLIT_URLS.items()}
+    questions, report = load_questions(paths)
+    np.save(out / "triviaqa_questions.npy", np.array(questions, dtype=str))
+    (out / "triviaqa_counts.json").write_text(json.dumps(report))
+    return report
+
+
+def fetch_encoder(dest: Path) -> Path:
+    """Download and unpack dpr_web_query_encoder_hf; members must stay inside dest."""
+    from workloads.q1.datasets import common
+    dest = Path(dest)
+    target = dest / "dpr_web_query_encoder_hf"
+    if (target / "config.json").exists():
+        return target
+    tar_path = common.download_file(ENCODER_URL, dest / "dpr_web_query_encoder_hf.tar.gz")
+    target.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(tar_path) as tar:
+        for member in tar.getmembers():
+            if not member.isfile() or ".." in Path(member.name).parts or member.name.startswith("/"):
+                raise ValueError(f"unexpected tar member {member.name!r}")
+        tar.extractall(target, filter="data")
+    return target

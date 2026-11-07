@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +40,27 @@ def _run(args):
         path = replay.run_cell(cell, loaded[key], Path(args.driver_dir), Path(args.out_dir),
                                Path(args.work_dir), timeout=args.timeout)
         logger.info(f"done {path.name}")
+
+
+def _generate(args):
+    from harness import pipeline
+    datasets = args.dataset if args.dataset != ["all"] else list(pipeline_datasets())
+    for name in datasets:
+        ctx = pipeline.make_context(name, args.data_dir, args.dsn, args.device,
+                                    encode_python=args.encode_python, pg_workers=args.pg_workers,
+                                    gt_query_chunk=args.gt_query_chunk, gt_base_chunk=args.gt_base_chunk)
+        ran = pipeline.run_pipeline(ctx, args.stages, args.force)
+        print(f"{name}: ran {ran or 'nothing (all stages done)'}")
+
+
+def pipeline_datasets():
+    from harness.datasets import PRODUCTION
+    return PRODUCTION
+
+
+def _stages(args):
+    from harness import pipeline
+    print(" ".join(pipeline.STAGES))
 
 
 def _preflight(args):
@@ -128,6 +150,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--driver-dir", required=True)
     p.add_argument("--timeout", type=float, default=None)
     p.set_defaults(run=_run)
+
+    p = sub.add_parser("generate", help="Q1 workload generation for datasets, through answer tables")
+    p.add_argument("--dataset", nargs="+", required=True, help="esci spacev sift10m sphere tiny, or all")
+    p.add_argument("--data-dir", required=True)
+    p.add_argument("--dsn", default="", help="PostgreSQL connection string (database q1_<dataset> is used)")
+    p.add_argument("--stages", nargs="+", default=None)
+    p.add_argument("--force", default=None, help="clear this stage and all later ones first")
+    p.add_argument("--device", default="auto", help="auto, numpy, cuda or mps (ground truth)")
+    p.add_argument("--encode-python", default=sys.executable)
+    p.add_argument("--pg-workers", type=int, default=4)
+    p.add_argument("--gt-query-chunk", type=int, default=1024)
+    p.add_argument("--gt-base-chunk", type=int, default=262144)
+    p.set_defaults(run=_generate)
+
+    p = sub.add_parser("stages", help="list the generation stages in order")
+    p.set_defaults(run=_stages)
 
     p = sub.add_parser("preflight", help="check the instance before a run")
     p.add_argument("--datasets", nargs="+", default=["spacev", "sift10m", "sphere", "esci"])

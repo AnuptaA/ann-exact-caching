@@ -12,6 +12,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+RAW_BASE = "https://github.com/amazon-science/esci-data/raw/main/shopping_queries_dataset"
+RAW_FILES = ("shopping_queries_dataset_products.parquet", "shopping_queries_dataset_examples.parquet")
 MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 EXPECTED_PRODUCTS = 1_814_924
 EXPECTED_QUERY_IDS = 130_652
@@ -103,3 +105,9 @@ def build(raw_dir: Path, out_dir: Path, encode=None) -> dict:
     np.save(out / "esci_products.npy", encode(product_texts(products)))
     np.save(out / "esci_product_ids.npy", products["product_id"].to_numpy().astype(str))
     return counts
+
+
+def fetch_raw(raw_dir: Path) -> list[Path]:
+    """Download the two raw parquet files (about 1.2 GB), resumable."""
+    from workloads.q1.datasets import common
+    return [common.download_file(f"{RAW_BASE}/{name}", Path(raw_dir) / name) for name in RAW_FILES]

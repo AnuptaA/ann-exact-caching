@@ -26,17 +26,14 @@ class RequestVectors:
         return universe.request_vectors(self.uni, self.official, ids)
 
 
-def prepare_inputs(root: Path, name: str, base, official, n_groups: int = universe.N_GROUPS,
-                   group_size: int = universe.GROUP_SIZE, n_requests: int = streams.N_REQUESTS,
-                   zipf=streams.ZIPF_EXPONENTS, no_locality: bool = False,
-                   history_fraction: float = streams.HISTORY_FRACTION, universe_seed: int = 0,
-                   stream_seed: int = 0) -> Path:
-    """Write base.f32bin, official.f32bin, universe.npz and the streams (no backend needed)."""
-    ds = Path(root) / name
-    ds.mkdir(parents=True, exist_ok=True)
-    data.write_f32bin(ds / "base.f32bin", base)
-    official_f32 = data.read_f32bin(data.write_f32bin(ds / "official.f32bin", official))
-    uni = universe.build_universe(len(official_f32), n_groups, group_size, universe_seed)
+def write_universe_and_streams(ds: Path, n_official: int, n_groups: int = universe.N_GROUPS,
+                               group_size: int = universe.GROUP_SIZE,
+                               n_requests: int = streams.N_REQUESTS, zipf=streams.ZIPF_EXPONENTS,
+                               no_locality: bool = False,
+                               history_fraction: float = streams.HISTORY_FRACTION,
+                               universe_seed: int = 0, stream_seed: int = 0) -> None:
+    """Write universe.npz and streams_seed<seed>.npz next to the vectors."""
+    uni = universe.build_universe(n_official, n_groups, group_size, universe_seed)
     np.savez(ds / "universe.npz", base_idx=uni.base_idx, partner_idx=uni.partner_idx,
              lam=uni.lam, n_official=uni.n_official)
     out = {f"zipf_{s:.2f}": streams.zipf_stream(uni, n_requests, s, stream_seed) for s in zipf}
@@ -46,6 +43,15 @@ def prepare_inputs(root: Path, name: str, base, official, n_groups: int = univer
     np.savez(ds / f"streams_seed{stream_seed}.npz", history_fraction=history_fraction, **out)
     (ds / "prepared.json").write_text(json.dumps(
         {"universe_seed": universe_seed, "stream_seed": stream_seed}))
+
+
+def prepare_inputs(root: Path, name: str, base, official, **universe_args) -> Path:
+    """Write base.f32bin, official.f32bin, universe.npz and the streams (no backend needed)."""
+    ds = Path(root) / name
+    ds.mkdir(parents=True, exist_ok=True)
+    data.write_f32bin(ds / "base.f32bin", base)
+    data.write_f32bin(ds / "official.f32bin", official)
+    write_universe_and_streams(ds, len(official), **universe_args)
     return ds
 
 
@@ -54,9 +60,11 @@ def request_vectors_of(ds: Path) -> RequestVectors:
     return RequestVectors(load_universe(ds / "universe.npz"), data.read_f32bin(ds / "official.f32bin"))
 
 
-def prepare_ground_truth(ds: Path, device: str = "numpy") -> None:
+def prepare_ground_truth(ds: Path, device: str = "numpy", query_chunk: int = groundtruth.QUERY_CHUNK,
+                         base_chunk: int = groundtruth.BASE_CHUNK) -> None:
     groundtruth.build_ground_truth(request_vectors_of(ds), data.read_f32bin(ds / "base.f32bin"),
-                                   ds / "gt", device=device)
+                                   ds / "gt", device=device, query_chunk=query_chunk,
+                                   base_chunk=base_chunk)
 
 
 def prepare_dataset(root: Path, name: str, base, official, backend, ef_search: int,
