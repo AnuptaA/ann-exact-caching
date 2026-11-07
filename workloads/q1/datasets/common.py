@@ -1,7 +1,9 @@
 """Resumable HTTP downloads (with byte ranges) and big-ann style .bin helpers."""
 
+import http.client
 import logging
 import struct
+import time
 import urllib.request
 from pathlib import Path
 
@@ -11,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 CHUNK_BYTES = 64 * 1024 * 1024
 TIMEOUT = 60
+RETRIES = 5
 
 
 def content_length(url: str) -> int:
@@ -19,17 +22,36 @@ def content_length(url: str) -> int:
         return int(response.headers["Content-Length"])
 
 
+class RangeNotSupported(OSError):
+    """The server ignored the Range header; retrying cannot help."""
+
+
 def fetch_range(url: str, start: int, length: int) -> bytes:
     """Bytes [start, start + length) of url; fails unless the server honors ranges."""
     request = urllib.request.Request(
         url, headers={"Range": f"bytes={start}-{start + length - 1}"})
     with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
         if response.status != 206:
-            raise OSError(f"{url} ignored the Range header (status {response.status})")
+            raise RangeNotSupported(f"{url} ignored the Range header (status {response.status})")
         data = response.read()
     if len(data) != length:
         raise OSError(f"{url}: asked for {length} bytes at {start}, got {len(data)}")
     return data
+
+
+def fetch_range_retry(url: str, start: int, length: int, tries: int = RETRIES,
+                      sleep=time.sleep) -> bytes:
+    """fetch_range with exponential backoff; every failure is logged, the last one is raised."""
+    for attempt in range(1, tries + 1):
+        try:
+            return fetch_range(url, start, length)
+        except RangeNotSupported:
+            raise
+        except (OSError, http.client.HTTPException) as exc:
+            logger.warning(f"{url} bytes {start}+{length}: attempt {attempt}/{tries} failed: {exc!r}")
+            if attempt == tries:
+                raise OSError(f"{url}: giving up after {tries} attempts at byte {start}") from exc
+            sleep(min(2 ** attempt, 60))
 
 
 def download_slice(
@@ -42,7 +64,8 @@ def download_slice(
 ) -> Path:
     """Write header + url[byte_start:byte_end] to dest, resuming a partial file.
 
-    The file appears under its final name only when complete.
+    The file appears under its final name only when complete and of the expected size.
+    Progress is logged about every 5% with the transfer rate.
     """
     dest = Path(dest)
     if dest.exists():
@@ -57,13 +80,20 @@ def download_slice(
     if not part.exists():
         part.write_bytes(header)
     done = max(part.stat().st_size, len(header))
+    start_done, started, last_pct = done, time.time(), -1
     with part.open("r+b") as f:
         f.seek(done)
         while done < total:
             take = min(chunk_bytes, total - done)
-            f.write(fetch_range(url, byte_start + done - len(header), take))
+            f.write(fetch_range_retry(url, byte_start + done - len(header), take))
             done += take
-            logger.info(f"{dest.name}: {done / total:.1%}")
+            pct = int(100 * done / total) // 5 * 5
+            if pct > last_pct:
+                last_pct = pct
+                rate = (done - start_done) / max(time.time() - started, 1e-6) / 2 ** 20
+                logger.info(f"{dest.name}: {done / total:.0%} of {total / 2 ** 30:.2f} GiB at {rate:.0f} MiB/s")
+    if part.stat().st_size != total:
+        raise OSError(f"{part}: {part.stat().st_size} bytes written, expected {total}")
     part.rename(dest)
     return dest
 

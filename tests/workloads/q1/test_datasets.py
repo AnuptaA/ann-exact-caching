@@ -226,3 +226,39 @@ def test_esci_build_writes_products_and_distinct_queries(tmp_path):
     assert seen[0] == ["a", "b", "c", "d"] and seen[1][0] == "title 0" and seen[1][1] == "title 1. first 1"
     assert np.load(tmp_path / "out" / "esci_products.npy").shape == (100, 4)
     assert np.load(tmp_path / "out" / "esci_query_ids.npy").tolist() == [1, 3, 4, 5]
+
+
+def test_fetch_range_retries_transient_failures_and_not_missing_range_support(server, monkeypatch):
+    handler, url = server
+    handler.files["/f"] = bytes(range(100))
+    calls = {"n": 0}
+    real = common.fetch_range
+
+    def flaky(u, start, length):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise OSError("connection reset")
+        return real(u, start, length)
+
+    monkeypatch.setattr(common, "fetch_range", flaky)
+    sleeps = []
+    assert common.fetch_range_retry(f"{url}/f", 10, 20, sleep=sleeps.append) == bytes(range(10, 30))
+    assert calls["n"] == 3 and sleeps == [2, 4]
+    monkeypatch.setattr(common, "fetch_range", lambda *a: (_ for _ in ()).throw(OSError("down")))
+    with pytest.raises(OSError, match="giving up after 3 attempts"):
+        common.fetch_range_retry(f"{url}/f", 0, 5, tries=3, sleep=lambda s: None)
+    monkeypatch.setattr(common, "fetch_range", real)
+    handler.honor_ranges = False
+    slept = []
+    with pytest.raises(common.RangeNotSupported):
+        common.fetch_range_retry(f"{url}/f", 0, 5, sleep=slept.append)
+    assert slept == []                                         # permanent: no retry
+
+
+def test_download_verifies_the_final_size(server, tmp_path, monkeypatch):
+    handler, url = server
+    handler.files["/f"] = bytes(range(200))
+    monkeypatch.setattr(common, "fetch_range_retry", lambda u, s, n, **kw: bytes(n - 1))   # short writes
+    with pytest.raises(OSError, match="bytes written"):
+        common.download_slice(f"{url}/f", tmp_path / "x.bin", 0, 100, chunk_bytes=100)
+    assert not (tmp_path / "x.bin").exists()

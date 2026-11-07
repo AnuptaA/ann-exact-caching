@@ -2,8 +2,12 @@
 
 import hashlib
 import json
+import logging
+import os
 import re
+import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -15,24 +19,42 @@ from harness.runner.manifest import Cell
 from workloads.q1 import K, groundtruth, streams as stream_mod, universe
 from workloads.q1.cli import load_universe
 
+logger = logging.getLogger(__name__)
+
 AKER_REVISION = "e7639a52aec1320a47c5fa0b833c7214024931c9"
 
 
 class DatasetDir:
-    """Layout of one prepared dataset (built by the workloads and backend steps)."""
+    """Layout of one prepared dataset (built by `make q1-generate`)."""
 
     def __init__(self, root: Path, dataset: str, seed: int = 0):
         self.root = Path(root) / dataset
-        self.base_path = self.root / "base.f32bin"
+        self.dataset = dataset
+
+        def need(path: Path, stage: str) -> Path:
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"{path} is missing: run `make q1-generate DATASET={dataset}` "
+                    f"(stage {stage}) before running systems on {dataset}")
+            return path
+
+        self.base_path = need(self.root / "base.f32bin", "to_f32")
         self.base = data.read_f32bin(self.base_path)
-        self.official = data.read_f32bin(self.root / "official.f32bin")
-        self.universe = load_universe(self.root / "universe.npz")
-        z = np.load(self.root / f"streams_seed{seed}.npz")
+        self.official = data.read_f32bin(need(self.root / "official.f32bin", "to_f32"))
+        self.universe = load_universe(need(self.root / "universe.npz", "inputs"))
+        z = np.load(need(self.root / f"streams_seed{seed}.npz", "inputs"))
         self.streams = {k: z[k] for k in z.files if k != "history_fraction"}
         self.history_fraction = float(z["history_fraction"])
-        self.answer_ids, self.answer_dist = load_answer_table(self.root / "answers")
+        first10 = self.root / "answers_first10.npz"
+        if first10.exists():
+            f = np.load(first10)
+            self.answer_ids, self.answer_dist = f["ids"], f["dist"]
+        else:
+            need(self.root / "answers", "answer_table")
+            self.answer_ids, self.answer_dist = load_answer_table(self.root / "answers")
+        need(self.root / "gt", "groundtruth")
         self.gt_ids, self.gt_dist = groundtruth.load_ground_truth(self.root / "gt")
-        self.backend = json.loads((self.root / "answers" / "meta.json").read_text())
+        self.backend = json.loads(need(self.root / "answers" / "meta.json", "answer_table").read_text())
 
     def vectors_of(self, ids: np.ndarray) -> np.ndarray:
         return universe.request_vectors(self.universe, self.official, ids)
@@ -63,7 +85,9 @@ def history_percentiles(cell: Cell, ds: DatasetDir, stream_ids: np.ndarray, hist
            "universe_wide": {str(p): v for p, v in wide.items()}, "distinct_history_queries": len(hist)}
     if path is not None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(out))
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")      # parallel configs may race
+        tmp.write_text(json.dumps(out))
+        tmp.replace(path)
     return out
 
 
@@ -85,29 +109,74 @@ def peak_pool_vectors(status_log: str) -> int:
     return max((int(m.group(1)) for m in POOL_LINE.finditer(status_log)), default=0)
 
 
+def stream_inputs(cell: Cell, ds: DatasetDir, ids: np.ndarray, work_dir: Path) -> Path:
+    """Driver inputs of one (dataset, stream, seed), shared by every system config.
+
+    Built once into a temporary directory and renamed, so parallel runs never see a
+    half-written set.
+    """
+    final = Path(work_dir) / "inputs" / f"{cell.dataset}-{cell.stream}-s{cell.stream_seed}"
+    if (final / "READY").exists():
+        return final
+    tmp = final.with_name(f"{final.name}.{os.getpid()}.tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    t = time.time()
+    data.write_f32bin(tmp / "requests.f32bin", ds.vectors_of(ids))
+    ids.astype("<i8").tofile(tmp / "stream.i64")
+    ds.answer_ids[ids][:, :K].astype("<i8").tofile(tmp / "answers.i64")
+    ds.answer_dist[ids][:, :K].astype("<f4").tofile(tmp / "dists.f32")
+    (tmp / "READY").write_text("")
+    try:
+        tmp.rename(final)
+    except OSError:                       # another process finished first
+        shutil.rmtree(tmp, ignore_errors=True)
+    logger.info(f"built shared inputs for {final.name} in {time.time() - t:.0f}s")
+    return final
+
+
+def run_driver(binary: Path, args: list, work: Path, timeout: float | None) -> None:
+    """Run the replay driver; a crash or timeout raises with the driver log tail."""
+    log_path = work / "driver.log"
+    with log_path.open("w") as log:
+        try:
+            subprocess.run([str(binary), *args], check=True, timeout=timeout, stdout=log,
+                           stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(f"{binary.name} exited with code {exc.returncode}; driver log tail:\n"
+                               f"{_tail(log_path)}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"{binary.name} timed out after {timeout}s; driver log tail:\n"
+                               f"{_tail(log_path)}") from exc
+
+
+def _tail(path: Path, lines: int = 30) -> str:
+    return "\n".join(Path(path).read_text(errors="replace").splitlines()[-lines:])
+
+
 def run_cell(cell: Cell, ds: DatasetDir, driver_dir: Path, out_dir: Path, work_dir: Path,
              timeout: float | None = None) -> Path:
     """Replay one cell; skips nothing here (the caller checks results.is_done)."""
+    started = time.time()
     ids = ds.streams[cell.stream]
     history_len = stream_mod.history_split(len(ids), ds.history_fraction)
+    logger.info(f"cell {cell.cell_id}: start ({len(ids)} requests)")
     settings, thresholds_info = settings_for(cell, ds, ids, history_len, cell.stream_seed,
                                              Path(work_dir) / "thresholds")
+    inputs = stream_inputs(cell, ds, ids, work_dir)
     work = Path(work_dir) / cell.cell_id
-    work.mkdir(parents=True, exist_ok=True)
-    data.write_f32bin(work / "requests.f32bin", ds.vectors_of(ids))
-    ids.astype("<i8").tofile(work / "stream.i64")
-    ds.answer_ids[ids][:, :K].astype("<i8").tofile(work / "answers.i64")
-    ds.answer_dist[ids][:, :K].astype("<f4").tofile(work / "dists.f32")
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
     binary = Path(driver_dir) / f"ak_replay_{settings.mode}"
-    with (work / "driver.log").open("w") as log:
-        subprocess.run([str(binary), "--base", str(ds.base_path),
-                        "--requests", str(work / "requests.f32bin"), "--stream", str(work / "stream.i64"),
-                        "--answers", str(work / "answers.i64"), "--dists", str(work / "dists.f32"),
-                        "--out-dir", str(work), "--status-every", "100", *settings.driver_args()],
-                       check=True, timeout=timeout, stdout=log, stderr=subprocess.STDOUT)
+    if not binary.exists():
+        raise FileNotFoundError(f"{binary} not found: build the drivers (make q1-setup or make build-replay)")
+    run_driver(binary, ["--base", str(ds.base_path), "--requests", str(inputs / "requests.f32bin"),
+                        "--stream", str(inputs / "stream.i64"), "--answers", str(inputs / "answers.i64"),
+                        "--dists", str(inputs / "dists.f32"), "--out-dir", str(work),
+                        "--status-every", "100", *settings.driver_args()], work, timeout)
     outcome = np.fromfile(work / "outcome.u8", dtype=np.uint8)
     result_ids = np.fromfile(work / "result_ids.i64", dtype="<i8").reshape(len(ids), K)
-    score = scoring.score_run(outcome, result_ids, ids, data.read_f32bin(work / "requests.f32bin"),
+    score = scoring.score_run(outcome, result_ids, ids, data.read_f32bin(inputs / "requests.f32bin"),
                               ds.base, ds.gt_dist[ids][:, K - 1], history_len)
     w = score.window
     peak = peak_pool_vectors((work / "status.log").read_text())
@@ -126,6 +195,11 @@ def run_cell(cell: Cell, ds: DatasetDir, driver_dir: Path, out_dir: Path, work_d
               "linked_hits_in_window": int((outcome[w] == scoring.LINKED).sum()),
               "seen_before_hits_in_window": int(score.seen_before_hit[w].sum()),
               "driver_summary": (work / "summary.txt").read_text()}
-    return results.write_result(out_dir, cell.cell_id, header, outcome=outcome,
+    path = results.write_result(out_dir, cell.cell_id, header, outcome=outcome,
                                 recall=score.recall.astype(np.float32), equality=score.equality,
                                 approximate=score.approximate, stream_ids=ids)
+    summary = header["summary"]
+    logger.info(f"cell {cell.cell_id}: done in {time.time() - started:.0f}s: hit rate "
+                f"{summary['hit_rate']:.4f}, delivered recall {summary['delivered_recall']:.4f}, "
+                f"peak pool {peak}/{settings.pool_size}")
+    return path

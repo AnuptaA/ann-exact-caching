@@ -7,6 +7,7 @@ taken from the backend. Resumable per block; blocks are written atomically.
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -31,12 +32,12 @@ def build_answer_table(backend, vectors, base, out_dir: Path, list_size: int, ef
     tmp_meta = meta_path.with_name(f"meta.{os.getpid()}.tmp")   # shards write the same content
     tmp_meta.write_text(json.dumps(meta))
     tmp_meta.replace(meta_path)
-    for b, start in enumerate(range(0, len(vectors), block)):
-        if b % shard[1] != shard[0]:
-            continue
+    mine = [b for b in range(-(-len(vectors) // block)) if b % shard[1] == shard[0]]
+    todo = [b for b in mine if not (out_dir / f"block_{b:07d}.npz").exists()]
+    logger.info(f"answer table shard {shard[0]}/{shard[1]}: {len(todo)} of {len(mine)} blocks to build")
+    began = time.time()
+    for b, start in ((b, b * block) for b in todo):
         path = out_dir / f"block_{b:07d}.npz"
-        if path.exists():
-            continue
         q = np.asarray(vectors[start:start + block], dtype=np.float32)
         ids = backend.search(q, list_size, ef_search)
         if (ids < 0).any() or (ids >= len(base)).any():
@@ -48,7 +49,10 @@ def build_answer_table(backend, vectors, base, out_dir: Path, list_size: int, ef
         np.savez(tmp, ids=np.take_along_axis(ids, order, 1).astype(np.int32),
                  dist=np.take_along_axis(dist, order, 1))
         tmp.rename(path)
-        logger.info(f"answer table block {b}")
+        built = todo.index(b) + 1
+        per_block = (time.time() - began) / built
+        logger.info(f"shard {shard[0]}: block {b} done ({built}/{len(todo)}, {block / per_block:.0f} "
+                    f"queries/s, ETA {(len(todo) - built) * per_block / 60:.1f} min)")
 
 
 def load_answer_table(out_dir: Path) -> tuple[np.ndarray, np.ndarray]:

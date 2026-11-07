@@ -1,12 +1,13 @@
 """Pipeline stage markers, ordering, force, and the tiny dataset through every stage."""
 
+import json
 import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from harness import datasets, pipeline
+from harness import data, datasets, pipeline
 
 
 def _ctx(tmp_path, **kw):
@@ -62,7 +63,7 @@ def test_wrong_base_shape_is_rejected(tmp_path):
     ctx = _ctx(tmp_path)
     pipeline.run_pipeline(ctx, stages=["fetch"])
     np.save(ctx.raw / "base.npy", np.zeros((10, 16), dtype=np.float32))
-    with pytest.raises(ValueError):
+    with pytest.raises(pipeline.StageError, match="tiny base is"):
         pipeline.run_pipeline(ctx, stages=["to_f32"])
 
 
@@ -105,3 +106,57 @@ def test_gpu_contexts_get_large_ground_truth_chunks_and_explicit_values_win(tmp_
     assert cpu.gt_query_chunk == pipeline.groundtruth.QUERY_CHUNK
     explicit = pipeline.make_context("tiny", tmp_path, device="cuda", gt_query_chunk=64, gt_base_chunk=None)
     assert explicit.gt_query_chunk == 64 and explicit.gt_base_chunk == pipeline.GPU_BASE_CHUNK
+
+
+def test_failures_are_loud_logged_and_recorded(tmp_path):
+    ctx = _ctx(tmp_path)
+    pipeline.run_pipeline(ctx, stages=["fetch"])
+    np.save(ctx.raw / "base.npy", np.zeros((10, 16), dtype=np.float32))
+    with pytest.raises(pipeline.StageError) as err:
+        pipeline.run_pipeline(ctx, stages=["to_f32"])
+    text = str(err.value)
+    assert "[tiny] stage to_f32 failed" in text and ".failed/to_f32.json" in text and "last log lines" in text
+    record = json.loads((ctx.root / ".failed" / "to_f32.json").read_text())
+    assert record["stage"] == "to_f32" and "Traceback" in record["traceback"]
+    assert not pipeline.is_done(ctx, "to_f32")
+    log = (ctx.logs / "generate.log").read_text()
+    assert "stage fetch done" in log and "FAILED" in log
+    assert json.loads((ctx.root / "env.json").read_text())["list_size"] == pipeline.LIST_SIZE
+    np.save(ctx.raw / "base.npy", np.random.default_rng(0).normal(size=(4000, 16)).astype(np.float32))
+    pipeline.run_pipeline(ctx, stages=["to_f32"])                           # a rerun clears the record
+    assert not (ctx.root / ".failed" / "to_f32.json").exists()
+
+
+def test_numpy_ground_truth_on_a_big_dataset_is_refused_unless_allowed(tmp_path):
+    ctx = pipeline.make_context("sphere", tmp_path, device="numpy")
+    ctx.root.mkdir(parents=True)
+    data.write_f32bin(ctx.root / "official.f32bin", np.zeros((96005, 768), dtype=np.float32)[:10])
+    big = ctx.spec
+    ctx = pipeline.Context(Path(tmp_path), big, device="numpy")
+    with pytest.raises(pipeline.StageError, match="Q1_ALLOW_SLOW"):
+        pipeline.check_resources(ctx, "groundtruth")
+    ctx.extra["allow_slow"] = True
+    pipeline.check_resources(ctx, "groundtruth")            # accepted on purpose (may warn)
+
+
+def test_validation_catches_bad_outputs(tmp_path):
+    ctx = _ctx(tmp_path)
+    pipeline.run_pipeline(ctx, stages=["fetch", "embed", "to_f32", "inputs", "groundtruth"])
+    pipeline.validate_stage(ctx, "to_f32")
+    pipeline.validate_stage(ctx, "inputs")
+    pipeline.validate_stage(ctx, "groundtruth")
+    bad = np.zeros((4000, 16), dtype=np.float32)
+    bad[5, 3] = np.nan
+    data.write_f32bin(ctx.root / "base.f32bin", np.where(np.isnan(bad), 1.0, bad)[:3999])
+    with pytest.raises(ValueError, match="shape"):
+        pipeline.validate_stage(ctx, "to_f32")
+    with pytest.raises(ValueError, match="NaN"):
+        pipeline.check_vectors("x", np.full((100, 4), np.nan, dtype=np.float32), 100, 4)
+    with pytest.raises(ValueError, match="zeros"):
+        pipeline.check_vectors("x", np.zeros((100, 4), dtype=np.float32), 100, 4)
+    first = next((ctx.root / "gt").glob("chunk_*.npz"))
+    z = dict(np.load(first))
+    z["ids"][0, 0] = 10 ** 9
+    np.savez(first, **z)
+    with pytest.raises(ValueError, match="out-of-range"):
+        pipeline.validate_stage(ctx, "groundtruth")

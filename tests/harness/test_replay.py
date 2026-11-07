@@ -160,3 +160,45 @@ def test_collect_table_and_csv(dataset, tmp_path):
     assert collect.write_csv(tmp_path / "r", tmp_path / "out.csv") == 2
     assert "hit_rate" in (tmp_path / "out.csv").read_text().splitlines()[0]
     assert "uniform" in collect.format_table(table)
+
+
+def test_missing_dataset_files_give_actionable_errors(tmp_path):
+    (tmp_path / "nope").mkdir()
+    with pytest.raises(FileNotFoundError, match=r"make q1-generate DATASET=nope"):
+        replay.DatasetDir(tmp_path, "nope")
+
+
+def test_driver_crash_and_timeout_report_the_log_tail(tmp_path):
+    crash = tmp_path / "crash.sh"
+    crash.write_text("#!/bin/sh\necho 'about to fail: bad input' >&2\nexit 3\n")
+    crash.chmod(0o755)
+    with pytest.raises(RuntimeError, match="exited with code 3.*about to fail"):
+        replay.run_driver(crash, [], tmp_path, None)
+    slow = tmp_path / "slow.sh"
+    slow.write_text("#!/bin/sh\necho started\nsleep 5\n")
+    slow.chmod(0o755)
+    with pytest.raises(RuntimeError, match="timed out after 0.5s.*started"):
+        replay.run_driver(slow, [], tmp_path, 0.5)
+
+
+def test_is_done_ignores_results_from_other_commits(tmp_path):
+    header = {"cell": {}, "config_hash": "h", "commit": "aaaa1111", "backend": "b", "ef_search": 1,
+              "aker_revision": "r"}
+    results.write_result(tmp_path, "c1", header, x=np.zeros(1))
+    assert results.is_done(tmp_path, "c1") and results.is_done(tmp_path, "c1", "aaaa1111")
+    assert not results.is_done(tmp_path, "c1", "bbbb2222") and not results.is_done(tmp_path, "c2")
+
+
+@needs_driver
+def test_stream_inputs_are_built_once_and_shared_by_configs(dataset, tmp_path):
+    ds = replay.DatasetDir(dataset, "toy")
+    work = tmp_path / "w"
+    for cell in (manifest.Cell("toy", "uniform", "aker", "paper", 10),
+                 manifest.Cell("toy", "uniform", "proximity", "p1", 5)):
+        replay.run_cell(cell, ds, DRIVERS, tmp_path / "r", work)
+    shared = list((work / "inputs").iterdir())
+    assert [p.name for p in shared] == ["toy-uniform-s0"] and (shared[0] / "READY").exists()
+    assert not list((work / "inputs").glob("*.tmp"))
+    with pytest.raises(FileNotFoundError, match="build the drivers"):
+        replay.run_cell(manifest.Cell("toy", "uniform", "aker", "paper", 10), ds, tmp_path / "nodrivers",
+                        tmp_path / "r2", work)

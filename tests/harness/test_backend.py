@@ -208,3 +208,34 @@ def test_real_small_ef_search_is_not_exact_and_sized_build_does_not_warn():
         rows = ef_tuning.sweep(pgvector.PgvectorBackend(conn, table="t_q1"), queries, base, dist[:, 9],
                                grid=(10, 40, 400))
         assert rows[0]["recall"] < 1.0 and rows[0]["recall"] < rows[-1]["recall"]
+
+
+def test_binary_rows_layout():
+    from harness.backend import load
+    rows = np.array([[1.0, -2.0], [0.5, 3.0]], dtype=np.float32)
+    blob = load.binary_rows(rows, 7)
+    per_row = 2 + 4 + 8 + 4 + 4 + 8
+    assert len(blob) == 2 * per_row
+    first = blob[:per_row]
+    assert first[:2] == (2).to_bytes(2, "big") and first[2:6] == (8).to_bytes(4, "big")
+    assert int.from_bytes(first[6:14], "big") == 7 and int.from_bytes(first[14:18], "big") == 12
+    assert first[18:20] == (2).to_bytes(2, "big") and np.frombuffer(first[22:], dtype=">f4").tolist() == [1.0, -2.0]
+
+
+@pytest.mark.skipif(not os.environ.get("PGVECTOR_TEST_DSN"), reason="needs PostgreSQL + pgvector")
+def test_real_binary_copy_matches_text_copy_and_checks_the_count():
+    import psycopg
+    from harness.backend import load
+    rng = np.random.default_rng(3)
+    base = rng.normal(size=(2500, 12)).astype(np.float32)
+    with psycopg.connect(os.environ["PGVECTOR_TEST_DSN"]) as conn:
+        load.load_base(conn, base, table="t_bin", chunk=700, binary=True)
+        load.load_base(conn, base, table="t_txt", chunk=700, binary=False)
+        cur = conn.cursor()
+        cur.execute("SELECT count(*) FROM t_bin b JOIN t_txt t USING (id) WHERE b.embedding = t.embedding")
+        assert cur.fetchone()[0] == 2500
+        cur.execute("SELECT embedding::text FROM t_bin WHERE id = 5")
+        got = np.array([float(x) for x in cur.fetchone()[0].strip("[]").split(",")], dtype=np.float32)
+        assert np.array_equal(got, base[5])
+        cur.execute("DROP TABLE t_bin"); cur.execute("DROP TABLE t_txt")
+        conn.commit()

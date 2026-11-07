@@ -1,10 +1,13 @@
 """Results: one atomic .npz per cell with per-request fields and a JSON header."""
 
 import json
+import logging
 import subprocess
 from pathlib import Path
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
@@ -18,8 +21,18 @@ def result_path(out_dir: Path, cell_id: str) -> Path:
     return Path(out_dir) / f"{cell_id}.npz"
 
 
-def is_done(out_dir: Path, cell_id: str) -> bool:
-    return result_path(out_dir, cell_id).exists()
+def is_done(out_dir: Path, cell_id: str, commit: str | None = None) -> bool:
+    """A finished cell; with commit, a result from another commit counts as not done."""
+    path = result_path(out_dir, cell_id)
+    if not path.exists():
+        return False
+    if commit is None:
+        return True
+    stored = read_result(path)[0].get("commit")
+    if stored != commit:
+        logger.warning(f"{path.name} was produced by commit {str(stored)[:8]}, not {commit[:8]}: redoing")
+        return False
+    return True
 
 
 def write_result(out_dir: Path, cell_id: str, header: dict, **per_request) -> Path:

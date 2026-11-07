@@ -184,3 +184,35 @@ def test_zipf_rank_permutation_is_shared_across_exponents():
         counts = np.bincount(ids // uni.group_size, minlength=uni.n_groups)
         tops.append(np.argsort(-counts)[:3].tolist())
     assert tops[1] == tops[2] and tops[0][0] == tops[2][0]          # same popular groups
+
+
+@pytest.mark.skipif(not _torch_devices(), reason="needs torch")
+def test_resident_base_and_chunk_fitting_match_the_numpy_path(tmp_path, monkeypatch):
+    rng = np.random.default_rng(2)
+    base = rng.normal(size=(2500, 16)).astype(np.float32)
+    queries = rng.normal(size=(30, 16)).astype(np.float32)
+    resident = groundtruth.DeviceBase.try_load(base, "cpu", 600)
+    assert resident is not None and len(resident.chunks) == 5
+    ids_np, dist_np = groundtruth.exact_topk_chunk(queries, base, k=30, device="numpy", base_chunk=600)
+    ids_r, dist_r = groundtruth.exact_topk_chunk(queries, base, k=30, device="cpu", base_chunk=600,
+                                                 resident=resident)
+    assert np.array_equal(ids_np, ids_r) and np.array_equal(dist_np, dist_r)
+    assert groundtruth.DeviceBase.try_load(base, "numpy", 600) is None
+    monkeypatch.setattr(groundtruth, "free_device_bytes", lambda device: 1000)
+    assert groundtruth.DeviceBase.try_load(base, "cpu", 600) is None               # does not fit
+    monkeypatch.setattr(groundtruth, "free_device_bytes", lambda device: 10 ** 9)
+    q, b = groundtruth.fit_chunks("cuda", 8192, 131072)
+    assert 3 * 4 * q * b <= 0.4 * 10 ** 9 and q >= 64 and b >= 4096
+    full = groundtruth.build_ground_truth(queries, base, tmp_path / "gt", k=20, device="cpu",
+                                          query_chunk=10, base_chunk=700)
+    assert np.array_equal(full[0], groundtruth.exact_topk_chunk(queries, base, k=20)[0])
+
+
+@pytest.mark.skipif(not _torch_devices(), reason="needs torch")
+def test_ground_truth_with_shrunk_query_sub_batches_is_identical(tmp_path, monkeypatch):
+    rng = np.random.default_rng(4)
+    base = rng.normal(size=(1500, 8)).astype(np.float32)
+    queries = rng.normal(size=(40, 8)).astype(np.float32)
+    monkeypatch.setattr(groundtruth, "fit_chunks", lambda device, q, b: (7, 500))   # force sub-batches
+    got = groundtruth.build_ground_truth(queries, base, tmp_path / "gt", k=15, device="cpu", query_chunk=20)
+    assert np.array_equal(got[0], groundtruth.exact_topk_chunk(queries, base, k=15)[0])

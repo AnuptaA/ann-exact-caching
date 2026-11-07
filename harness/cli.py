@@ -36,7 +36,8 @@ def _grid(args):
 
 def _run(args):
     cells = _cells(args)
-    todo = [c for c in cells if not results.is_done(args.out_dir, c.cell_id)]
+    commit = results.git_state()["commit"]
+    todo = [c for c in cells if not results.is_done(args.out_dir, c.cell_id, commit)]
     logger.info(f"{len(cells)} cells in this shard, {len(todo)} to run")
     loaded: dict = {}
     for cell in todo:
