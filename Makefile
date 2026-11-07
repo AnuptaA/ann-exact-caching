@@ -16,6 +16,7 @@ SHELL := /bin/bash
 .PHONY: sift-prepare esci-prepare
 .PHONY: populate-esci populate-sift eval-core eval-final eval-shell
 .PHONY: online-prepare online-run online-summary figures
+.PHONY: test-q1 build-replay
 .PHONY: test test-utils test-dataloaders test-generation test-cache test-approximate
 .PHONY: clobber clobber-sift clobber-esci
 
@@ -92,6 +93,15 @@ test-dataloaders:
 
 test-generation:
 	$(PYTHON) -m pytest tests/generation/ -q
+
+# -- Q1 (workloads and harness) ---------------------------------------------
+
+test-q1:
+	$(PYTHON) -m pytest tests/workloads tests/harness -q
+
+build-replay:
+	cmake -S harness/cpp -B build/replay -DBOOST_ROOT=$$(brew --prefix boost) -DFAISS_ROOT=$$(brew --prefix faiss) -DLIBOMP_ROOT=$$(brew --prefix libomp)
+	cmake --build build/replay -j 4
 
 # -- Cleanup ----------------------------------------------------------------
 
