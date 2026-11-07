@@ -172,12 +172,12 @@ def test_driver_crash_and_timeout_report_the_log_tail(tmp_path):
     crash = tmp_path / "crash.sh"
     crash.write_text("#!/bin/sh\necho 'about to fail: bad input' >&2\nexit 3\n")
     crash.chmod(0o755)
-    with pytest.raises(RuntimeError, match="exited with code 3.*about to fail"):
+    with pytest.raises(RuntimeError, match="(?s)exited with code 3.*about to fail"):
         replay.run_driver(crash, [], tmp_path, None)
     slow = tmp_path / "slow.sh"
     slow.write_text("#!/bin/sh\necho started\nsleep 5\n")
     slow.chmod(0o755)
-    with pytest.raises(RuntimeError, match="timed out after 0.5s.*started"):
+    with pytest.raises(RuntimeError, match="(?s)timed out after 0.5s.*started"):
         replay.run_driver(slow, [], tmp_path, 0.5)
 
 
