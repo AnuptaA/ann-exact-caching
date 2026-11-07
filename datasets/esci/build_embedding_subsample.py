@@ -3,6 +3,9 @@
 """
 Build an ESCI embedding subsample from the raw ESCI parquet files.
 
+Feeds the approximate-hits pipeline (`populate esci`, 50K products). Research question 1
+uses the full product set instead: see workloads/q1/datasets/esci.py.
+
 Follows datasets/esci/README_esci.md:
   - model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
   - product text: "title. first_bullet_point" (title alone if no bullets)

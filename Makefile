@@ -13,33 +13,24 @@ SHELL := /bin/bash
 .SHELLFLAGS := -o pipefail -c
 
 .PHONY: all help
-.PHONY: sift-prepare esci-prepare
 .PHONY: populate-esci populate-sift eval-core eval-final eval-shell
 .PHONY: online-prepare online-run online-summary figures
 .PHONY: test-q1 build-replay
 .PHONY: q1-bg q1-setup q1-guard q1-preflight q1-generate q1-stage q1-run q1-run-all q1-collect q1-fidelity q1-snapshot q1-restore q1-smoke q1-pg-start q1-pg-stop
-.PHONY: test test-utils test-dataloaders test-generation test-cache test-approximate
-.PHONY: clobber clobber-sift clobber-esci
+.PHONY: test test-cache test-approximate
 
 all: help
 
 help:
-	@echo "Data:      sift-prepare | esci-prepare"
 	@echo "Populate:  populate-esci | populate-sift      (writes results.json into RUN)"
 	@echo "Evaluate:  eval-core | eval-final | eval-shell   (RUN=<run dir>)"
 	@echo "Online:    online-prepare | online-run METHOD=<static|periodic|triggered|lru|aker|qvcache> | online-summary"
 	@echo "Figures:   figures"
-	@echo "Tests:     test | test-utils | test-cache | test-approximate | test-dataloaders | test-generation"
-	@echo "Cleanup:   clobber | clobber-sift | clobber-esci"
+	@echo "Q1:        q1-setup | q1-smoke | q1-generate DATASET=<d> | q1-run-<aker|proximity-p0.1|proximity-p1>-b<1|5|10> | q1-collect | q1-fidelity (see harness/README.md)"
+	@echo "Tests:     test | test-cache | test-approximate | test-q1"
 	@echo "Retired exact-caching pipelines live in stale/ (see stale/README.md)."
 
-# -- Data -------------------------------------------------------------------
 
-sift-prepare:
-	$(PY) datasets/sift/prepare_benchmark.py --all
-
-esci-prepare:
-	$(PY) datasets/esci/prepare_benchmark.py --all
 
 # -- Populate and evaluate --------------------------------------------------
 
@@ -80,8 +71,6 @@ figures:
 test:
 	$(PYTHON) -m pytest tests/ -q
 
-test-utils:
-	$(PYTHON) -m pytest tests/utils/ tests/base/ -q
 
 test-cache:
 	$(PYTHON) -m pytest tests/cache/ -q
@@ -89,11 +78,7 @@ test-cache:
 test-approximate:
 	$(PYTHON) -m pytest tests/approximate_hits/ -q
 
-test-dataloaders:
-	$(PYTHON) -m pytest tests/dataloaders/ -q
 
-test-generation:
-	$(PYTHON) -m pytest tests/generation/ -q
 
 # -- Q1 (workloads and harness) ---------------------------------------------
 # On the instance: make q1-setup, make q1-smoke, make q1-generate DATASET=esci, then
@@ -208,14 +193,3 @@ q1-smoke: q1-guard
 	$(PY) -m harness collect --out-dir $(Q1_DATA)/smoke_results
 	$(PYTHON) -m pytest tests/workloads/q1/test_core.py -q -k "torch or resident"
 
-# -- Cleanup ----------------------------------------------------------------
-
-clobber: clobber-sift clobber-esci
-	find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-	find . -name "*.pyc" -delete 2>/dev/null || true
-
-clobber-sift:
-	find datasets/sift -maxdepth 1 -type d -name "sift_b*" -exec rm -rf {} +
-
-clobber-esci:
-	find datasets/esci -maxdepth 1 -type d -name "esci_c*" -exec rm -rf {} +

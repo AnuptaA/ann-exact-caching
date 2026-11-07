@@ -4,11 +4,11 @@ scikit-learn
 matplotlib
 tqdm
 pytest
+lightgbm
 
-# datasets/esci/build_embedding_subsample.py (ESCI embedding build only)
+# ESCI 50K embedding sample (datasets/esci/build_embedding_subsample.py, used by `populate esci`)
 pandas
 torch
 sentence-transformers
 
-# simulations/approximate_hits/eval_focused.py only
-lightgbm
+# Q1 (workloads and harness) on the GPU instance: see requirements-q1.txt

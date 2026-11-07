@@ -12,7 +12,7 @@ from typing import Optional
 
 import numpy as np
 
-from datasets.dataloaders import load_fvecs_fast
+from utils.base.io import load_fvecs_fast
 from utils.base.knn import exact_topk
 from utils.cache.entries import build_entry_tables
 
