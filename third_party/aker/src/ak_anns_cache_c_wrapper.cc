@@ -115,6 +115,10 @@ void akerImportAnnsCacheConfig(char* path, anns_cache_parameter_c_t* parameter)
     parameter->tuning.alpha_loosen = parameter_info.tuning.alpha_loosen;
 
     parameter->distance_metric = static_cast<uint8_t>(parameter_info.distance_metric);
+
+    parameter->filter.hnsw_m = parameter_info.filter.hnsw_m;
+    parameter->filter.ef_search = parameter_info.filter.ef_search;
+    parameter->filter.ef_construction = parameter_info.filter.ef_construction;
 }
 
 bool akerDefaultConversionFunction(void* src, size_t src_size, size_t dim, void* dst, uint8_t* aux)
@@ -148,6 +152,14 @@ anns_cache_c_wrapper_t* akerCreateAnnsCache(anns_cache_parameter_c_t parameter)
 
     parameter_info.distance_metric = static_cast<aker::distance_metric_t>(parameter.distance_metric);
 
+    /* Zero-initialized callers keep the defaults. */
+    if (parameter.filter.hnsw_m > 0)
+        parameter_info.filter.hnsw_m = parameter.filter.hnsw_m;
+    if (parameter.filter.ef_search > 0)
+        parameter_info.filter.ef_search = parameter.filter.ef_search;
+    if (parameter.filter.ef_construction > 0)
+        parameter_info.filter.ef_construction = parameter.filter.ef_construction;
+
     /* Create wrapper and cache instance. */
     anns_cache_c_wrapper_t* wrapper = new anns_cache_c_wrapper_t;
     wrapper->anns_cache = asChar(new aker::ANNSCache(parameter_info));
@@ -167,6 +179,10 @@ anns_cache_c_wrapper_t* akerCreateAnnsCache(anns_cache_parameter_c_t parameter)
     wrapper->parameter.tuning.alpha_loosen = parameter_info.tuning.alpha_loosen;
 
     wrapper->parameter.distance_metric = static_cast<uint8_t>(parameter_info.distance_metric);
+
+    wrapper->parameter.filter.hnsw_m = parameter_info.filter.hnsw_m;
+    wrapper->parameter.filter.ef_search = parameter_info.filter.ef_search;
+    wrapper->parameter.filter.ef_construction = parameter_info.filter.ef_construction;
 
     return wrapper;
 }

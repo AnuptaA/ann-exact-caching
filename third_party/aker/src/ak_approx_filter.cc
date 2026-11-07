@@ -77,10 +77,6 @@ namespace aker
             std::string getStatusText() noexcept;
 
         private:
-            static constexpr int k_hnsw_m = 4;
-            static constexpr int k_hnsw_ef_search = 8;
-            static constexpr int k_hnsw_ef_construction = 16;
-
             anns_cache_config_t                    parameter_;
 
             size_t                                      add_count_;
@@ -98,9 +94,9 @@ namespace aker
         {
             /* Builds a small HNSW index wrapped by IndexIDMap so external IDs are preserved.
              */
-            faiss::IndexHNSWFlat* hnsw_index = new faiss::IndexHNSWFlat(parameter_.vector_format.dimension, k_hnsw_m, metric);
-            hnsw_index->hnsw.efSearch = k_hnsw_ef_search;
-            hnsw_index->hnsw.efConstruction = k_hnsw_ef_construction;
+            faiss::IndexHNSWFlat* hnsw_index = new faiss::IndexHNSWFlat(parameter_.vector_format.dimension, parameter_.filter.hnsw_m, metric);
+            hnsw_index->hnsw.efSearch = parameter_.filter.ef_search;
+            hnsw_index->hnsw.efConstruction = parameter_.filter.ef_construction;
 
             hnsw_index_wrapper_.reset(new faiss::IndexIDMap(hnsw_index));
             reg_map_.clear();

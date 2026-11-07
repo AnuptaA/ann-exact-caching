@@ -67,6 +67,17 @@ namespace aker
     };
 
     /**
+     * @brief Query-filter (FAISS HNSW) parameters. Local patch 3: these were
+     * compile-time constants upstream; the defaults keep the upstream values.
+     */
+    struct FilterConfig
+    {
+        int hnsw_m{4};
+        int ef_search{8};
+        int ef_construction{16};
+    };
+
+    /**
      * @brief Project-wide configuration used to construct the cache.
      */
     struct ANNSCacheConfig
@@ -74,6 +85,7 @@ namespace aker
         VectorFormatConfig vector_format;
         CacheCapacityConfig capacity;
         AlgorithmTuningConfig tuning;
+        FilterConfig filter;
 
         distance_metric_t distance_metric{distance_metric_t::DISTANCE_METRIC_L2};
     };

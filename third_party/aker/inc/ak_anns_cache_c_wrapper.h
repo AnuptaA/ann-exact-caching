@@ -58,6 +58,13 @@ typedef struct AlgorithmTuningConfigC {
     float alpha_loosen;
 } anns_cache_tuning_config_c_t;
 
+/** Local patch 3: query-filter HNSW parameters (defaults 4 / 8 / 16 upstream). */
+typedef struct FilterConfigC {
+    int hnsw_m;
+    int ef_search;
+    int ef_construction;
+} anns_cache_filter_config_c_t;
+
 typedef struct ANNSCacheConfigC {
     anns_cache_vector_format_config_c_t vector_format;
     anns_cache_capacity_config_c_t capacity;
@@ -65,6 +72,8 @@ typedef struct ANNSCacheConfigC {
 
     /** 0: L2, 1: Inner Product */
     uint8_t distance_metric;
+
+    anns_cache_filter_config_c_t filter;
 } anns_cache_parameter_c_t;
 
 /**
