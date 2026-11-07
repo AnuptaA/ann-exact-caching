@@ -99,7 +99,8 @@ def test_fidelity_run_on_the_tiny_database(tmp_path):
     assert out["report"]["5%"]["delivered_recall"] >= 0.8 and out["report"]["5%"]["hit_rate"] > 0.3
 
 
-def test_gpu_contexts_get_large_ground_truth_chunks_and_explicit_values_win(tmp_path):
+def test_gpu_contexts_get_large_ground_truth_chunks_and_explicit_values_win(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline, "auto_device", lambda: "cuda")
     gpu = pipeline.make_context("tiny", tmp_path, device="cuda")
     assert (gpu.gt_query_chunk, gpu.gt_base_chunk) == (pipeline.GPU_QUERY_CHUNK, pipeline.GPU_BASE_CHUNK)
     cpu = pipeline.make_context("tiny", tmp_path, device="numpy")
