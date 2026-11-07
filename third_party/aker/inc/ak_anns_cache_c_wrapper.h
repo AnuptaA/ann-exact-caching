@@ -250,6 +250,9 @@ void akerMarkVectorDeleted(anns_cache_c_wrapper_t* wrapper, uint64_t vector_id);
  */
 char* akerGetCacheStatusText(anns_cache_c_wrapper_t* wrapper);
 
+/* Local patch 6: number of distinct vectors currently pooled (constant time). */
+size_t akerGetPooledVectorCount(anns_cache_c_wrapper_t* wrapper);
+
 /**
  * @brief Exports trace/telemetry files.
  */

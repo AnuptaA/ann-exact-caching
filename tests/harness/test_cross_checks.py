@@ -113,3 +113,35 @@ def test_percentile_thresholds_match_an_exact_percentile():
     for pct, value in got.items():
         assert value == pytest.approx(np.percentile(exact, pct), rel=0.05)
     assert config.pool_size_for(1_814_924, 1) == 18_149
+
+
+@needs_driver
+def test_driver_startup_values_peak_pool_and_library_counters(toy, tmp_path):
+    ds = replay.DatasetDir(toy, "toy")
+    for system, setting, budget in (("aker", "paper", 5), ("proximity", "p0.1", 10)):
+        cell = manifest.Cell("toy", "zipf_0.99", system, setting, budget)
+        header, arrays = results.read_result(replay.run_cell(cell, ds, DRIVERS, tmp_path / "r", tmp_path / "w"))
+        param, flt = header["driver_startup"]["param"], header["driver_startup"]["filter"]
+        assert int(param["pool_size"]) == config.pool_size_for(len(ds.base), budget)
+        assert (float(param["alpha_tighten"]), float(param["alpha_loosen"]), int(param["top_delta"])) == (0.25, 1.1, 0)
+        assert (flt["faiss_M"], flt["efConstruction"], flt["efSearch"]) == ("4", "8", "16")
+        assert float(param["global_thresh_sq_l2"]) == pytest.approx(header["settings"]["global_thresh"], rel=1e-5)
+        assert 0 < header["peak_pool_vectors"] <= int(param["pool_size"])
+        assert header["counter_disagreements"] == 0
+
+
+def test_startup_check_rejects_wrong_values():
+    settings = config.AkerSettings(mode="standard", pool_size=100)
+    good = {"param": {"mode": "standard", "pool_size": "100", "k": "10", "top_delta": "0", "alpha_tighten": "0.25",
+                      "alpha_loosen": "1.1", "filter_m": "4", "filter_ef_construction": "8",
+                      "filter_ef_search": "16", "base_n": "1000", "requests": "50", "global_thresh_sq_l2": "0"},
+            "filter": {"faiss_M": "4", "efConstruction": "8", "efSearch": "16"}}
+    replay.check_startup(good, settings, 1000, 50)
+    for section, key, value in (("param", "pool_size", "99"), ("param", "alpha_loosen", "1.5"),
+                                ("filter", "efSearch", "8"), ("filter", "faiss_M", "8")):
+        bad = {s: dict(v) for s, v in good.items()}
+        bad[section][key] = value
+        with pytest.raises(RuntimeError, match=key):
+            replay.check_startup(bad, settings, 1000, 50)
+    with pytest.raises(RuntimeError, match="PARAM/FILTER"):
+        replay.check_startup({}, settings, 1000, 50)

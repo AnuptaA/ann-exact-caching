@@ -112,6 +112,7 @@ namespace aker
          * @brief Returns pool capacity.
          */
         size_t getCapacity() const noexcept;
+        size_t getPooledCount() const noexcept { return vector_map_.size(); }
 
         /**
          * @brief Returns current number of pooled vectors.

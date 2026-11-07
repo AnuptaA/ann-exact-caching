@@ -112,6 +112,55 @@ def settings_for(cell: Cell, ds: DatasetDir, stream_ids: np.ndarray, history_len
 POOL_LINE = re.compile(r"VectorSlotPool Status: (\d+) inserted out of total (\d+)")
 
 
+def parse_startup(driver_log: str) -> dict:
+    """Key=value pairs of the driver's PARAM line and of its FILTER line(s)."""
+    out: dict = {}
+    for line in driver_log.splitlines():
+        if line.startswith("PARAM "):
+            out["param"] = dict(item.split("=", 1) for item in line.split()[1:])
+        elif line.startswith("FILTER "):
+            out.setdefault("filter", dict(item.split("=", 1) for item in line.split()[1:]))
+    return out
+
+
+def check_startup(startup: dict, settings: config.AkerSettings, n_base: int, n_requests: int) -> None:
+    """The values the driver and FAISS actually hold must be the intended ones."""
+    param, flt = startup.get("param"), startup.get("filter")
+    if param is None or flt is None:
+        raise RuntimeError("driver log has no PARAM/FILTER startup lines (stale driver build?)")
+    want = {"mode": settings.mode, "pool_size": settings.pool_size, "k": settings.k,
+            "top_delta": settings.top_delta, "alpha_tighten": settings.alpha_tighten,
+            "alpha_loosen": settings.alpha_loosen, "filter_m": settings.filter_m,
+            "filter_ef_construction": settings.filter_ef_construction,
+            "filter_ef_search": settings.filter_ef_search, "base_n": n_base, "requests": n_requests,
+            "global_thresh_sq_l2": settings.global_thresh}
+    for key, expected in want.items():
+        got = param.get(key)
+        same = (got == expected) if isinstance(expected, str) else (
+            got is not None and abs(float(got) - float(expected)) <= 1e-5 * max(1.0, abs(float(expected))))
+        if not same:
+            raise RuntimeError(f"driver started with {key}={got}, expected {expected}")
+    faiss_view = {"faiss_M": settings.filter_m, "efConstruction": settings.filter_ef_construction,
+                  "efSearch": settings.filter_ef_search}
+    for key, expected in faiss_view.items():
+        if int(flt.get(key, -1)) != expected:
+            raise RuntimeError(f"FAISS holds {key}={flt.get(key)}, expected {expected}")
+
+
+def counter_disagreements(outcome: np.ndarray, final_status: str) -> int:
+    """Absolute differences between our outcome counts and the library's own hit counters.
+
+    Library "hit" is a lookup served by the entry stored under the same id (our equality);
+    "sim-hit" is every other hit, linked repeats included (our approximate); "miss" the rest.
+    """
+    counters = {name: int(re.search(rf"Cache {name}: (\d+)", final_status).group(1))
+                for name in ("hit", "sim-hit", "miss")}
+    ours = {"hit": int((outcome == scoring.EQUALITY).sum()),
+            "sim-hit": int(((outcome == scoring.APPROX) | (outcome == scoring.LINKED)).sum()),
+            "miss": int((outcome == scoring.MISS).sum())}
+    return sum(abs(counters[k] - ours[k]) for k in counters)
+
+
 def peak_pool_vectors(status_log: str) -> int:
     """Largest sampled count of unique pooled vectors in the driver's status log."""
     return max((int(m.group(1)) for m in POOL_LINE.finditer(status_log)), default=0)
@@ -193,7 +242,11 @@ def run_cell(cell: Cell, ds: DatasetDir, driver_dir: Path, out_dir: Path, work_d
     score = scoring.score_run(outcome, result_ids, ids, data.read_f32bin(inputs / "requests.f32bin"),
                               ds.base, ds.gt_dist[ids][:, K - 1], history_len)
     w = score.window
-    peak = peak_pool_vectors((work / "status.log").read_text())
+    startup = parse_startup((work / "driver.log").read_text())
+    check_startup(startup, settings, len(ds.base), len(ids))
+    driver_summary = dict(line.split("=", 1) for line in (work / "summary.txt").read_text().splitlines()
+                          if "=" in line and not line.startswith("final_status"))
+    peak = int(driver_summary["peak_pool"])
     if peak > settings.pool_size:
         raise RuntimeError(f"{cell.cell_id}: peak pool {peak} exceeds pool_size {settings.pool_size}")
     header = {"cell": cell.__dict__, "settings": settings.as_dict(),
@@ -202,8 +255,9 @@ def run_cell(cell: Cell, ds: DatasetDir, driver_dir: Path, out_dir: Path, work_d
               **results.git_state(), "backend": ds.backend["backend"],
               "ef_search": ds.backend["ef_search"], "list_size": ds.backend["list_size"],
               "aker_revision": AKER_REVISION, "history_len": history_len,
-              "summary": score.summary(), "peak_pool_vectors_sampled": peak,
+              "summary": score.summary(), "peak_pool_vectors": peak, "driver_startup": startup,
               "thresholds": thresholds_info,
+              "counter_disagreements": counter_disagreements(outcome, (work / "summary.txt").read_text()),
               "equality_hits_in_window": int(score.equality[w].sum()),
               "approximate_filter_hits_in_window": int((outcome[w] == scoring.APPROX).sum()),
               "linked_hits_in_window": int((outcome[w] == scoring.LINKED).sum()),

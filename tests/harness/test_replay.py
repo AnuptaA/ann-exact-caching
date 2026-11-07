@@ -83,7 +83,7 @@ def test_exact_repeats_are_equality_hits_and_misses_have_backend_recall(dataset,
               + header["linked_hits_in_window"])
     assert n_hits == round(header["summary"]["hit_rate"] * header["summary"]["requests_measured"])
     assert header["equality_hits_in_window"] <= header["seen_before_hits_in_window"]
-    assert 0 < header["peak_pool_vectors_sampled"] <= header["settings"]["pool_size"]
+    assert 0 < header["peak_pool_vectors"] <= header["settings"]["pool_size"]
 
 
 @needs_driver

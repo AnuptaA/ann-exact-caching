@@ -199,6 +199,7 @@ namespace aker
          * @brief Returns a human-readable status string.
          */
         std::string getStatusText() noexcept;
+        size_t getPooledVectorCount() noexcept;
 
         /**
          * @brief Returns a concise CSV summary (key,value).

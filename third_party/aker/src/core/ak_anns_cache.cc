@@ -519,6 +519,13 @@ namespace aker
         return telemetry_->buildStatusText();
     }
 
+    size_t
+    ANNSCache::getPooledVectorCount() noexcept
+    {
+        std::lock_guard<SpinMutex> cache_guard(context_->cache_lock);
+        return context_->vector_pool->getPooledCount();
+    }
+
     std::string
     ANNSCache::getSummaryCsv() noexcept
     {

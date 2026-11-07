@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <iostream>
 #include <unordered_map>
 #include <utility>
 
@@ -97,6 +98,10 @@ namespace aker
             faiss::IndexHNSWFlat* hnsw_index = new faiss::IndexHNSWFlat(parameter_.vector_format.dimension, parameter_.filter.hnsw_m, metric);
             hnsw_index->hnsw.efSearch = parameter_.filter.ef_search;
             hnsw_index->hnsw.efConstruction = parameter_.filter.ef_construction;
+            std::cerr << "FILTER faiss_M=" << hnsw_index->hnsw.nb_neighbors(1)
+                      << " efConstruction=" << hnsw_index->hnsw.efConstruction
+                      << " efSearch=" << hnsw_index->hnsw.efSearch
+                      << " metric=" << static_cast<int>(metric) << "\n";
 
             hnsw_index_wrapper_.reset(new faiss::IndexIDMap(hnsw_index));
             reg_map_.clear();

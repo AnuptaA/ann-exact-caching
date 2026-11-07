@@ -7,7 +7,7 @@ from harness.runner import results
 
 FIELDS = ["dataset", "stream", "system", "setting", "budget_percent", "stream_seed", "hit_rate",
           "equality_hit_rate", "approximate_hit_rate", "delivered_recall", "recall_on_hits",
-          "recall_on_misses", "requests_measured", "ef_search", "peak_pool_vectors_sampled",
+          "recall_on_misses", "requests_measured", "ef_search", "peak_pool_vectors",
           "commit", "dirty"]
 
 
@@ -16,7 +16,7 @@ def rows(out_dir: Path) -> list[dict]:
     for path in sorted(Path(out_dir).glob("*.npz")):
         header, _ = results.read_result(path)
         out.append({**header["cell"], **header["summary"], "ef_search": header["ef_search"],
-                    "peak_pool_vectors_sampled": header.get("peak_pool_vectors_sampled"),
+                    "peak_pool_vectors": header.get("peak_pool_vectors"),
                     "commit": header["commit"], "dirty": header["dirty"]})
     return out
 

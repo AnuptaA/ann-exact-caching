@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -197,6 +198,23 @@ int main(int argc, char** argv)
     }
 #endif
 
+    std::cout << "PARAM mode=" <<
+#if AKER_ENABLE_PROXIMITY_MODE
+        "proximity"
+#else
+        "standard"
+#endif
+              << " dim=" << dim << " base_n=" << base.n << " requests=" << m << " k=" << k
+              << " pool_size=" << parameter.capacity.pool_size << " top_delta=" << parameter.capacity.top_delta
+              << " global_thresh_sq_l2=" << parameter.tuning.global_thresh
+              << " alpha_tighten=" << parameter.tuning.alpha_tighten
+              << " alpha_loosen=" << parameter.tuning.alpha_loosen
+              << " risk_thresh=" << parameter.tuning.risk_thresh << " dropout=" << parameter.tuning.dropout
+              << " filter_m=" << parameter.filter.hnsw_m
+              << " filter_ef_construction=" << parameter.filter.ef_construction
+              << " filter_ef_search=" << parameter.filter.ef_search
+              << " metric=" << parameter.distance_metric << std::endl;
+
     anns_cache_c_wrapper_t* cache = akerCreateAnnsCache(parameter);
     if (cache == nullptr)
         return 3;
@@ -205,6 +223,7 @@ int main(int argc, char** argv)
     std::vector<int64_t> result_ids(m * k, -1);
     std::unordered_set<int64_t> seen;
     std::ofstream status_log(out_dir + "/status.log");
+    size_t peak_pool = 0;
     size_t hits_exact = 0, hits_approx = 0, hits_linked = 0, insert_failed = 0, link_failed = 0, invalid = 0;
 
     for (size_t i = 0; i < m; i++)
@@ -279,6 +298,7 @@ int main(int argc, char** argv)
                 akerDestroyVectorSlot(slot);
         }
         seen.insert(uid);
+        peak_pool = std::max(peak_pool, akerGetPooledVectorCount(cache));
         akerDestroyVectorView(q_view);
         akerDestroyVectorSlot(q_slot);
 
@@ -296,7 +316,7 @@ int main(int argc, char** argv)
 #else
         "standard"
 #endif
-            << "\nrequests=" << m << "\nhits_exact=" << hits_exact << "\nhits_approx=" << hits_approx << "\nhits_linked=" << hits_linked
+            << "\npeak_pool=" << peak_pool << "\nrequests=" << m << "\nhits_exact=" << hits_exact << "\nhits_approx=" << hits_approx << "\nhits_linked=" << hits_linked
             << "\ninsert_failed=" << insert_failed << "\nlink_failed=" << link_failed
             << "\ninvalid=" << invalid << "\nfinal_status=" << akerGetCacheStatusText(cache) << "\n";
     akerDestroyAnnsCache(cache);

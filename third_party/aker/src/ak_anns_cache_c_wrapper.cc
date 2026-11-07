@@ -489,6 +489,13 @@ char* akerGetCacheStatusText(anns_cache_c_wrapper_t* wrapper)
     return const_cast<char*>(tl_cache_string.c_str());
 }
 
+size_t akerGetPooledVectorCount(anns_cache_c_wrapper_t* wrapper)
+{
+    if (wrapper == nullptr)
+        return 0;
+    return asCache(wrapper->anns_cache)->getPooledVectorCount();
+}
+
 void akerExportTraceToFiles(anns_cache_c_wrapper_t* wrapper)
 {
     if (wrapper == nullptr)

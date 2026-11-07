@@ -21,3 +21,8 @@ Each entry is one commit. Upstream: sjoon-oh/aker `release` e7639a5.
    returned no candidate, and approximate hits never happened (only exact-id hits). The buffer now
    owns its storage (std::vector). Upstream's released numbers may depend on how their compiler laid
    out that stack; reported as a finding.
+6. inc/ak_vector_slot_pool.hh, inc/core/ak_anns_cache.hh, src/core/ak_anns_cache.cc,
+   inc/ak_anns_cache_c_wrapper.h, src/ak_anns_cache_c_wrapper.cc: `akerGetPooledVectorCount()`, a
+   constant-time count of pooled vectors, so the driver records the exact peak pool size instead of
+   sampling the O(pool) status text. src/ak_approx_filter.cc: one stderr line per filter creation with
+   the M, efConstruction and efSearch that FAISS holds (`FILTER faiss_M=... efConstruction=... efSearch=...`).
