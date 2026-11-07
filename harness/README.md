@@ -1,8 +1,8 @@
 # Harness (Q1)
 
 Aker and Proximity (Aker's fixed-threshold mode) replayed over a precomputed pgvector answer
-table. `harness/aker/DIFFERENCES.md` lists every difference from the paper;
-`third_party/aker/PATCHES.md` lists the local changes to the vendored library.
+table. `harness/DECISIONS.md` lists decisions, deviations and findings; `harness/aker/DIFFERENCES.md` lists
+every difference from the paper; `third_party/aker/PATCHES.md` lists the local changes to the library.
 
 ## Run book (EC2, Ubuntu 22.04 or 24.04, Linux x86_64, one CUDA GPU)
 
@@ -21,13 +21,21 @@ tree clean (every q1 target refuses a dirty tree).
                                      #   q1-run-proximity-p0.1-b{1,5,10}
                                      #   q1-run-proximity-p1-b{1,5,10}
     make q1-run-all                  # all nine, in order
-    make q1-collect                  # table + $Q1_DATA/results/summary.csv
+    make q1-collect                  # table + summary.csv in the results directory
     make q1-fidelity                 # Aker on Aker's released SPACEV stream (report only)
     make q1-snapshot SNAPSHOT=name   # tar of the stopped PostgreSQL data directory
     make q1-restore SNAPSHOT=name
 
-Variables: `Q1_DATA` (default /data/q1), `Q1_PG_DSN`, `Q1_PG_WORKERS` (parallel answer-table
-processes), `Q1_DEVICE` (auto, cuda, numpy), `DATASETS` (restrict a run to some datasets),
+Run long jobs detached: `make q1-bg TARGET="q1-generate DATASET=esci"` (log in `$Q1_DATA/logs/`).
+`make -j 9 q1-run-all` runs the nine configs in parallel. They read the precomputed table and do not need
+PostgreSQL, so `make q1-pg-stop` before them frees memory for the page cache.
+
+Logs: `$Q1_DATA/<dataset>/.logs/generate.log` (all stages, with progress and ETA),
+`answer_table_<i>.log` per shard, `env.json` (versions, commit), `.failed/<stage>.json` after a failure.
+A failed stage stops `make` with the stage name and the log tail. Results: `$Q1_DATA/results/<commit>/`.
+
+Variables: `Q1_DATA` (default /data/q1), `Q1_LIST_SIZE` (L, default 50), `Q1_ALLOW_SLOW=1` (accept CPU ground
+truth or CPU ESCI embedding), `Q1_PG_DSN`, `Q1_PG_WORKERS` (parallel answer-table processes), `Q1_DEVICE` (auto, cuda, numpy), `DATASETS` (restrict a run to some datasets),
 `Q1_DRIVERS`, `GT_QUERY_CHUNK`/`GT_BASE_CHUNK`.
 
 `q1-generate` runs these stages in order and skips finished ones (markers in

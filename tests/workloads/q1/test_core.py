@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from workloads.q1 import groundtruth, stats, streams, universe
-from workloads.q1.distance import l2_rows, l2_to_ids, sq_l2_rows
+from workloads.q1.distance import l2_rows, sq_l2_rows
 from workloads.q1.recall import recall_at_k, recall_batch
 
 RNG = np.random.default_rng(0)

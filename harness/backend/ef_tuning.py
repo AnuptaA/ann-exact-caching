@@ -2,8 +2,6 @@
 
 import time
 
-import numpy as np
-
 from workloads.q1.recall import recall_batch
 
 GRID = (10, 20, 30, 40, 50, 75, 100, 150, 200, 300, 400)
