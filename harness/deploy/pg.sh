@@ -5,7 +5,8 @@
 # Q1_DATA (snapshots go to $Q1_DATA/snapshots).
 set -euo pipefail
 
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
 PG_BIN="${PG_BIN:-/usr/lib/postgresql/16/bin}"

@@ -4,9 +4,11 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$root/harness/deploy/lib.sh"
-# shellcheck source=pins.env
+# shellcheck source-path=SCRIPTDIR source=pins.env
+# shellcheck source-path=SCRIPTDIR source=pins.env
 . "$root/harness/deploy/pins.env"
 build="${BUILD_DIR:-$root/build/replay}"
 cmake_bin="${CMAKE_BIN:-cmake}"

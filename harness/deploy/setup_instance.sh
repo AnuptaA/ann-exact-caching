@@ -9,11 +9,14 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 here="$root/harness/deploy"
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$here/lib.sh"
-# shellcheck source=pins.env
+# shellcheck source-path=SCRIPTDIR source=pins.env
+# shellcheck source-path=SCRIPTDIR source=pins.env
 . "$here/pins.env"
-# shellcheck source=toolchain.sh
+# shellcheck source-path=SCRIPTDIR source=toolchain.sh
+# shellcheck source-path=SCRIPTDIR source=toolchain.sh
 . "$here/toolchain.sh"
 
 CI=0

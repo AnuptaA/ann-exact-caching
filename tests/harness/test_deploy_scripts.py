@@ -5,6 +5,7 @@ Q1_DRYRUN. Fake `dpkg-query`, `cmake` and `gcc` stand in for stock Ubuntu 22.04 
 """
 
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -116,3 +117,10 @@ def test_scripts_use_strict_mode_and_guard_every_rm_rf():
             if "rm -rf" in stripped and not stripped.startswith("#"):
                 assert "--" in stripped and ("${" in stripped or "safe_rm_rf" in stripped or '"$1"' in stripped), \
                     f"{script.name}: unguarded {stripped}"
+
+
+@pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
+def test_deploy_scripts_are_shellcheck_clean():
+    scripts = sorted(str(p) for p in DEPLOY.glob("*.sh"))
+    out = subprocess.run(["shellcheck", "-x", "-s", "bash", *scripts], capture_output=True, text=True)
+    assert out.returncode == 0, out.stdout
