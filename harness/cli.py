@@ -55,7 +55,9 @@ def _generate(args):
     for name in datasets:
         ctx = pipeline.make_context(name, args.data_dir, args.dsn, args.device,
                                     encode_python=args.encode_python, pg_workers=args.pg_workers,
-                                    gt_query_chunk=args.gt_query_chunk, gt_base_chunk=args.gt_base_chunk)
+                                    gt_query_chunk=args.gt_query_chunk, gt_base_chunk=args.gt_base_chunk,
+                                    list_size=args.list_size)
+        ctx.extra.update(allow_slow=args.allow_slow, driver_dir=args.driver_dir)
         ran = pipeline.run_pipeline(ctx, args.stages, args.force)
         print(f"{name}: ran {ran or 'nothing (all stages done)'}")
 
@@ -188,6 +190,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default="auto", help="auto, numpy, cuda or mps (ground truth)")
     p.add_argument("--encode-python", default=sys.executable)
     p.add_argument("--pg-workers", type=int, default=4)
+    p.add_argument("--list-size", type=int, default=50, help="neighbors stored per query (L)")
+    p.add_argument("--allow-slow", action="store_true", help="accept ground truth on the numpy device")
+    p.add_argument("--driver-dir", default="build/replay")
     p.add_argument("--gt-query-chunk", type=int, default=None, help="default 1024; 8192 on cuda")
     p.add_argument("--gt-base-chunk", type=int, default=None, help="default 262144; 131072 on cuda")
     p.set_defaults(run=_generate)

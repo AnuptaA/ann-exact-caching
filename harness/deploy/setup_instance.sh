@@ -24,6 +24,29 @@ if [ -n "$(git -C "$root" status --porcelain)" ]; then
     exit 1
 fi
 
+# The data directory lives on the big volume. Create it with sudo and hand it to this user.
+data_parent="$(dirname "$Q1_DATA")"
+if [ ! -d "$Q1_DATA" ]; then
+    sudo mkdir -p "$Q1_DATA"
+fi
+sudo chown "$(id -u):$(id -g)" "$Q1_DATA"
+if [ "$(df --output=target "$Q1_DATA" | tail -1)" = "/" ]; then
+    echo "setup_instance.sh: WARNING: $Q1_DATA is on the root filesystem; mount the data volume there" \
+         "(for example at $data_parent) before generating SPHERE (needs about 250 GB)" >&2
+fi
+free_gb=$(df --output=avail -BG "$Q1_DATA" | tail -1 | tr -dc '0-9')
+echo "free space under $Q1_DATA: ${free_gb} GB"
+if [ "$free_gb" -lt 100 ]; then
+    echo "setup_instance.sh: less than 100 GB free under $Q1_DATA; refusing (set Q1_DATA to the big volume)" >&2
+    exit 1
+fi
+
+py_minor=$(python3 -c 'import sys; print(sys.version_info.minor)')
+if [ "$py_minor" -lt 10 ]; then
+    echo "setup_instance.sh: Python 3.10 or newer is required, found 3.$py_minor" >&2
+    exit 1
+fi
+
 sudo apt-get update
 sudo apt-get install -y build-essential cmake git curl ca-certificates gnupg lsb-release \
     python3-venv python3-dev libboost-all-dev libopenblas-dev libomp-dev zstd
@@ -68,7 +91,7 @@ if [ ! -f "$FAISS_ROOT/include/faiss/Index.h" ] && [ ! -f /usr/include/faiss/Ind
 fi
 
 # PostgreSQL cluster on the big disk, tuned for bulk loads and HNSW builds.
-mkdir -p "$Q1_DATA" "$Q1_PGDATA"
+mkdir -p "$Q1_PGDATA"
 if [ ! -f "$Q1_PGDATA/PG_VERSION" ]; then
     "$PG_BIN/initdb" -D "$Q1_PGDATA" -U postgres --auth=trust
     ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
@@ -80,6 +103,8 @@ max_parallel_maintenance_workers = 7
 max_wal_size = 64GB
 checkpoint_timeout = 30min
 synchronous_commit = off
+wal_level = minimal
+max_wal_senders = 0
 CONF
 fi
 
@@ -89,6 +114,12 @@ fi
 "$root/.venv/bin/pip" install -r "$root/requirements-q1.txt"
 [ -d "$root/.venv-encode" ] || python3 -m venv "$root/.venv-encode"
 "$root/.venv-encode/bin/pip" install -r "$root/requirements-encode.txt"
+
+# The GPU must be visible to torch in the main venv; otherwise ground truth would fall back to CPU.
+if ! "$root/.venv/bin/python" -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)"; then
+    echo "setup_instance.sh: WARNING: torch cannot see a CUDA device (driver missing or CPU-only instance)." \
+         "Ground truth and embeddings need a GPU; use a GPU AMI or set Q1_DEVICE=numpy for the smoke test." >&2
+fi
 
 # Replay drivers (standard and proximity).
 FAISS_ROOT="$FAISS_ROOT" bash "$root/harness/deploy/build_linux.sh"

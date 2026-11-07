@@ -17,7 +17,7 @@ SHELL := /bin/bash
 .PHONY: populate-esci populate-sift eval-core eval-final eval-shell
 .PHONY: online-prepare online-run online-summary figures
 .PHONY: test-q1 build-replay
-.PHONY: q1-setup q1-guard q1-preflight q1-generate q1-stage q1-run q1-run-all q1-collect q1-fidelity q1-snapshot q1-restore q1-smoke q1-pg-start q1-pg-stop
+.PHONY: q1-bg q1-setup q1-guard q1-preflight q1-generate q1-stage q1-run q1-run-all q1-collect q1-fidelity q1-snapshot q1-restore q1-smoke q1-pg-start q1-pg-stop
 .PHONY: test test-utils test-dataloaders test-generation test-cache test-approximate
 .PHONY: clobber clobber-sift clobber-esci
 
@@ -107,7 +107,8 @@ Q1_PG_WORKERS ?= 8
 Q1_DEVICE ?= auto
 Q1_DRIVERS ?= build/replay
 Q1_ENCODE_PY ?= $(if $(wildcard .venv-encode/bin/python),.venv-encode/bin/python,$(PYTHON))
-Q1_RESULTS ?= $(Q1_DATA)/results
+Q1_RESULTS ?= $(Q1_DATA)/results/$(shell git rev-parse --short HEAD 2>/dev/null)
+Q1_LIST_SIZE ?= 50
 Q1_WORK ?= $(Q1_DATA)/work
 DATASET ?= all
 Q1_DATASETS ?= esci spacev sift10m sphere
@@ -142,6 +143,7 @@ q1-preflight: q1-guard
 q1-generate: q1-guard
 	$(PY) -m harness generate --dataset $(DATASET) --data-dir $(Q1_DATA) --dsn "$(Q1_PG_DSN)" \
 		--device $(Q1_DEVICE) --encode-python $(Q1_ENCODE_PY) --pg-workers $(Q1_PG_WORKERS) \
+		--list-size $(Q1_LIST_SIZE) --driver-dir $(Q1_DRIVERS) $(if $(Q1_ALLOW_SLOW),--allow-slow,) \
 		$(if $(GT_QUERY_CHUNK),--gt-query-chunk $(GT_QUERY_CHUNK),) \
 		$(if $(GT_BASE_CHUNK),--gt-base-chunk $(GT_BASE_CHUNK),)
 
@@ -149,6 +151,7 @@ q1-generate: q1-guard
 q1-stage: q1-guard
 	$(PY) -m harness generate --dataset $(DATASET) --data-dir $(Q1_DATA) --dsn "$(Q1_PG_DSN)" \
 		--device $(Q1_DEVICE) --encode-python $(Q1_ENCODE_PY) --pg-workers $(Q1_PG_WORKERS) \
+		--list-size $(Q1_LIST_SIZE) --driver-dir $(Q1_DRIVERS) $(if $(Q1_ALLOW_SLOW),--allow-slow,) \
 		--stages $(STAGE) $(if $(FORCE),--force $(STAGE),)
 
 # One system config over every dataset and stream:
@@ -168,8 +171,9 @@ $(foreach b,$(Q1_BUDGETS),$(eval q1-run-aker-b$(b): ; $$(MAKE) q1-run SYSTEM=ake
 $(foreach b,$(Q1_BUDGETS),$(eval q1-run-proximity-p0.1-b$(b): ; $$(MAKE) q1-run SYSTEM=proximity SETTING=p0.1 BUDGET=$(b)))
 $(foreach b,$(Q1_BUDGETS),$(eval q1-run-proximity-p1-b$(b): ; $$(MAKE) q1-run SYSTEM=proximity SETTING=p1 BUDGET=$(b)))
 
-q1-run-all: q1-guard
-	@for t in $(Q1_RUN_TARGETS); do $(MAKE) $$t || exit 1; done
+# Sequential by default; make -j 9 q1-run-all runs the nine configs in parallel (each uses one core
+# and shares the page cache; PostgreSQL is not needed and can be stopped with make q1-pg-stop).
+q1-run-all: q1-guard $(Q1_RUN_TARGETS)
 
 q1-collect:
 	$(PY) -m harness collect --out-dir $(Q1_RESULTS) --csv $(Q1_RESULTS)/summary.csv
@@ -188,12 +192,21 @@ q1-restore:
 	@test -n "$(SNAPSHOT)" || { echo "set SNAPSHOT=<name>"; exit 1; }
 	Q1_DATA=$(Q1_DATA) Q1_PGDATA=$(Q1_PGDATA) Q1_PG_PORT=$(Q1_PG_PORT) bash harness/deploy/pg.sh restore $(SNAPSHOT)
 
+# Run any target detached from the SSH session: make q1-bg TARGET="q1-generate DATASET=esci"
+q1-bg:
+	@test -n "$(TARGET)" || { echo 'set TARGET="<make target and variables>"'; exit 1; }
+	@mkdir -p $(Q1_DATA)/logs
+	@log="$(Q1_DATA)/logs/$$(echo "$(TARGET)" | tr ' =/' '___')-$$(date +%Y%m%d-%H%M%S).log"; \
+		nohup $(MAKE) $(TARGET) > "$$log" 2>&1 & echo $$! > "$(Q1_DATA)/logs/last.pid"; \
+		echo "started pid $$(cat $(Q1_DATA)/logs/last.pid); follow with: tail -f $$log"
+
 # Smoke test of the whole stack on a tiny synthetic dataset (not part of Q1 results).
 q1-smoke: q1-guard
 	$(MAKE) q1-generate DATASET=tiny Q1_DEVICE=numpy Q1_PG_WORKERS=2
 	$(MAKE) q1-run SYSTEM=aker SETTING=paper BUDGET=1 DATASETS=tiny Q1_RESULTS=$(Q1_DATA)/smoke_results
 	$(MAKE) q1-run SYSTEM=proximity SETTING=p1 BUDGET=5 DATASETS=tiny Q1_RESULTS=$(Q1_DATA)/smoke_results
 	$(PY) -m harness collect --out-dir $(Q1_DATA)/smoke_results
+	$(PYTHON) -m pytest tests/workloads/q1/test_core.py -q -k "torch or resident"
 
 # -- Cleanup ----------------------------------------------------------------
 

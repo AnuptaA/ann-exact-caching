@@ -83,7 +83,9 @@ def test_make_targets_expand_to_the_expected_commands():
     assert "generate --dataset esci" in gen and "--pg-workers" in gen
     assert "--stages groundtruth --force groundtruth" in dry("q1-stage", "DATASET=esci", "STAGE=groundtruth", "FORCE=1")
     everything = dry("q1-run-all")
-    assert everything.count("q1-run-") >= 9 or "q1-run-proximity-p1-b10" in everything
+    assert everything.count("harness run") == 9 and "--settings p1" in everything and "--budgets 10" in everything
+    assert "--list-size 50" in gen and "/results/" in aker                  # results are per commit
+    assert "nohup" in dry("q1-bg", "TARGET=q1-generate DATASET=esci")
     guard = subprocess.run(["make", "q1-run", "SYSTEM=aker", "BUDGET=1", "-n"], cwd=ROOT, capture_output=True, text=True)
     assert "git status --porcelain" in guard.stdout
     refused = subprocess.run(["make", "q1-guard"], cwd=ROOT, capture_output=True, text=True,
