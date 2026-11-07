@@ -168,3 +168,24 @@ def test_hits_return_the_stored_list_unchanged_and_all_requests_are_replayed(toy
     assert all(tuple(returned[i]) in stored for i in hits)         # a stored list, same order, no re-ranking
     equality = np.flatnonzero(arrays["outcome"] == 1)
     assert all(tuple(returned[i]) == tuple(ds.answer_ids[ids[i]][:K]) for i in equality)
+
+
+@needs_driver
+def test_ids_map_end_to_end_and_misses_are_the_backend_answers(toy, tmp_path):
+    ds = replay.DatasetDir(toy, "toy")
+    cell = manifest.Cell("toy", "zipf_0.99", "aker", "paper", 1)
+    header, arrays = results.read_result(replay.run_cell(cell, ds, DRIVERS, tmp_path / "r", tmp_path / "w"))
+    ids = ds.streams["zipf_0.99"]
+    returned = np.fromfile(tmp_path / "w" / cell.cell_id / "result_ids.i64", dtype="<i8").reshape(len(ids), K)
+    rng = np.random.default_rng(4)
+    for i in rng.choice(len(ids), 60, replace=False):
+        uid = int(ids[i])
+        vec = ds.vectors_of(ids[i:i + 1])[0]
+        dist = np.linalg.norm(np.asarray(ds.base, dtype=np.float64) - vec.astype(np.float64), axis=1)
+        exact = np.sort(dist)[:K]                                         # brute force on the base
+        assert ds.gt_dist[uid][K - 1] == pytest.approx(exact[-1], rel=1e-4)       # ground truth rows follow ids
+        assert np.allclose(np.sort(ds.answer_dist[uid][:K]), exact, rtol=1e-4)     # exact fake backend
+        if arrays["outcome"][i] == 0:
+            assert tuple(returned[i]) == tuple(ds.answer_ids[uid][:K])             # a miss serves its own answer
+        want = naive_recall(vec, returned[i], np.asarray(ds.base), float(exact[-1]))
+        assert arrays["recall"][i] == pytest.approx(want, abs=1e-6)
