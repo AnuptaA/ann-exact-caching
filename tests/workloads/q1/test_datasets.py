@@ -216,12 +216,12 @@ def test_esci_build_writes_products_and_distinct_queries(tmp_path):
 
     def encode(texts):
         seen.append(list(texts))
-        return np.tile(np.arange(len(texts), dtype=np.float32)[:, None], (1, 4))
+        return np.tile(np.float32(0.5), (len(texts), 4))
 
     old = esci.check_counts
     esci.check_counts = lambda p, q, t, **kw: old(p, q, t, expected_products=n_products, expected_query_ids=5)
     try:
-        counts = esci.build(raw, tmp_path / "out", encode)
+        counts = esci.build(raw, tmp_path / "out", encode, dim=4)
     finally:
         esci.check_counts = old
     assert counts == {"products": 100, "query_ids": 5, "query_texts": 4}

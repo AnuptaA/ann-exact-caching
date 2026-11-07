@@ -31,8 +31,6 @@ class DatasetSpec:
 
 
 def _esci_embed(raw: Path, env: dict) -> None:
-    if (raw / "esci_products.npy").exists() and (raw / "esci_queries.npy").exists():
-        return
     esci.build(raw, raw, esci.make_encoder(device=env["device"]))
 
 

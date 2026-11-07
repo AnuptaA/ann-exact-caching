@@ -5,10 +5,17 @@ L2-normalized float32, as in datasets/esci/README_esci.md. There is no official
 query set, so the official queries are the distinct query texts.
 """
 
+import hashlib
+import json
 import logging
+import shutil
+import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
+
+from workloads.q1 import atomic
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +26,8 @@ EXPECTED_PRODUCTS = 1_814_924
 EXPECTED_QUERY_IDS = 130_652
 COUNT_TOLERANCE = 0.03
 DIM = 384
+SHARD_TEXTS = 100_000
+TEXT_RECIPE = "product_title + '. ' + first line of product_bullet_point (product_text)"
 
 
 def product_text(title, bullets) -> str:
@@ -87,7 +96,86 @@ def verify_embeddings_match(embeddings, texts, encode, n: int = 64, min_cos: flo
     return float(cos.min())
 
 
-def build(raw_dir: Path, out_dir: Path, encode=None) -> dict:
+def recipe(dim: int = DIM, shard_texts: int = SHARD_TEXTS) -> dict:
+    return {"model": MODEL, "text": TEXT_RECIPE, "normalize": True, "dim": dim, "shard_texts": shard_texts}
+
+
+def texts_sha256(texts) -> str:
+    digest = hashlib.sha256()
+    for text in texts:
+        digest.update(text.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def code_commit() -> str:
+    repo = Path(__file__).resolve().parents[3]
+    out = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else "unknown"
+
+
+def _check_shard(vectors: np.ndarray, n: int, dim: int, name: str) -> None:
+    if vectors.shape != (n, dim) or vectors.dtype != np.float32 or not np.isfinite(vectors).all():
+        raise ValueError(f"{name}: shape {vectors.shape} dtype {vectors.dtype}, expected ({n}, {dim}) float32")
+    if np.abs(np.linalg.norm(vectors, axis=1) - 1.0).max() > 1e-3:
+        raise ValueError(f"{name}: rows are not L2-normalized")
+
+
+def embed_sharded(texts: list[str], encode, out_path: Path, dim: int = DIM,
+                  shard_texts: int = SHARD_TEXTS) -> Path:
+    """Embed texts into out_path in resumable shards, with a manifest of how they were made.
+
+    An existing out_path is reused only if its manifest matches these texts and recipe, or
+    (no manifest) if a sampled re-encode matches; otherwise this raises instead of overwriting.
+    """
+    out_path = Path(out_path)
+    manifest_path = out_path.with_name(out_path.name + ".manifest.json")
+    shard_dir = out_path.with_name(out_path.name + ".shards")
+    want = {"recipe": recipe(dim, shard_texts), "n": len(texts), "texts_sha256": texts_sha256(texts)}
+    if out_path.exists():
+        have = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
+        if have is not None and {k: have.get(k) for k in want} != want:
+            raise ValueError(f"{out_path} was made from other texts or another recipe: {have}")
+        embeddings = np.load(out_path, mmap_mode="r")
+        min_cos = verify_embeddings_match(embeddings, texts, encode)
+        if have is None:
+            atomic.write_json(manifest_path, {**want, "adopted": True, "min_cosine": min_cos,
+                                              "code_commit": code_commit()}, indent=1)
+        logger.info(f"{out_path.name}: reusing existing embeddings (sample min cosine {min_cos:.5f})")
+        return out_path
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    shard_manifest = shard_dir / "manifest.json"
+    if shard_manifest.exists() and json.loads(shard_manifest.read_text()) != want:
+        raise ValueError(f"{shard_dir} holds shards of other texts or another recipe; remove it to start over")
+    atomic.write_json(shard_manifest, want)
+    n_shards = -(-len(texts) // shard_texts)
+    began, built = time.time(), 0
+    for i in range(n_shards):
+        path = shard_dir / f"shard_{i:05d}.npy"
+        if path.exists():
+            continue
+        chunk = texts[i * shard_texts:(i + 1) * shard_texts]
+        vectors = np.asarray(encode(chunk), dtype=np.float32)
+        _check_shard(vectors, len(chunk), dim, path.name)
+        atomic.save_npy(path, vectors)
+        built += 1
+        per_shard = (time.time() - began) / built
+        logger.info(f"{out_path.name}: shard {i + 1}/{n_shards} done, ETA {(n_shards - i - 1) * per_shard / 60:.1f} min")
+    part = out_path.with_name(out_path.name + ".part")
+    merged = np.lib.format.open_memmap(part, mode="w+", dtype=np.float32, shape=(len(texts), dim))
+    for i in range(n_shards):
+        vectors = np.load(shard_dir / f"shard_{i:05d}.npy")
+        _check_shard(vectors, min(shard_texts, len(texts) - i * shard_texts), dim, f"shard {i}")
+        merged[i * shard_texts:i * shard_texts + len(vectors)] = vectors
+    merged.flush()
+    del merged
+    part.replace(out_path)
+    atomic.write_json(manifest_path, {**want, "code_commit": code_commit()}, indent=1)
+    shutil.rmtree(shard_dir)
+    return out_path
+
+
+def build(raw_dir: Path, out_dir: Path, encode=None, dim: int = DIM) -> dict:
     """Embed every product and distinct query; writes .npy files into out_dir."""
     import pandas as pd
     raw, out = Path(raw_dir), Path(out_dir)
@@ -99,11 +187,11 @@ def build(raw_dir: Path, out_dir: Path, encode=None) -> dict:
     q_texts, q_ids = distinct_queries(examples)
     counts = check_counts(len(products), examples["query_id"].nunique(), len(q_texts))
     encode = encode or make_encoder()
-    np.save(out / "esci_queries.npy", encode(q_texts))
-    np.save(out / "esci_query_ids.npy", q_ids)
-    np.save(out / "esci_query_texts.npy", np.array(q_texts, dtype=str))
-    np.save(out / "esci_products.npy", encode(product_texts(products)))
-    np.save(out / "esci_product_ids.npy", products["product_id"].to_numpy().astype(str))
+    atomic.save_npy(out / "esci_query_ids.npy", q_ids)
+    atomic.save_npy(out / "esci_query_texts.npy", np.array(q_texts, dtype=str))
+    atomic.save_npy(out / "esci_product_ids.npy", products["product_id"].to_numpy().astype(str))
+    embed_sharded(q_texts, encode, out / "esci_queries.npy", dim)
+    embed_sharded(product_texts(products), encode, out / "esci_products.npy", dim)
     return counts
 
 
