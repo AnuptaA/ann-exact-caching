@@ -202,7 +202,13 @@ def test_resident_base_and_chunk_fitting_match_the_numpy_path(tmp_path, monkeypa
     assert groundtruth.DeviceBase.try_load(base, "cpu", 600) is None               # does not fit
     monkeypatch.setattr(groundtruth, "free_device_bytes", lambda device: 10 ** 9)
     q, b = groundtruth.fit_chunks("cuda", 8192, 131072)
-    assert 3 * 4 * q * b <= 0.4 * 10 ** 9 and q >= 64 and b >= 4096
+    assert groundtruth.TILE_BYTES_PER_ELEMENT * q * b <= 0.6 * 10 ** 9 and q >= 64 and b >= 4096
+    monkeypatch.setattr(groundtruth, "free_device_bytes", lambda device: 10 ** 6)   # hopeless
+    with pytest.raises(MemoryError, match="does not fit"):
+        groundtruth.fit_chunks("cuda", 8192, 131072)
+    monkeypatch.setattr(groundtruth, "free_device_bytes", lambda device: 22 * 2 ** 30)   # a 24 GB card
+    q, b = groundtruth.fit_chunks("cuda", 8192, 131072)
+    assert (q, b) == (8192, 65536) and groundtruth.TILE_BYTES_PER_ELEMENT * q * b < 0.6 * 22 * 2 ** 30
     full = groundtruth.build_ground_truth(queries, base, tmp_path / "gt", k=20, device="cpu",
                                           query_chunk=10, base_chunk=700)
     assert np.array_equal(full[0], groundtruth.exact_topk_chunk(queries, base, k=20)[0])

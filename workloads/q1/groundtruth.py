@@ -53,14 +53,21 @@ def free_device_bytes(device: str) -> int:
     return 1 << 62
 
 
-def fit_chunks(device: str, query_chunk: int, base_chunk: int, margin: float = 0.4) -> tuple[int, int]:
-    """Shrink the chunks until the (queries x base) float32 tile, its concatenation with the running
-    candidates and the matmul workspace (about three tiles) fit in `margin` of the free memory."""
+TILE_BYTES_PER_ELEMENT = 20   # float32 distance tile, matmul/broadcast temporaries, concatenated
+                              # distances (4 B) and int64 ids (8 B); measured peak is about 16 B
+
+
+def fit_chunks(device: str, query_chunk: int, base_chunk: int, margin: float = 0.6) -> tuple[int, int]:
+    """Shrink the chunks until one (queries x base) tile with its temporaries fits in `margin` of
+    the memory that is free now (call after the resident base is uploaded)."""
     budget = margin * free_device_bytes(device)
-    while 3 * 4 * query_chunk * base_chunk > budget and base_chunk > 4096:
+    while TILE_BYTES_PER_ELEMENT * query_chunk * base_chunk > budget and base_chunk > 4096:
         base_chunk //= 2
-    while 3 * 4 * query_chunk * base_chunk > budget and query_chunk > 64:
+    while TILE_BYTES_PER_ELEMENT * query_chunk * base_chunk > budget and query_chunk > 64:
         query_chunk //= 2
+    if TILE_BYTES_PER_ELEMENT * query_chunk * base_chunk > budget:
+        raise MemoryError(f"even a {query_chunk} x {base_chunk} tile does not fit in {device} memory "
+                          f"({free_device_bytes(device) / 2 ** 30:.1f} GiB free)")
     return query_chunk, base_chunk
 
 
@@ -151,14 +158,16 @@ def build_ground_truth(
     if meta_path.exists() and json.loads(meta_path.read_text()) != meta:
         raise ValueError(f"{meta_path} was written for a different run: {meta_path.read_text()}")
     meta_path.write_text(json.dumps(meta))
+    # upload the base first (if it fits), then size the tiles from what is left
+    resident = DeviceBase.try_load(base, device, base_chunk)
     query_chunk_used, base_chunk_used = query_chunk, base_chunk
     if device != "numpy":
         query_chunk_used, base_chunk_used = fit_chunks(device, query_chunk, base_chunk)
         if (query_chunk_used, base_chunk_used) != (query_chunk, base_chunk):
             logger.warning(f"device memory is small: chunks reduced to queries={query_chunk_used} "
                            f"base={base_chunk_used}")
-    # the resume metadata fixes the query chunk size; only the base chunk may change
-    resident = DeviceBase.try_load(base, device, base_chunk_used)
+        if resident is not None and base_chunk_used != base_chunk:
+            resident = None    # the resident chunks were cut at the old size; stream instead
     n_chunks = -(-len(queries) // query_chunk)
     began, built = time.time(), 0
     for c, start in enumerate(range(0, len(queries), query_chunk)):
