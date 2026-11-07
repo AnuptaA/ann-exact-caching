@@ -5,9 +5,13 @@
 # Q1_DATA (snapshots go to $Q1_DATA/snapshots).
 set -euo pipefail
 
+# shellcheck source=lib.sh
+. "$(dirname "$0")/lib.sh"
+
 PG_BIN="${PG_BIN:-/usr/lib/postgresql/16/bin}"
 PGDATA="${Q1_PGDATA:?set Q1_PGDATA}"
-PORT="${Q1_PG_PORT:-5432}"
+guard_path "$PGDATA"
+PORT="${Q1_PG_PORT:-54320}"
 SNAP_DIR="${Q1_DATA:?set Q1_DATA}/snapshots"
 LOG="${PGDATA%/}.log"
 
@@ -33,7 +37,8 @@ case "${1:-}" in
         if "$PG_BIN/pg_ctl" -D "$PGDATA" status >/dev/null 2>&1; then
             "$PG_BIN/pg_ctl" -D "$PGDATA" -m fast -w stop
         fi
-        rm -rf "$PGDATA"
+        guard_path "$PGDATA"
+        rm -rf -- "${PGDATA:?}"
         tar -C "$(dirname "$PGDATA")" -xf "$SNAP_DIR/$name.tar"
         "$PG_BIN/pg_ctl" -D "$PGDATA" -o "$opts" -l "$LOG" -w start
         echo "restored $name" ;;

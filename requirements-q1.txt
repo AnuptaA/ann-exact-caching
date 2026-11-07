@@ -1,12 +1,15 @@
-# Python dependencies for Q1 workload generation and runs (the GPU instance venv)
+# Direct dependencies of the Q1 GPU-instance venv. The installed set is pinned with hashes in
+# requirements-q1.lock (uv pip compile --universal --python-version 3.10 --generate-hashes).
 numpy
 scipy
+scikit-learn
 pandas
 pyarrow
 psycopg[binary]
 matplotlib
 tqdm
 pytest
-torch
-transformers
-sentence-transformers
+# torch 2.6.0 ships a CUDA 12.4 build (needs an NVIDIA driver >= 525); transformers 4.50 needs torch >= 2.6
+torch==2.6.0
+transformers>=4.50,<4.52
+sentence-transformers>=3.4,<4

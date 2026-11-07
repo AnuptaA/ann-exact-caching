@@ -85,8 +85,9 @@ test-approximate:
 # make q1-run-aker-b1 (and the other q1-run-* targets), make q1-collect.
 
 Q1_DATA ?= /data/q1
+Q1_TOOLS ?= /opt/q1
 Q1_PGDATA ?= $(Q1_DATA)/pgdata
-Q1_PG_PORT ?= 5432
+Q1_PG_PORT ?= 54320
 Q1_PG_DSN ?= host=127.0.0.1 port=$(Q1_PG_PORT) user=postgres
 Q1_PG_WORKERS ?= 8
 Q1_DEVICE ?= auto
@@ -112,7 +113,7 @@ q1-guard:
 		echo "q1: git tree is dirty; commit or stash first"; exit 1; fi
 
 q1-setup:
-	Q1_DATA=$(Q1_DATA) Q1_PGDATA=$(Q1_PGDATA) Q1_PG_PORT=$(Q1_PG_PORT) bash harness/deploy/setup_instance.sh
+	Q1_DATA=$(Q1_DATA) Q1_TOOLS=$(Q1_TOOLS) Q1_PGDATA=$(Q1_PGDATA) Q1_PG_PORT=$(Q1_PG_PORT) bash harness/deploy/setup_instance.sh
 
 q1-pg-start:
 	Q1_DATA=$(Q1_DATA) Q1_PGDATA=$(Q1_PGDATA) Q1_PG_PORT=$(Q1_PG_PORT) bash harness/deploy/pg.sh start

@@ -1,129 +1,142 @@
 #!/usr/bin/env bash
-# One-time setup of a Linux x86_64 (Ubuntu 22.04 or 24.04) GPU instance for Q1.
-# Idempotent: every step checks before acting. Run via `make q1-setup`.
+# One-time setup of a Linux x86_64 (Ubuntu 22.04 or 24.04) instance for Q1. Idempotent. `make q1-setup`.
+#   setup_instance.sh [--ci]     --ci skips the data-volume, GPU and encoder-venv steps (CI runners)
 #
-# Installs system packages, PostgreSQL 16 (PGDG) with pgvector v0.8.0 built from
-# source, FAISS (system package or built from source), the Python venvs, the
-# replay drivers, and initializes a PostgreSQL cluster in $Q1_PGDATA.
+# Builds from pinned, verified sources whatever stock Ubuntu lacks or has too old (Boost, CMake, FAISS,
+# PostgreSQL 16 from PGDG, pgvector), creates its own venvs (never the AMI's conda or default python),
+# initializes an isolated PostgreSQL cluster on its own port, builds the replay drivers and runs preflight.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
+here="$root/harness/deploy"
+# shellcheck source=lib.sh
+. "$here/lib.sh"
+# shellcheck source=pins.env
+. "$here/pins.env"
+# shellcheck source=toolchain.sh
+. "$here/toolchain.sh"
+
+CI=0
+for arg in "$@"; do
+    case "$arg" in
+        --ci) CI=1 ;;
+        *) die "unknown argument: $arg" ;;
+    esac
+done
+
 Q1_DATA="${Q1_DATA:-/data/q1}"
+Q1_TOOLS="${Q1_TOOLS:-/opt/q1}"
 Q1_PGDATA="${Q1_PGDATA:-$Q1_DATA/pgdata}"
-Q1_PG_PORT="${Q1_PG_PORT:-5432}"
-PGVECTOR_TAG="v0.8.0"
-FAISS_TAG="v1.8.0"
-PG_BIN=/usr/lib/postgresql/16/bin
+Q1_PG_PORT="${Q1_PG_PORT:-54320}"
+PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
+PG_BIN="/usr/lib/postgresql/$PG_MAJOR/bin"
+MIN_DATA_GB="${Q1_MIN_DATA_GB:-400}"
 
-if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
-    echo "setup_instance.sh: expected Linux x86_64, found $(uname -s) $(uname -m)" >&2
-    exit 1
-fi
-if [ -n "$(git -C "$root" status --porcelain)" ]; then
-    echo "setup_instance.sh: git tree is dirty; commit or stash first" >&2
-    exit 1
-fi
+# Do not inherit the AMI's conda or any active virtualenv: our venvs are created from $PYTHON_BIN.
+PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -viE 'conda|miniforge|mambaforge' | paste -sd: -)"
+export PATH
+unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_SHLVL VIRTUAL_ENV PYTHONPATH PYTHONHOME PIP_REQUIRE_VIRTUALENV
 
-# The data directory lives on the big volume. Create it with sudo and hand it to this user.
-data_parent="$(dirname "$Q1_DATA")"
-if [ ! -d "$Q1_DATA" ]; then
-    sudo mkdir -p "$Q1_DATA"
+if [ -z "${Q1_SETUP_ALLOW_NON_LINUX:-}" ] && { [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; }; then
+    die "expected Linux x86_64, found $(uname -s) $(uname -m)"
 fi
-sudo chown "$(id -u):$(id -g)" "$Q1_DATA"
-if [ "$(df --output=target "$Q1_DATA" | tail -1)" = "/" ]; then
-    echo "setup_instance.sh: WARNING: $Q1_DATA is on the root filesystem; mount the data volume there" \
-         "(for example at $data_parent) before generating SPHERE (needs about 250 GB)" >&2
+if [ -z "${Q1_DRYRUN:-}" ] && [ -n "$(git -C "$root" status --porcelain)" ]; then
+    die "git tree is dirty; commit or stash first"
 fi
-free_gb=$(df --output=avail -BG "$Q1_DATA" | tail -1 | tr -dc '0-9')
-echo "free space under $Q1_DATA: ${free_gb} GB"
-if [ "$free_gb" -lt 100 ]; then
-    echo "setup_instance.sh: less than 100 GB free under $Q1_DATA; refusing (set Q1_DATA to the big volume)" >&2
-    exit 1
-fi
+[ -x "$PYTHON_BIN" ] || die "$PYTHON_BIN not found (set PYTHON_BIN to a system python >= 3.10, not conda)"
+py_ver=$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+version_ge "$py_ver" 3.10 || die "$PYTHON_BIN is Python $py_ver, need >= 3.10"
+log "python $py_ver at $PYTHON_BIN; data $Q1_DATA; tools $Q1_TOOLS; postgres port $Q1_PG_PORT"
+log "PATH after removing conda entries: $PATH"
 
-py_minor=$(python3 -c 'import sys; print(sys.version_info.minor)')
-if [ "$py_minor" -lt 10 ]; then
-    echo "setup_instance.sh: Python 3.10 or newer is required, found 3.$py_minor" >&2
-    exit 1
-fi
-
-sudo apt-get update
-sudo apt-get install -y build-essential cmake git curl ca-certificates gnupg lsb-release \
-    python3-venv python3-dev libboost-all-dev libopenblas-dev libomp-dev zstd
-
-# PostgreSQL 16 from the PGDG repository.
-if [ ! -x "$PG_BIN/pg_ctl" ]; then
-    sudo install -d /usr/share/postgresql-common/pgdg
-    sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-        https://www.postgresql.org/media/keys/ACCC4CF8.asc
-    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-        | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
-    sudo apt-get update
-    sudo apt-get install -y postgresql-16 postgresql-server-dev-16
-    sudo systemctl disable --now postgresql || true   # we run our own cluster below
-fi
-
-# pgvector at an exact tag.
-if [ ! -f "$("$PG_BIN/pg_config" --sharedir)/extension/vector.control" ] || \
-   ! grep -q "default_version = '0.8.0'" "$("$PG_BIN/pg_config" --sharedir)/extension/vector.control"; then
-    tmp="$(mktemp -d)"
-    git clone --depth 1 --branch "$PGVECTOR_TAG" https://github.com/pgvector/pgvector "$tmp/pgvector"
-    make -C "$tmp/pgvector" PG_CONFIG="$PG_BIN/pg_config"
-    sudo make -C "$tmp/pgvector" PG_CONFIG="$PG_BIN/pg_config" install
-    rm -rf "$tmp"
-fi
-
-# FAISS: system package if available, else built from source (CPU only).
-FAISS_ROOT="${FAISS_ROOT:-/usr/local}"
-if [ ! -f "$FAISS_ROOT/include/faiss/Index.h" ] && [ ! -f /usr/include/faiss/Index.h ]; then
-    if apt-cache show libfaiss-dev >/dev/null 2>&1; then
-        sudo apt-get install -y libfaiss-dev
-        FAISS_ROOT=/usr
-    else
-        tmp="$(mktemp -d)"
-        git clone --depth 1 --branch "$FAISS_TAG" https://github.com/facebookresearch/faiss "$tmp/faiss"
-        cmake -S "$tmp/faiss" -B "$tmp/build" -DFAISS_ENABLE_GPU=OFF -DFAISS_ENABLE_PYTHON=OFF \
-            -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release
-        cmake --build "$tmp/build" -j "$(nproc)"
-        sudo cmake --install "$tmp/build"
-        rm -rf "$tmp"
+# --- data volume -------------------------------------------------------------------------------------
+if [ "$CI" -eq 0 ]; then
+    run sudo mkdir -p "$Q1_DATA"
+    run sudo chown "$(id -u):$(id -g)" "$Q1_DATA"
+    if [ -z "${Q1_DRYRUN:-}" ]; then
+        mount_target=$(findmnt -no TARGET --target "$Q1_DATA" 2>/dev/null || df --output=target "$Q1_DATA" | tail -1)
+        if [ "$mount_target" = "/" ] && [ -z "${Q1_ALLOW_ROOT_VOLUME:-}" ]; then
+            die "$Q1_DATA is on the root volume; mount the large data volume there (or set Q1_ALLOW_ROOT_VOLUME=1)"
+        fi
+        total_gb=$(df --output=size -BG "$Q1_DATA" | tail -1 | tr -dc '0-9')
+        free_gb=$(df --output=avail -BG "$Q1_DATA" | tail -1 | tr -dc '0-9')
+        log "data volume $mount_target: ${total_gb} GB total, ${free_gb} GB free"
+        [ "$total_gb" -ge "$MIN_DATA_GB" ] || die "data volume is ${total_gb} GB, need at least ${MIN_DATA_GB} GB for all four datasets (Q1_MIN_DATA_GB to override)"
     fi
+else
+    run mkdir -p "$Q1_DATA"
 fi
+run sudo mkdir -p "$Q1_TOOLS"
+run sudo chown "$(id -u):$(id -g)" "$Q1_TOOLS"
 
-# PostgreSQL cluster on the big disk, tuned for bulk loads and HNSW builds.
-mkdir -p "$Q1_PGDATA"
-if [ ! -f "$Q1_PGDATA/PG_VERSION" ]; then
-    "$PG_BIN/initdb" -D "$Q1_PGDATA" -U postgres --auth=trust
-    ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-    cat >> "$Q1_PGDATA/postgresql.conf" <<CONF
+# --- toolchain ---------------------------------------------------------------------------------------
+[ -z "${Q1_DRYRUN:-}" ] || log "dry run: state-changing commands are only printed"
+[ -n "${Q1_DRYRUN:-}" ] || wait_for_apt
+ensure_build_packages
+ensure_cmake
+ensure_boost
+ensure_faiss
+ensure_postgres
+
+# --- isolated PostgreSQL cluster ---------------------------------------------------------------------
+guard_path "$Q1_PGDATA"
+if [ -n "${Q1_DRYRUN:-}" ] || [ ! -f "$Q1_PGDATA/PG_VERSION" ]; then
+    run mkdir -p "$Q1_PGDATA"
+    run "$PG_BIN/initdb" -D "$Q1_PGDATA" -U postgres --auth=trust
+    ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 8192)
+    cpus=$(nproc 2>/dev/null || echo 8)
+    workers=$(( cpus > 8 ? 7 : cpus - 1 ))
+    [ "$workers" -ge 1 ] || workers=1
+    run bash -c "cat >> '$Q1_PGDATA/postgresql.conf' <<CONF
+# q1 settings
+port = $Q1_PG_PORT
+listen_addresses = '127.0.0.1'
+unix_socket_directories = ''
 shared_buffers = $((ram_mb / 4))MB
 effective_cache_size = $((ram_mb * 7 / 10))MB
 max_connections = 200
-max_parallel_maintenance_workers = 7
+max_worker_processes = 16
+max_parallel_workers = 16
+max_parallel_maintenance_workers = $workers
 max_wal_size = 64GB
 checkpoint_timeout = 30min
 synchronous_commit = off
 wal_level = minimal
 max_wal_senders = 0
-CONF
+statement_timeout = 0
+idle_in_transaction_session_timeout = 0
+tcp_keepalives_idle = 60
+tcp_keepalives_interval = 10
+tcp_keepalives_count = 6
+CONF"
 fi
 
-# Python environments.
-[ -d "$root/.venv" ] || python3 -m venv "$root/.venv"
-"$root/.venv/bin/pip" install --upgrade pip
-"$root/.venv/bin/pip" install -r "$root/requirements-q1.txt"
-[ -d "$root/.venv-encode" ] || python3 -m venv "$root/.venv-encode"
-"$root/.venv-encode/bin/pip" install -r "$root/requirements-encode.txt"
-
-# The GPU must be visible to torch in the main venv; otherwise ground truth would fall back to CPU.
-if ! "$root/.venv/bin/python" -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)"; then
-    echo "setup_instance.sh: WARNING: torch cannot see a CUDA device (driver missing or CPU-only instance)." \
-         "Ground truth and embeddings need a GPU; use a GPU AMI or set Q1_DEVICE=numpy for the smoke test." >&2
+# --- python environments (own venvs from the system python) -------------------------------------------
+if [ "$CI" -eq 1 ]; then
+    lock="$root/requirements-ci.lock"
+else
+    lock="$root/requirements-q1.lock"
+fi
+run "$PYTHON_BIN" -m venv "$root/.venv"
+if [ -f "$lock" ]; then
+    run "$root/.venv/bin/pip" install --quiet --require-hashes -r "$lock"
+else
+    die "missing $lock (generate with uv pip compile; see harness/deploy/README or EC2_FIRST_RUN.md)"
+fi
+if [ "$CI" -eq 0 ]; then
+    run "$PYTHON_BIN" -m venv "$root/.venv-encode"
+    run "$root/.venv-encode/bin/pip" install --quiet --require-hashes -r "$root/requirements-encode.lock"
+    # the GPU must be usable by torch in the main venv, otherwise ground truth would fall back to the CPU
+    if [ -z "${Q1_DRYRUN:-}" ]; then
+        "$root/.venv/bin/python" -c "import torch, sys; torch.zeros(1).cuda(); print('torch', torch.__version__, 'cuda', torch.version.cuda, torch.cuda.get_device_name(0))" \
+            || die "torch cannot use the GPU (driver too old for this torch build, or no GPU); fix before generating"
+    fi
 fi
 
-# Replay drivers (standard and proximity).
-FAISS_ROOT="$FAISS_ROOT" bash "$root/harness/deploy/build_linux.sh"
+# --- replay drivers -----------------------------------------------------------------------------------
+CMAKE_BIN="$CMAKE_BIN" BOOST_ROOT="$BOOST_ROOT" FAISS_ROOT="$FAISS_ROOT" run bash "$here/build_linux.sh"
 
-Q1_PGDATA="$Q1_PGDATA" Q1_PG_PORT="$Q1_PG_PORT" Q1_DATA="$Q1_DATA" bash "$root/harness/deploy/pg.sh" start || true
-PYTHONPATH="$root" "$root/.venv/bin/python" -m harness preflight --data-dir "$Q1_DATA"
-echo "setup done. Smoke test: make q1-smoke"
+# --- start the cluster and check it ---------------------------------------------------------------------
+Q1_DATA="$Q1_DATA" Q1_PGDATA="$Q1_PGDATA" Q1_PG_PORT="$Q1_PG_PORT" PG_BIN="$PG_BIN" run bash "$here/pg.sh" start
+PYTHONPATH="$root" run "$root/.venv/bin/python" -m harness preflight --data-dir "$Q1_DATA" --dsn "host=127.0.0.1 port=$Q1_PG_PORT user=postgres"
+log "setup done. Next: make q1-smoke"

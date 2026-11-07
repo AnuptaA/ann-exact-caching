@@ -1,0 +1,10 @@
+# CI runners (no GPU): everything the unit tests and the smoke test import, without torch.
+numpy
+scipy
+scikit-learn
+pandas
+pyarrow
+psycopg[binary]
+matplotlib
+tqdm
+pytest

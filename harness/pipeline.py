@@ -145,6 +145,9 @@ def env_info(ctx: "Context") -> dict:
     except ImportError:
         info["torch"] = None
     driver = Path(ctx.extra.get("driver_dir", "build/replay")) / "ak_replay_standard"
+    toolchain = driver.parent / "TOOLCHAIN.txt"
+    if toolchain.exists():
+        info["driver_toolchain"] = toolchain.read_text().strip().splitlines()
     if driver.exists():
         import hashlib
         info["driver_sha1"] = hashlib.sha1(driver.read_bytes()).hexdigest()

@@ -35,6 +35,11 @@ else()
     set(OMP_LIBS OpenMP::OpenMP_CXX)
 endif()
 
+# Drivers find the (possibly non-system) FAISS and Boost libraries without LD_LIBRARY_PATH.
+get_filename_component(FAISS_LIBDIR "${FAISS_LIBRARY}" DIRECTORY)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
+set(CMAKE_INSTALL_RPATH "${FAISS_LIBDIR};${Boost_LIBRARY_DIRS};${BOOST_ROOT}/lib")
+
 file(GLOB_RECURSE AKER_SRC CONFIGURE_DEPENDS "${AKER_DIR}/src/*.c" "${AKER_DIR}/src/*.cc")
 
 # The YCSB-C based key-sequence generator is not used (streams come from workloads).
