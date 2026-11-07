@@ -16,13 +16,23 @@ DATASETS = {"spacev": (10_000_000, 100), "sift10m": (10_000_000, 128),
             "sphere": (10_000_000, 768), "esci": (1_814_924, 384)}
 
 
+MAX_WAL_BYTES = 64 * GIB      # max_wal_size set by setup_instance.sh
+OTHER_BYTES = 8 * GIB         # answer tables, ground truth, streams, results
+
+
 def need_bytes(dataset: str) -> dict:
-    """Disk and RAM needs: float32 base, pgvector table and index, working files."""
+    """Disk by component and the RAM needed for the HNSW build.
+
+    Three base-sized copies coexist: the raw source (counted at float32 size), the
+    float32 file and the pgvector table. WAL is bounded by max_wal_size; wal_level=minimal
+    should keep it far lower, but that is not verified at full size.
+    """
     n, d = DATASETS[dataset]
     base_f32 = n * d * 4
     graph = hnsw_graph_bytes(n, d, BUILD_PARAMS[dataset]["m"])
-    return {"disk": int(2 * base_f32 + 2 * graph + 8 * GIB),   # f32 base + table + index + tables/GT/results
-            "ram": int(graph * 1.15 + 4 * GIB)}                # build graph in maintenance_work_mem + OS
+    parts = {"raw": base_f32, "f32": base_f32, "table": n * (d * 4 + 64), "index": graph,
+             "wal": min(MAX_WAL_BYTES, base_f32), "other": OTHER_BYTES}
+    return {**parts, "disk": int(sum(parts.values())), "ram": int(graph * 1.15 + 4 * GIB)}
 
 
 def check(datasets, data_dir: Path, require_linux: bool = True, repo: Path | None = None) -> list[str]:

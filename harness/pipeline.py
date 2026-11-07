@@ -172,6 +172,20 @@ def total_ram_bytes() -> int:
         return 0
 
 
+def pg_data_dir(ctx: "Context") -> Path | None:
+    """Where the server writes: Q1_PGDATA, else asked from the server itself."""
+    if os.environ.get("Q1_PGDATA"):
+        return Path(os.environ["Q1_PGDATA"])
+    try:
+        import psycopg
+        from psycopg.conninfo import make_conninfo
+        with psycopg.connect(make_conninfo(ctx.dsn, dbname="postgres"), connect_timeout=10) as conn:
+            return Path(conn.execute("SHOW data_directory").fetchone()[0])
+    except Exception as exc:
+        logger.warning(f"cannot ask PostgreSQL for its data directory: {exc!r}")
+        return None
+
+
 def check_resources(ctx: "Context", stage: str) -> None:
     """Refuse or warn before a heavy stage; every message says what to do."""
     from workloads.q1.datasets.common import check_free_disk
@@ -192,11 +206,21 @@ def check_resources(ctx: "Context", stage: str) -> None:
             logger.warning(f"the float32 base ({base_bytes / gib:.0f} GiB) is more than 60% of RAM "
                            f"({ram / gib:.0f} GiB): the CPU recompute step will read rows from disk")
     elif stage in ("pg_load", "pg_index"):
-        from harness.backend.build_index import BUILD_PARAMS, hnsw_graph_bytes
-        pgdata = os.environ.get("Q1_PGDATA")
-        if pgdata and Path(pgdata).exists():
-            need = int(n * (d * 4 + 64) + hnsw_graph_bytes(n, d, BUILD_PARAMS[_build_key(ctx)]["m"]))
-            check_free_disk(Path(pgdata), need + gib)
+        from harness.deploy import preflight
+        need = preflight.need_bytes(ctx.spec.name) if ctx.spec.name in preflight.DATASETS else None
+        if need is None:
+            return
+        pgdata = pg_data_dir(ctx)
+        if pgdata is None:
+            logger.warning("PostgreSQL data directory unknown (set Q1_PGDATA): disk not checked")
+        elif stage == "pg_load":
+            check_free_disk(pgdata, need["table"] + need["wal"] + gib)
+        else:
+            check_free_disk(pgdata, need["index"] + need["wal"] + gib)
+        ram = total_ram_bytes()
+        if stage == "pg_index" and ram and ram < need["ram"]:
+            raise StageError(f"HNSW build for {ctx.spec.name} needs about {need['ram'] / gib:.0f} GiB of RAM "
+                             f"(graph in maintenance_work_mem); this machine has {ram / gib:.0f} GiB")
     elif stage == "answer_table":
         check_free_disk(ctx.data_dir, ctx.n_ids * ctx.list_size * 8 + gib)
 

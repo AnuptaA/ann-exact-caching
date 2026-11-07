@@ -23,6 +23,15 @@ def test_need_bytes_scale_with_sphere_graph():
     assert preflight.need_bytes("esci")["disk"] < preflight.need_bytes("spacev")["disk"]
 
 
+def test_need_bytes_counts_three_base_copies_graph_and_wal_for_sphere():
+    need = preflight.need_bytes("sphere")
+    base = 10_000_000 * 768 * 4
+    assert need["raw"] == need["f32"] == base and need["table"] > base
+    assert need["index"] > 38 * 2 ** 30 and need["wal"] == base
+    assert need["disk"] == sum(need[k] for k in ("raw", "f32", "table", "index", "wal", "other"))
+    assert preflight.need_bytes("esci")["wal"] < preflight.MAX_WAL_BYTES
+
+
 def test_preflight_rejects_wrong_architecture_dirty_tree_and_small_disk(tmp_path):
     repo = _repo(tmp_path)
     problems = preflight.check(["sphere"], tmp_path, require_linux=True, repo=repo)

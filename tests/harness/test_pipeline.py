@@ -140,6 +140,23 @@ def test_numpy_ground_truth_on_a_big_dataset_is_refused_unless_allowed(tmp_path)
     pipeline.check_resources(ctx, "groundtruth")            # accepted on purpose (may warn)
 
 
+def test_pg_stage_resource_checks_use_the_server_data_dir_and_refuse_small_ram(tmp_path, monkeypatch):
+    ctx = pipeline.make_context("sphere", tmp_path)
+    seen = []
+    monkeypatch.setattr("workloads.q1.datasets.common.check_free_disk",
+                        lambda path, needed: seen.append((Path(path), needed)))
+    monkeypatch.setenv("Q1_PGDATA", str(tmp_path / "pg"))
+    monkeypatch.setattr(pipeline, "total_ram_bytes", lambda: 128 * 2 ** 30)
+    pipeline.check_resources(ctx, "pg_load")
+    pipeline.check_resources(ctx, "pg_index")
+    assert [p for p, _ in seen] == [tmp_path / "pg"] * 2 and seen[0][1] > 28 * 2 ** 30
+    monkeypatch.setattr(pipeline, "total_ram_bytes", lambda: 16 * 2 ** 30)
+    with pytest.raises(pipeline.StageError, match="GiB of RAM"):
+        pipeline.check_resources(ctx, "pg_index")
+    monkeypatch.delenv("Q1_PGDATA")
+    assert pipeline.pg_data_dir(pipeline.make_context("sphere", tmp_path, dsn="host=127.0.0.1 port=1")) is None
+
+
 def test_validation_catches_bad_outputs(tmp_path):
     ctx = _ctx(tmp_path)
     pipeline.run_pipeline(ctx, stages=["fetch", "embed", "to_f32", "inputs", "groundtruth"])
