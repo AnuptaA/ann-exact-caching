@@ -23,5 +23,12 @@ def write_f32bin(path: Path, rows, chunk_rows: int = CHUNK_ROWS) -> Path:
 
 
 def read_f32bin(path: Path) -> np.ndarray:
-    n, d = np.fromfile(path, dtype="<i4", count=2)
-    return np.memmap(path, dtype=np.float32, mode="r", offset=8, shape=(int(n), int(d)))
+    path = Path(path)
+    header = np.fromfile(path, dtype="<i4", count=2)
+    if len(header) != 2:
+        raise ValueError(f"{path}: shorter than the 8-byte header")
+    n, d = int(header[0]), int(header[1])
+    expected = 8 + n * d * 4
+    if n < 0 or d < 0 or path.stat().st_size != expected:
+        raise ValueError(f"{path}: {path.stat().st_size} bytes, header (n={n}, d={d}) says {expected}")
+    return np.memmap(path, dtype=np.float32, mode="r", offset=8, shape=(n, d))

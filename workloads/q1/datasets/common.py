@@ -108,12 +108,19 @@ def bin_header(n: int, d: int) -> bytes:
 
 def read_bin_header(path: Path) -> tuple[int, int]:
     with Path(path).open("rb") as f:
-        return struct.unpack("<ii", f.read(8))
+        raw = f.read(8)
+    if len(raw) != 8:
+        raise ValueError(f"{path}: shorter than the 8-byte header")
+    return struct.unpack("<ii", raw)
 
 
 def memmap_bin(path: Path, dtype) -> np.ndarray:
     """Memory-map a big-ann .bin file (int32 n, int32 d header, then rows)."""
     n, d = read_bin_header(path)
+    expected = 8 + n * d * np.dtype(dtype).itemsize
+    size = Path(path).stat().st_size
+    if n < 0 or d < 0 or size != expected:
+        raise ValueError(f"{path}: {size} bytes, header (n={n}, d={d}) says {expected}")
     return np.memmap(path, dtype=dtype, mode="r", offset=8, shape=(n, d))
 
 

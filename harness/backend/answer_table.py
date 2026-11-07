@@ -22,6 +22,8 @@ BLOCK = 2000
 def build_answer_table(backend, vectors, base, out_dir: Path, list_size: int, ef_search: int,
                        block: int = BLOCK, shard: tuple[int, int] = (0, 1)) -> None:
     """Write blocks of (ids, distances); shard=(i, n) takes every n-th block."""
+    if len(base) >= 2 ** 31:
+        raise ValueError("answer tables store int32 ids; the base has 2^31 or more rows")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {"n": len(vectors), "list_size": list_size, "ef_search": ef_search,

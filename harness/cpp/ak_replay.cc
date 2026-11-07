@@ -50,7 +50,11 @@ namespace
             std::exit(2);
         }
         struct stat st;
-        fstat(fd, &st);
+        if (fstat(fd, &st) != 0 || st.st_size < 8)
+        {
+            std::cerr << path << ": cannot stat or shorter than the 8-byte header\n";
+            std::exit(2);
+        }
         void* p = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
         close(fd);
         if (p == MAP_FAILED)
@@ -73,7 +77,8 @@ namespace
         Mapped m = mapFile(path);
         int32_t header[2];
         std::memcpy(header, m.data, sizeof(header));
-        if (m.bytes != 8 + static_cast<size_t>(header[0]) * header[1] * sizeof(float))
+        if (header[0] < 0 || header[1] <= 0 ||
+            m.bytes != 8 + static_cast<size_t>(header[0]) * static_cast<size_t>(header[1]) * sizeof(float))
         {
             std::cerr << path << ": size does not match its header\n";
             std::exit(2);
