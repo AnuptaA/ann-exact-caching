@@ -55,3 +55,18 @@ Last updated with the EC2 preparation. Differences from the Aker paper and the l
 Linux build and `setup_instance.sh`, CUDA paths, Python 3.10, behavior and memory at 1M-10M scale, agreement
 with the paper (`make q1-fidelity`), DPR_web context encoder reproducing the sphere vectors, Hermes'
 TriviaQA encoder, whether L = 50 is enough for the final learned system.
+
+## L microbenchmark (2026-11-07, ESCI 50K, K=10, T=0.9, 5K candidates, 20K scoring queries, seed 42)
+`populate esci` then `eval final` (7-feature logistic model, calibrated threshold), one run at a time.
+- Entry sizes {1,2,5} x K (10,20,50) versus {1,2,5,10} x K (10,20,50,100): oracle and 7-feature hit rates differ
+  by at most 0.003 at matched cache sizes up to 30% (noise); only the balls-only baseline gains about 0.01.
+  Populate 9.2 min / 1.4 GB versus 16.0 min / 1.6 GB; eval final about 4 min each.
+- The old set (10..500, 30K candidates) was stopped after 70 minutes without finishing.
+- Shell depth R (needs L >= R) on {1,2,5} x K, hit rate of the 7-feature model at matched cache size:
+  10% cache: R=50 0.240, 100 0.255, 200 0.264, 500 0.264; 20%: 0.357, 0.385, 0.397, 0.406; 1%: 0.091, 0.101, 0.100, 0.110
+  (balls-only 0.192 at 10%). Memory-fair (shell sample charged to the cache): R=200 and R=500 gain about the
+  same over balls-only at equal total memory (10%: +5.5 and +4.4 points, 20%: +6.8 and +6.9); R=50 gains less
+  above 5% (20%: +4.4).
+- Reading: {1,2,5} x K is enough for entries; the shell depth is what sets L. R=200 captures the memory-fair
+  gain of R=500 on this workload, so L = 200 looks sufficient; L = 500 buys nothing memory-fair. One workload and
+  one seed: confirm on SIFT1M before fixing `Q1_LIST_SIZE`.
