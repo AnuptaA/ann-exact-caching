@@ -1,14 +1,13 @@
 """Prepare one dataset directory: base and official vectors, universe, streams,
 answer table and ground truth. This is the layout `replay.DatasetDir` reads."""
 
-import json
 from pathlib import Path
 
 import numpy as np
 
 from harness import data
 from harness.backend.answer_table import build_answer_table
-from workloads.q1 import groundtruth, streams, universe
+from workloads.q1 import atomic, groundtruth, streams, universe
 
 
 class RequestVectors:
@@ -34,15 +33,14 @@ def write_universe_and_streams(ds: Path, n_official: int, n_groups: int = univer
                                universe_seed: int = 0, stream_seed: int = 0) -> None:
     """Write universe.npz and streams_seed<seed>.npz next to the vectors."""
     uni = universe.build_universe(n_official, n_groups, group_size, universe_seed)
-    np.savez(ds / "universe.npz", base_idx=uni.base_idx, partner_idx=uni.partner_idx,
-             lam=uni.lam, n_official=uni.n_official)
+    atomic.save_npz(ds / "universe.npz", base_idx=uni.base_idx, partner_idx=uni.partner_idx,
+                    lam=uni.lam, n_official=uni.n_official)
     out = {f"zipf_{s:.2f}": streams.zipf_stream(uni, n_requests, s, stream_seed) for s in zipf}
     out["uniform"] = streams.uniform_stream(uni, n_requests, stream_seed)
     if no_locality:
         out["no_locality"] = streams.no_locality_stream(uni, stream_seed)
-    np.savez(ds / f"streams_seed{stream_seed}.npz", history_fraction=history_fraction, **out)
-    (ds / "prepared.json").write_text(json.dumps(
-        {"universe_seed": universe_seed, "stream_seed": stream_seed}))
+    atomic.save_npz(ds / f"streams_seed{stream_seed}.npz", history_fraction=history_fraction, **out)
+    atomic.write_json(ds / "prepared.json", {"universe_seed": universe_seed, "stream_seed": stream_seed})
 
 
 def prepare_inputs(root: Path, name: str, base, official, **universe_args) -> Path:

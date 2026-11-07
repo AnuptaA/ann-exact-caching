@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from workloads.q1 import groundtruth, stats, streams, universe
+from workloads.q1 import atomic, groundtruth, stats, streams, universe
 from workloads.q1.datasets import triviaqa
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ def _triviaqa_encode(args):
     questions = np.load(args.questions, allow_pickle=False).tolist()
     encode = triviaqa.dpr_query_encoder(Path(args.encoder_dir), device=args.device,
                                         tokenizer_dir=Path(args.tokenizer_dir) if args.tokenizer_dir else None)
-    np.save(args.out, triviaqa.encode_questions(questions, encode))
+    atomic.save_npy(args.out, triviaqa.encode_questions(questions, encode))
 
 
 def _triviaqa_evidence(args):
@@ -37,8 +37,8 @@ def _triviaqa_evidence(args):
 def _universe(args):
     official = np.load(args.official, mmap_mode="r")
     uni = universe.build_universe(len(official), args.n_groups, args.group_size, args.seed)
-    np.savez(args.out, base_idx=uni.base_idx, partner_idx=uni.partner_idx, lam=uni.lam,
-             n_official=uni.n_official)
+    atomic.save_npz(args.out, base_idx=uni.base_idx, partner_idx=uni.partner_idx, lam=uni.lam,
+                    n_official=uni.n_official)
 
 
 def load_universe(path) -> universe.Universe:
@@ -54,7 +54,7 @@ def _streams(args):
     out["uniform"] = streams.uniform_stream(uni, args.n_requests, args.seed)
     if args.no_locality:
         out["no_locality"] = streams.no_locality_stream(uni, args.seed)
-    np.savez(args.out, history_fraction=args.history_fraction, **out)
+    atomic.save_npz(args.out, history_fraction=args.history_fraction, **out)
     for name, ids in out.items():
         s = float(name.split("_")[1]) if name.startswith("zipf") else None
         print(stats.format_stats(name, stats.stream_stats(uni, ids, s)))

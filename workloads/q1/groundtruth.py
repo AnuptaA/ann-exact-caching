@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
+from workloads.q1 import atomic
 from workloads.q1.distance import l2_to_ids
 
 logger = logging.getLogger(__name__)
@@ -158,7 +159,7 @@ def build_ground_truth(
     meta_path = out_dir / "meta.json"
     if meta_path.exists() and json.loads(meta_path.read_text()) != meta:
         raise ValueError(f"{meta_path} was written for a different run: {meta_path.read_text()}")
-    meta_path.write_text(json.dumps(meta))
+    atomic.write_json(meta_path, meta)
     # upload the base first (if it fits), then size the tiles from what is left
     resident = DeviceBase.try_load(base, device, base_chunk)
     query_chunk_used, base_chunk_used = query_chunk, base_chunk

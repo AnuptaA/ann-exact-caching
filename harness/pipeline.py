@@ -21,7 +21,7 @@ import numpy as np
 
 from harness import data
 from harness.datasets import DatasetSpec, get_spec
-from workloads.q1 import K, groundtruth, streams as stream_mod
+from workloads.q1 import K, atomic, groundtruth, streams as stream_mod
 from workloads.q1.recall import recall_batch
 
 logger = logging.getLogger(__name__)
@@ -348,7 +348,7 @@ def stage_tune_ef(ctx: Context) -> dict:
                          f"(pgvector's limit); lower Q1_LIST_SIZE")
     result = {"sweep": rows, "choice": choice, "ef_search": choice["ef_search"],
               "list_size": ctx.list_size, "n_queries": len(pick)}
-    (ctx.root / "tune.json").write_text(json.dumps(result, indent=1))
+    atomic.write_json(ctx.root / "tune.json", result, indent=1)
     return {"ef_search": choice["ef_search"], "recall": choice["grid_recall"]}
 
 
@@ -380,7 +380,7 @@ def stage_answer_table(ctx: Context) -> dict:
         raise StageError(f"answer-table shards {bad} failed (exit codes {codes}); last lines of shard "
                          f"{bad[0]}:\n{tail(logs[bad[0]])}")
     ids, dist = load_answer_table(ctx.root / "answers")
-    np.savez(ctx.root / "answers_first10.npz", ids=ids[:, :K].astype(np.int32), dist=dist[:, :K])
+    atomic.save_npz(ctx.root / "answers_first10.npz", ids=ids[:, :K].astype(np.int32), dist=dist[:, :K])
     return {"rows": int(len(ids)), "list_size": int(ids.shape[1]), "ef_search": tune["ef_search"]}
 
 
@@ -407,7 +407,7 @@ def stage_backend_recall(ctx: Context) -> dict:
                             "mean_recall_test_window": float(recall[test].mean())}
     out = {"mean_recall_all_ids": float(recall.mean()), "per_stream": per_stream,
            "ef_search": json.loads((ctx.root / "tune.json").read_text())["ef_search"]}
-    (ctx.root / "backend_recall.json").write_text(json.dumps(out, indent=1))
+    atomic.write_json(ctx.root / "backend_recall.json", out, indent=1)
     return {"mean_recall_all_ids": out["mean_recall_all_ids"]}
 
 
@@ -512,7 +512,7 @@ def run_pipeline(ctx: Context, stages=None, force=None, runners=None, validate=N
             clear_from(ctx, force)
         if real:
             ctx.root.mkdir(parents=True, exist_ok=True)
-            (ctx.root / "env.json").write_text(json.dumps(env_info(ctx), indent=1))
+            atomic.write_json(ctx.root / "env.json", env_info(ctx), indent=1)
         for stage in STAGES:
             if stage not in wanted or is_done(ctx, stage):
                 continue
@@ -539,7 +539,7 @@ def run_pipeline(ctx: Context, stages=None, force=None, runners=None, validate=N
             marker = _marker(ctx, stage)
             marker.parent.mkdir(parents=True, exist_ok=True)
             seconds = time.time() - start
-            marker.write_text(json.dumps({"seconds": round(seconds, 1), **info}))
+            atomic.write_json(marker, {"seconds": round(seconds, 1), **info})
             logger.info(f"[{ctx.spec.name}] stage {stage} done in {seconds / 60:.1f} min {info}")
             ran.append(stage)
     return ran
