@@ -115,3 +115,9 @@ def test_slices_skip_published_checksums(tmp_path, monkeypatch):
     path.write_bytes(b"slice")
     monkeypatch.setattr(common, "published_checksum", lambda url: pytest.fail("whole-file checksum used"))
     assert common.ensure_verified(path, "http://x/full", use_published=False)["kind"] == "sha256-tofu"
+
+
+def test_triviaqa_encode_cannot_fall_back_to_the_hub_tokenizer():
+    from workloads.q1 import cli
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["triviaqa-encode", "--questions", "q.npy", "--encoder-dir", "e", "--out", "o.npy"])

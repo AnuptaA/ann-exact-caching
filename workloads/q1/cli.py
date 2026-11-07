@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def _triviaqa_encode(args):
     questions = np.load(args.questions, allow_pickle=False).tolist()
     encode = triviaqa.dpr_query_encoder(Path(args.encoder_dir), device=args.device,
-                                        tokenizer_dir=Path(args.tokenizer_dir) if args.tokenizer_dir else None)
+                                        tokenizer_dir=Path(args.tokenizer_dir))
     atomic.save_npy(args.out, triviaqa.encode_questions(questions, encode))
 
 
@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("triviaqa-encode", help="encode questions with the DPR query encoder")
     p.add_argument("--questions", required=True)
     p.add_argument("--encoder-dir", required=True)
-    p.add_argument("--tokenizer-dir", default=None, help="folder with vocab.txt (no download)")
+    p.add_argument("--tokenizer-dir", required=True, help="folder with vocab.txt (no download)")
     p.add_argument("--out", required=True)
     p.add_argument("--device", default="cpu")
     p.set_defaults(run=_triviaqa_encode)
