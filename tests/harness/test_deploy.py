@@ -102,3 +102,15 @@ def test_make_targets_expand_to_the_expected_commands():
                              env={**__import__("os").environ})
     dirty = bool(subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True).stdout.strip())
     assert (refused.returncode != 0) == dirty
+
+
+@pytest.mark.root_volume_check
+def test_data_volume_check_refuses_the_root_volume_unless_allowed(tmp_path, monkeypatch):
+    monkeypatch.delenv("Q1_ALLOW_ROOT_VOLUME", raising=False)
+    monkeypatch.setattr(preflight, "device_of", lambda path: 7)
+    assert "root volume" in preflight.check_data_volume(tmp_path / "not" / "created")[0]
+    monkeypatch.setenv("Q1_ALLOW_ROOT_VOLUME", "1")
+    assert preflight.check_data_volume(tmp_path) == []
+    monkeypatch.delenv("Q1_ALLOW_ROOT_VOLUME")
+    monkeypatch.setattr(preflight, "device_of", lambda path: 1 if str(path) == "/" else 2)
+    assert preflight.check_data_volume(tmp_path) == []       # a different device than "/"

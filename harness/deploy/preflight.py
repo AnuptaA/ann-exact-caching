@@ -36,6 +36,23 @@ def need_bytes(dataset: str) -> dict:
     return {**parts, "disk": int(sum(parts.values())), "ram": int(graph * 1.15 + 4 * GIB)}
 
 
+def device_of(path: Path) -> int:
+    return os.stat(path).st_dev
+
+
+def check_data_volume(data_dir: Path) -> list[str]:
+    """The data directory must not sit on the root volume (an unmounted /data would fill it)."""
+    if os.environ.get("Q1_ALLOW_ROOT_VOLUME") == "1":
+        return []
+    probe = Path(data_dir).resolve()
+    while not probe.exists():
+        probe = probe.parent
+    if device_of(probe) == device_of(Path("/")):
+        return [f"{data_dir} is on the root volume: mount the data volume there, or set "
+                "Q1_ALLOW_ROOT_VOLUME=1 to accept it"]
+    return []
+
+
 def check(datasets, data_dir: Path, require_linux: bool = True, repo: Path | None = None) -> list[str]:
     """Return the list of problems; an empty list means the instance can run."""
     problems = []
@@ -46,6 +63,7 @@ def check(datasets, data_dir: Path, require_linux: bool = True, repo: Path | Non
         problems.append("not a git checkout")
     elif status.stdout.strip():
         problems.append("git tree is dirty: commit or stash before deploying")
+    problems += check_data_volume(data_dir)
     needs = [need_bytes(d) for d in datasets]
     disk_needed = sum(n["disk"] for n in needs)
     Path(data_dir).mkdir(parents=True, exist_ok=True)

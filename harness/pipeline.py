@@ -548,6 +548,10 @@ def run_pipeline(ctx: Context, stages=None, force=None, runners=None, validate=N
         if force:
             clear_from(ctx, force)
         if real:
+            from harness.deploy import preflight
+            problems = preflight.check_data_volume(ctx.data_dir)
+            if problems:
+                raise StageError(problems[0])
             ctx.root.mkdir(parents=True, exist_ok=True)
             atomic.write_json(ctx.root / "env.json", env_info(ctx), indent=1)
         for stage in STAGES:
