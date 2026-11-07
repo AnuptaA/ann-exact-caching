@@ -1,0 +1,89 @@
+"""Fidelity check: Aker (paper settings) on Aker's released SPACEV stream.
+
+Reports system delivered recall (criterion: >= 0.8) and the cumulative hit ratio
+over the request sequence, to be compared by eye with the paper's Figures 8 and
+9. Report only; nothing is tuned toward the paper.
+"""
+
+import io
+import pickle
+from pathlib import Path
+
+import numpy as np
+
+from harness import data
+from harness.backend.answer_table import build_answer_table
+from workloads.q1 import groundtruth
+
+MIN_RECALL = 0.8
+_ALLOWED = {("numpy", "ndarray"), ("numpy", "dtype"), ("numpy._core.multiarray", "_reconstruct"),
+            ("numpy.core.multiarray", "_reconstruct"), ("numpy._core.multiarray", "scalar"),
+            ("numpy.core.multiarray", "scalar"), ("builtins", "list"), ("builtins", "dict"),
+            ("builtins", "tuple"), ("builtins", "set"), ("builtins", "bytearray")}
+
+
+class RestrictedUnpickler(pickle.Unpickler):
+    """Only numpy arrays and builtin containers; every other global is rejected."""
+
+    def find_class(self, module, name):
+        if (module, name) in _ALLOWED:
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(f"global {module}.{name} is not allowed")
+
+
+def load_released_pickle(path: Path):
+    """Inspect a third-party .pkl safely (run it in the isolated environment too)."""
+    return RestrictedUnpickler(io.BytesIO(Path(path).read_bytes())).load()
+
+
+class FidelityData:
+    """Duck-typed dataset for run_cell: the released stream over distinct vectors."""
+
+    history_fraction = 0.0   # measure every request
+
+    def __init__(self, root: Path, base_path: Path, payload: np.ndarray, backend, ef_search: int,
+                 list_size: int = 50, gt_device: str = "numpy"):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.base = data.read_f32bin(data.write_f32bin(self.root / "base.f32bin", np.load(base_path, mmap_mode="r")))
+        unique, inverse = np.unique(np.asarray(payload, dtype=np.float32), axis=0, return_inverse=True)
+        self.unique = unique
+        self.streams = {"released": inverse.astype(np.int64).ravel()}
+        build_answer_table(backend, unique, self.base, self.root / "answers", list_size, ef_search)
+        self.answer_ids, self.answer_dist = _load(self.root / "answers")
+        groundtruth.build_ground_truth(unique, self.base, self.root / "gt", device=gt_device)
+        self.gt_ids, self.gt_dist = groundtruth.load_ground_truth(self.root / "gt")
+        self.backend = {"backend": backend.name, "ef_search": ef_search, "list_size": list_size}
+
+    def vectors_of(self, ids: np.ndarray) -> np.ndarray:
+        return self.unique[ids]
+
+
+def _load(path):
+    from harness.backend.answer_table import load_answer_table
+    return load_answer_table(path)
+
+
+def cumulative_hit_ratio(outcome: np.ndarray) -> np.ndarray:
+    return np.cumsum(outcome != 0) / np.arange(1, len(outcome) + 1)
+
+
+def check_recall(delivered: float, minimum: float = MIN_RECALL) -> dict:
+    return {"delivered_recall": delivered, "minimum": minimum, "pass": delivered >= minimum}
+
+
+def plot_hit_ratio(curves: dict, path: Path) -> Path:
+    """Cumulative hit ratio versus request index, one line per pool size."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for label, curve in curves.items():
+        ax.plot(np.arange(1, len(curve) + 1), curve, label=label)
+    ax.set_xlabel("request index")
+    ax.set_ylabel("cumulative hit ratio")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+    return Path(path)

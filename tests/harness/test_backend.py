@@ -150,3 +150,9 @@ def test_real_pgvector_behaviors():
         assert top50[:10].tolist() == top10.tolist()
         with pytest.raises(Exception):
             be.search(q, 10, pgvector.EF_SEARCH_MAX + 1)
+
+
+def test_copy_lines_format():
+    from harness.backend import load
+    rows = np.array([[1.0, 2.5], [3.0, -4.0]], dtype=np.float32)
+    assert list(load.copy_lines(rows, 7)) == ["7\t[1,2.5]\n", "8\t[3,-4]\n"]

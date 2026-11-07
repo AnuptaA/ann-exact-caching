@@ -103,3 +103,20 @@ def test_grid_ids_sharding_and_budget_rule():
         manifest.Cell("d", "s", "aker", "paper", 1).percentile()
     with pytest.raises(ValueError):
         results.write_result(Path("."), "x", {"cell": 1})
+
+
+@needs_driver
+def test_cli_run_resumes_and_shards(dataset, tmp_path, capsys):
+    from harness import cli
+    base_args = ["--datasets", "toy", "--streams", "uniform", "--shard", "0/6"]
+    cli.main(["grid", *base_args])
+    listed = capsys.readouterr().out.split()
+    assert len(listed) >= 1
+    run_args = ["run", *base_args, "--data-dir", str(dataset), "--out-dir", str(tmp_path / "r"),
+                "--work-dir", str(tmp_path / "w"), "--driver-dir", str(DRIVERS)]
+    cli.main(run_args)
+    done = sorted(p.name for p in (tmp_path / "r").glob("*.npz"))
+    assert len(done) == len(listed)
+    stamp = [p.stat().st_mtime_ns for p in (tmp_path / "r").glob("*.npz")]
+    cli.main(run_args)                                      # resume: nothing is rerun
+    assert stamp == [p.stat().st_mtime_ns for p in (tmp_path / "r").glob("*.npz")]
