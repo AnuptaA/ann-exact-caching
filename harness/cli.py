@@ -190,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("answer-table", help="build the backend answer table (resumable, shardable)")
     p.add_argument("--dataset-dir", required=True)
     p.add_argument("--dsn", required=True)
-    p.add_argument("--list-size", type=int, default=50)
+    p.add_argument("--list-size", type=int, required=True)
     p.add_argument("--ef-search", type=int, required=True)
     p.add_argument("--shard", type=_shard_arg, default=(0, 1))
     p.set_defaults(run=_answer_table)

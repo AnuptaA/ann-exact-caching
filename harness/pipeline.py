@@ -77,8 +77,8 @@ class Context:
         return f"q1_{self.spec.name}"
 
     def db_dsn(self) -> str:
-        from psycopg.conninfo import make_conninfo
-        return make_conninfo(self.dsn, dbname=self.db_name)
+        from harness.backend.pgvector import with_keepalives
+        return with_keepalives(self.dsn, self.db_name)
 
 
 def auto_device() -> str:
@@ -484,12 +484,44 @@ def validate_stage(ctx: Context, stage: str) -> None:
         ids = np.load(ctx.root / "answers_first10.npz")["ids"]
         if ids.shape != (ctx.n_ids, K) or ids.min() < 0 or ids.max() >= s.n_base:
             raise ValueError(f"answer table first-10 has shape {ids.shape} or ids out of range")
-        if any(len(set(row)) != K for row in ids[:: max(1, len(ids) // 2000)]):
-            raise ValueError("answer table rows contain duplicate ids")
+        validate_answer_table(ctx)
     elif stage == "backend_recall":
         rec = json.loads((ctx.root / "backend_recall.json").read_text())
         if not 0.0 < rec["mean_recall_all_ids"] <= 1.0:
             raise ValueError(f"implausible backend recall {rec['mean_recall_all_ids']}")
+
+
+RECALL_TOLERANCE = 0.02   # answer table vs tune.json on the tuning queries (same index, same ef_search)
+
+
+def validate_answer_table(ctx: Context) -> dict:
+    """Full block checks, stored distances against a recomputation, recall against tune.json."""
+    from harness.backend.answer_table import load_answer_table, validate_blocks
+    from harness.runner.prepare import request_vectors_of
+    from workloads.q1.distance import l2_to_ids
+    tune = json.loads((ctx.root / "tune.json").read_text())
+    validate_blocks(ctx.root / "answers", ctx.spec.n_base, ctx.list_size, ctx.n_ids)
+    ids, dist = load_answer_table(ctx.root / "answers")
+    base = data.read_f32bin(ctx.root / "base.f32bin")
+    vectors = request_vectors_of(ctx.root)
+    rng = np.random.default_rng(ctx.seed + 1)
+    for row in np.sort(rng.choice(len(ids), min(200, len(ids)), replace=False)):
+        fresh = l2_to_ids(np.asarray(vectors[int(row):int(row) + 1][0], dtype=np.float32), base, ids[row])
+        if not np.allclose(fresh, dist[row], rtol=1e-4, atol=1e-5):
+            raise ValueError(f"answer table row {row}: stored distances differ from a recomputation")
+    official = data.read_f32bin(ctx.root / "official.f32bin")
+    uni = _load_universe(ctx)
+    _, gt_dist = groundtruth.load_ground_truth(ctx.root / "gt")
+    pick = np.sort(np.random.default_rng(ctx.seed).choice(
+        len(official), min(tune["n_queries"], len(official)), replace=False))
+    rows = uni.pool_id(0) + pick
+    recall = float(recall_batch(np.asarray(official[pick], dtype=np.float32), ids[rows, :K], base,
+                                gt_dist[rows, K - 1]).mean())
+    expected = tune["choice"]["grid_recall"]
+    if abs(recall - expected) > RECALL_TOLERANCE:
+        raise ValueError(f"answer table recall@{K} on the tuning queries is {recall:.4f}, tune.json "
+                         f"recorded {expected:.4f} (tolerance {RECALL_TOLERANCE})")
+    return {"recall_on_tuning_queries": recall, "tune_recall": expected}
 
 
 def run_pipeline(ctx: Context, stages=None, force=None, runners=None, validate=None) -> list[str]:

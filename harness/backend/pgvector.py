@@ -10,6 +10,18 @@ EF_SEARCH_MAX = 1000   # pgvector's upper limit for hnsw.ef_search
 EXPECTED_VERSION = "0.8.0"
 
 
+KEEPALIVES = {"keepalives": "1", "keepalives_idle": "60", "keepalives_interval": "10",
+              "keepalives_count": "6", "connect_timeout": "30"}
+
+
+def with_keepalives(dsn: str, dbname: str | None = None) -> str:
+    """dsn with TCP keepalives and a connect timeout (kept if the dsn already sets them)."""
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    given = conninfo_to_dict(dsn)
+    extra = {k: v for k, v in KEEPALIVES.items() if k not in given}
+    return make_conninfo(dsn, **extra, **({"dbname": dbname} if dbname else {}))
+
+
 def extension_version(conn) -> str:
     with conn.cursor() as cur:
         cur.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")

@@ -20,12 +20,14 @@ NOT_FITTING = "no longer fits"
 
 
 def hnsw_graph_bytes(n: int, dim: int, m: int) -> int:
-    """Estimated size of the in-memory HNSW graph while building.
+    """Memory pgvector 0.8.0 needs to keep the HNSW graph during the build.
 
-    Roughly the float32 vectors plus level-0 neighbor lists; calibrated against
-    the ~41 GB reported for 10M x 768 with m = 32 (4112 bytes per vector).
+    Vector (4 bytes per dimension), level-0 neighbor slots (32 bytes per unit of m) and
+    about 204 bytes of element overhead, fitted to the "graph no longer fits after N
+    tuples" notice for (dim, m) in {(100, 16), (128, 16), (384, 16), (768, 32)}; the
+    same for serial and parallel builds. The earlier constant (16) was 18-20% low for m = 16.
     """
-    return n * (4 * dim + 32 * m + 16)
+    return n * (4 * dim + 32 * m + 208)
 
 
 def maintenance_work_mem_mb(n: int, dim: int, m: int, margin: float = MEMORY_MARGIN) -> int:
@@ -34,7 +36,8 @@ def maintenance_work_mem_mb(n: int, dim: int, m: int, margin: float = MEMORY_MAR
 
 def create_index_sql(table: str, column: str, index_name: str, m: int, ef_construction: int,
                      maintenance_mb: int, workers: int) -> list[str]:
-    return [f"SET maintenance_work_mem = '{maintenance_mb}MB'",
+    return ["SET statement_timeout = 0",
+            f"SET maintenance_work_mem = '{maintenance_mb}MB'",
             f"SET max_parallel_maintenance_workers = {int(workers)}",
             f"CREATE INDEX {index_name} ON {table} USING hnsw ({column} vector_l2_ops) "
             f"WITH (m = {int(m)}, ef_construction = {int(ef_construction)})"]

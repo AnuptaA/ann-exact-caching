@@ -73,10 +73,13 @@ def test_session_disables_seqscan_and_iterative_scans_and_checks_the_plan():
 
 
 def test_build_memory_sizing_and_notice_guard():
-    assert build_index.hnsw_graph_bytes(10_000_000, 768, 32) == pytest.approx(41e9, rel=0.01)
+    assert build_index.hnsw_graph_bytes(10_000_000, 768, 32) == pytest.approx(43.04e9, rel=0.01)
+    # measured bytes per tuple (pgvector 0.8.0 notices): dim 100/m 16, 128/16, 384/16, 768/32
+    for dim, m, measured in ((100, 16, 1115), (128, 16, 1228), (384, 16, 2250), (768, 32, 4303)):
+        assert build_index.hnsw_graph_bytes(1, dim, m) == pytest.approx(measured, rel=0.01)
     assert build_index.maintenance_work_mem_mb(10_000_000, 768, 32) > 41_000
     sql = build_index.create_index_sql("base", "embedding", "idx", 16, 128, 900, 4)
-    assert "m = 16, ef_construction = 128" in sql[2] and "900MB" in sql[0]
+    assert "m = 16, ef_construction = 128" in sql[3] and "900MB" in sql[1] and sql[0] == "SET statement_timeout = 0"
     watcher = build_index.NoticeWatcher()
     watcher("hnsw graph no longer fits into maintenance_work_mem after 1000 tuples")
     with pytest.raises(RuntimeError):
@@ -124,6 +127,50 @@ def test_answer_table_resumes_shards_and_rejects_short_answers(tmp_path):
             return out
     with pytest.raises(ValueError):
         answer_table.build_answer_table(Short(base), vectors, base, tmp_path / "s", 20, 100)
+
+
+def test_dsn_gets_keepalives_unless_it_sets_its_own():
+    dsn = pgvector.with_keepalives("host=127.0.0.1 port=54320 user=postgres", "q1_esci")
+    assert "dbname=q1_esci" in dsn and "keepalives_idle=60" in dsn and "connect_timeout=30" in dsn
+    own = pgvector.with_keepalives("host=h keepalives_idle=5")
+    assert "keepalives_idle=5" in own and own.count("keepalives_idle") == 1
+
+
+def test_answer_table_requires_ef_search_between_list_size_and_the_pgvector_limit(tmp_path):
+    base = RNG.normal(size=(120, 4)).astype(np.float32)
+    vectors = RNG.normal(size=(5, 4)).astype(np.float32)
+    for ef in (19, 1001):
+        with pytest.raises(ValueError, match="ef_search"):
+            answer_table.build_answer_table(ExactBackend(base), vectors, base, tmp_path / "t", 20, ef)
+    assert not (tmp_path / "t").exists()
+
+
+def test_validate_blocks_catches_each_kind_of_corruption(tmp_path):
+    base = RNG.normal(size=(120, 4)).astype(np.float32)
+    vectors = RNG.normal(size=(25, 4)).astype(np.float32)
+    table = tmp_path / "t"
+    answer_table.build_answer_table(ExactBackend(base), vectors, base, table, 20, 100, block=10)
+    answer_table.validate_blocks(table, 120, 20, 25)
+    with pytest.raises(ValueError, match="meta"):
+        answer_table.validate_blocks(table, 120, 20, 26)
+    good = dict(np.load(table / "block_0000001.npz"))
+
+    def rewrite(**changes):
+        np.savez(table / "block_0000001.npz", **{**good, **changes})
+
+    for changes, message in (({"ids": np.where(good["ids"] == good["ids"][0, 0], 120, good["ids"])}, "outside"),
+                             ({"ids": np.concatenate([good["ids"][:, :1], good["ids"][:, :1],
+                                                      good["ids"][:, 2:]], axis=1)}, "repeats"),
+                             ({"dist": good["dist"][:, ::-1].copy()}, "sorted"),
+                             ({"dist": np.where(np.arange(20) == 3, np.nan, good["dist"]).astype(np.float32)}, "finite"),
+                             ({"ids": good["ids"][:-1], "dist": good["dist"][:-1]}, "shape")):
+        rewrite(**changes)
+        with pytest.raises(ValueError, match=message):
+            answer_table.validate_blocks(table, 120, 20, 25)
+    rewrite()
+    (table / "block_0000002.npz").unlink()
+    with pytest.raises(ValueError, match="blocks present"):
+        answer_table.validate_blocks(table, 120, 20, 25)
 
 
 @pytest.mark.skipif(not os.environ.get("PGVECTOR_TEST_DSN"), reason="needs PostgreSQL + pgvector")

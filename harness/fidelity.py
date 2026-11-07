@@ -103,9 +103,8 @@ def run_fidelity(data_dir: Path, dsn: str, driver_dir: Path, out_dir: Path, work
     the pass/fail against the criterion and writes the cumulative hit-ratio plot.
     """
     import psycopg
-    from psycopg.conninfo import make_conninfo
     from workloads.q1.datasets import common
-    from harness.backend.pgvector import PgvectorBackend, check_version
+    from harness.backend.pgvector import PgvectorBackend, check_version, with_keepalives
     from harness.runner import manifest, replay, results
     root = Path(data_dir) / "fidelity"
     if payload_path is None:
@@ -116,7 +115,7 @@ def run_fidelity(data_dir: Path, dsn: str, driver_dir: Path, out_dir: Path, work
         print(f"released pickle: {type(obj).__name__}, "
               f"{len(obj) if hasattr(obj, '__len__') else ''} items")
     payload = np.load(payload_path)
-    with psycopg.connect(make_conninfo(dsn, dbname=f"q1_{dataset}"), autocommit=True) as conn:
+    with psycopg.connect(with_keepalives(dsn, f"q1_{dataset}"), autocommit=True) as conn:
         check_version(conn)
         ds = FidelityData(root / "tables", Path(data_dir) / dataset / "base.f32bin", payload,
                           PgvectorBackend(conn), ef_search, list_size, device)
