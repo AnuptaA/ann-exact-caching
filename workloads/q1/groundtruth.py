@@ -95,6 +95,7 @@ class DeviceBase:
 def _candidates_torch(queries: np.ndarray, base, n_cand: int, base_chunk: int,
                       device: str, resident: "DeviceBase | None" = None) -> np.ndarray:
     import torch
+    torch.backends.cuda.matmul.allow_tf32 = False   # TF32 would make candidate distances too coarse
     q = torch.from_numpy(queries).to(device)
     q_sq = (q * q).sum(1)
     best_d = torch.full((len(q), n_cand), float("inf"), device=device)

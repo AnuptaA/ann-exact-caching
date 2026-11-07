@@ -157,6 +157,13 @@ def test_pg_stage_resource_checks_use_the_server_data_dir_and_refuse_small_ram(t
     assert pipeline.pg_data_dir(pipeline.make_context("sphere", tmp_path, dsn="host=127.0.0.1 port=1")) is None
 
 
+@pytest.mark.parametrize("name", ["esci", "sphere"])
+def test_cpu_encoding_of_big_text_datasets_is_refused_unless_allowed(tmp_path, name):
+    ctx = pipeline.make_context(name, tmp_path, device="numpy")
+    with pytest.raises(pipeline.StageError, match="Q1_ALLOW_SLOW"):
+        pipeline.stage_embed(ctx)
+
+
 def test_validation_catches_bad_outputs(tmp_path):
     ctx = _ctx(tmp_path)
     pipeline.run_pipeline(ctx, stages=["fetch", "embed", "to_f32", "inputs", "groundtruth"])

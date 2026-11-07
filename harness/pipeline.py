@@ -235,9 +235,9 @@ def stage_fetch(ctx: Context) -> dict:
 
 
 def stage_embed(ctx: Context) -> dict:
-    if ctx.spec.embed is not None and ctx.spec.name == "esci" and ctx.device != "cuda" \
+    if ctx.spec.embed is not None and ctx.spec.name in ("esci", "sphere") and ctx.device != "cuda" \
             and not ctx.extra.get("allow_slow"):
-        raise StageError("embedding 1.8M ESCI products on the CPU takes many hours; use a GPU "
+        raise StageError(f"encoding the {ctx.spec.name} texts on the CPU takes many hours; use a GPU "
                          "(Q1_DEVICE=cuda) or set Q1_ALLOW_SLOW=1 to accept it")
     if ctx.spec.embed is not None:
         ctx.spec.embed(ctx.raw, {"device": "cuda" if ctx.device == "cuda" else "cpu",
