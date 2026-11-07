@@ -208,6 +208,10 @@ def stage_fetch(ctx: Context) -> dict:
 
 
 def stage_embed(ctx: Context) -> dict:
+    if ctx.spec.embed is not None and ctx.spec.name == "esci" and ctx.device != "cuda" \
+            and not ctx.extra.get("allow_slow"):
+        raise StageError("embedding 1.8M ESCI products on the CPU takes many hours; use a GPU "
+                         "(Q1_DEVICE=cuda) or set Q1_ALLOW_SLOW=1 to accept it")
     if ctx.spec.embed is not None:
         ctx.spec.embed(ctx.raw, {"device": "cuda" if ctx.device == "cuda" else "cpu",
                                  "encode_python": ctx.encode_python})
@@ -520,6 +524,12 @@ GPU_BASE_CHUNK = 131072
 
 def make_context(dataset: str, data_dir, dsn: str = "", device: str = "auto", **kw) -> Context:
     dev = auto_device() if device == "auto" else device
+    if device == "auto" and dev == "numpy":
+        logger.warning("no CUDA device found: ground truth and encoders will run on the CPU "
+                       "(fine for the tiny smoke test, hours for real datasets)")
+    if dev == "cuda" and auto_device() != "cuda":
+        raise StageError("device cuda requested but torch cannot see a CUDA device "
+                         "(driver missing, CPU-only torch build, or no GPU on this instance)")
     kw = {k: v for k, v in kw.items() if v is not None}
     if dev == "cuda":
         kw.setdefault("gt_query_chunk", GPU_QUERY_CHUNK)

@@ -160,3 +160,12 @@ def test_validation_catches_bad_outputs(tmp_path):
     np.savez(first, **z)
     with pytest.raises(ValueError, match="out-of-range"):
         pipeline.validate_stage(ctx, "groundtruth")
+
+
+def test_cuda_request_without_a_gpu_and_cpu_esci_embedding_are_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline, "auto_device", lambda: "numpy")
+    with pytest.raises(pipeline.StageError, match="cannot see a CUDA device"):
+        pipeline.make_context("tiny", tmp_path, device="cuda")
+    ctx = pipeline.make_context("esci", tmp_path, device="numpy")
+    with pytest.raises(pipeline.StageError, match="many hours"):
+        pipeline.stage_embed(ctx)
