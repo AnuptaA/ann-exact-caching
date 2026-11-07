@@ -197,3 +197,32 @@ def test_fetch_encoder_extracts_the_archive_layout_and_rejects_escapes(server, t
             triviaqa.fetch_encoder(tmp_path / "bad2")
     finally:
         triviaqa.ENCODER_URL = old
+
+
+def test_esci_build_writes_products_and_distinct_queries(tmp_path):
+    pytest.importorskip("pyarrow")
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    n_products = 100
+    pd.DataFrame({"product_id": [f"p{i}" for i in range(n_products)],
+                  "product_title": [f"title {i}" for i in range(n_products)],
+                  "product_bullet_point": [f"first {i}\nsecond" if i % 2 else None for i in range(n_products)]}
+                 ).to_parquet(raw / esci.RAW_FILES[0])
+    pd.DataFrame({"query_id": [3, 1, 2, 1, 4, 5], "query": ["b", "a", "a", "a", "c", "d"]}
+                 ).to_parquet(raw / esci.RAW_FILES[1])
+    seen = []
+
+    def encode(texts):
+        seen.append(list(texts))
+        return np.tile(np.arange(len(texts), dtype=np.float32)[:, None], (1, 4))
+
+    old = esci.check_counts
+    esci.check_counts = lambda p, q, t, **kw: old(p, q, t, expected_products=n_products, expected_query_ids=5)
+    try:
+        counts = esci.build(raw, tmp_path / "out", encode)
+    finally:
+        esci.check_counts = old
+    assert counts == {"products": 100, "query_ids": 5, "query_texts": 4}
+    assert seen[0] == ["a", "b", "c", "d"] and seen[1][0] == "title 0" and seen[1][1] == "title 1. first 1"
+    assert np.load(tmp_path / "out" / "esci_products.npy").shape == (100, 4)
+    assert np.load(tmp_path / "out" / "esci_query_ids.npy").tolist() == [1, 3, 4, 5]
