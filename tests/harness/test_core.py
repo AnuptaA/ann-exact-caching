@@ -75,6 +75,7 @@ def test_scoring_uses_true_recall_not_hit_flags():
     assert s["delivered_recall"] == pytest.approx((0.0 + 1.0 + 0.5) / 3)
     assert score.equality.tolist() == [False, False, True, False]   # request 2 repeats vector 1
     assert score.approximate.tolist() == [False, True, False, True]
+    assert score.seen_before_hit.tolist() == [False, False, True, False]
     assert s["recall_on_misses"] is None
     with pytest.raises(ValueError):
         scoring.score_run(outcome[:3], ids, stream, q, base, kth, 1)
@@ -93,3 +94,15 @@ def test_f32bin_roundtrip_from_int8_and_float64(tmp_path):
         assert np.array_equal(out, src.astype(np.float32))
         path.unlink()
     assert sq_l2_rows(out[:3], out[3:6]).shape == (3,)
+
+
+def test_equality_is_the_driver_code_not_seen_before_and_linked_counts_as_approximate():
+    base = np.zeros((30, 2), dtype=np.float32)
+    base[:, 0] = np.arange(30)
+    ids = np.tile(np.arange(10), (4, 1))
+    outcome = np.array([0, 1, 3, 2])
+    stream = np.array([5, 5, 5, 5])          # every request repeats, but only code 1 is equality
+    score = scoring.score_run(outcome, ids, stream, np.zeros((4, 2), np.float32), base, np.full(4, 9.0), 0)
+    assert score.equality.tolist() == [False, True, False, False]
+    assert score.approximate.tolist() == [False, False, True, True]
+    assert score.seen_before_hit.tolist() == [False, True, True, True]

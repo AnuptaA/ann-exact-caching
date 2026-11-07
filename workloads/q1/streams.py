@@ -19,8 +19,9 @@ def zipf_stream(uni: Universe, n_requests: int, s: float, seed: int = 0) -> np.n
     """Zipf over groups (random rank permutation), then a uniform member."""
     if s < 0:
         raise ValueError("zipf exponent must be non-negative")
+    # one rank permutation per stream seed (shared by all exponents); sampling noise per exponent
+    group_at_rank = np.random.default_rng([seed, 5]).permutation(uni.n_groups)
     rng = np.random.default_rng([seed, 2, int(round(s * 1000))])
-    group_at_rank = rng.permutation(uni.n_groups)
     ranks = rng.choice(uni.n_groups, size=n_requests, p=zipf_probabilities(uni.n_groups, s))
     members = rng.integers(0, uni.group_size, size=n_requests)
     return group_at_rank[ranks] * uni.group_size + members

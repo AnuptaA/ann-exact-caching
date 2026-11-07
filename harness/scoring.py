@@ -6,15 +6,16 @@ import numpy as np
 
 from workloads.q1.recall import recall_batch
 
-MISS, EXACT_LIB, APPROX = 0, 1, 2
+MISS, EQUALITY, APPROX, LINKED = 0, 1, 2, 3   # LINKED counts as approximate
 
 
 @dataclass
 class RunScore:
     recall: np.ndarray          # per request, always against the exact top-10
     hit: np.ndarray             # bool per request
-    equality: np.ndarray        # bool: hit on a vector seen earlier in the stream
-    approximate: np.ndarray     # bool: any other hit
+    equality: np.ndarray        # bool: served by an entry stored under this exact vector id
+    approximate: np.ndarray     # bool: any other hit (filter hit or linked repeat)
+    seen_before_hit: np.ndarray  # diagnostic: hit on a vector that appeared earlier
     window: slice               # requests that are measured (the test window)
 
     def summary(self) -> dict:
@@ -47,12 +48,15 @@ def score_run(
     kth_dist_of_request: np.ndarray,
     history_len: int,
 ) -> RunScore:
-    """Recall of each request's returned list (hit list or backend answer)."""
+    """Recall of each request's returned list (hit list or backend answer).
+
+    Equality is the driver's strict outcome code, not "seen before".
+    """
     if not (len(outcome) == len(result_ids) == len(stream_ids) == len(request_vecs)):
         raise ValueError("per-request arrays have different lengths")
     hit = outcome != MISS
     seen = seen_before(stream_ids)
     return RunScore(
         recall=recall_batch(request_vecs, result_ids, base, kth_dist_of_request),
-        hit=hit, equality=hit & seen, approximate=hit & ~seen,
-        window=slice(history_len, len(outcome)))
+        hit=hit, equality=outcome == EQUALITY, approximate=(outcome == APPROX) | (outcome == LINKED),
+        seen_before_hit=hit & seen, window=slice(history_len, len(outcome)))

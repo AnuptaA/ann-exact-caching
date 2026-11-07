@@ -121,8 +121,10 @@ def run_cell(cell: Cell, ds: DatasetDir, driver_dir: Path, out_dir: Path, work_d
               "aker_revision": AKER_REVISION, "history_len": history_len,
               "summary": score.summary(), "peak_pool_vectors_sampled": peak,
               "thresholds": thresholds_info,
-              "library_exact_hits_in_window": int((outcome[w] == scoring.EXACT_LIB).sum()),
               "equality_hits_in_window": int(score.equality[w].sum()),
+              "approximate_filter_hits_in_window": int((outcome[w] == scoring.APPROX).sum()),
+              "linked_hits_in_window": int((outcome[w] == scoring.LINKED).sum()),
+              "seen_before_hits_in_window": int(score.seen_before_hit[w].sum()),
               "driver_summary": (work / "summary.txt").read_text()}
     return results.write_result(out_dir, cell.cell_id, header, outcome=outcome,
                                 recall=score.recall.astype(np.float32), equality=score.equality,

@@ -7,8 +7,9 @@
 //   --stream    int64[m]: universe id of every request
 //   --answers   int64[m * k]: backend top-k ids per request (nearest first)
 //   --dists     float32[m * k]: Euclidean distances of those answers
-// Output (--out-dir): outcome.u8 (0 miss, 1 library exact/linked hit, 2
-// approximate hit), result_ids.i64 (m * k, hit lists or backend answers),
+// Output (--out-dir): outcome.u8 (0 miss, 1 equality hit: served by an entry stored under
+// this exact vector id, 2 approximate hit via the filter, 3 linked repeat served by another
+// query's entry, counted as approximate), result_ids.i64 (m * k, hit lists or backend answers),
 // seen.u8 (request id seen before), status.log, summary.txt.
 //
 // Distances handed to Aker are squared L2: slot distances are the squared
@@ -199,7 +200,7 @@ int main(int argc, char** argv)
     std::vector<int64_t> result_ids(m * k, -1);
     std::unordered_set<int64_t> seen;
     std::ofstream status_log(out_dir + "/status.log");
-    size_t hits_exact = 0, hits_approx = 0, insert_failed = 0, link_failed = 0, invalid = 0;
+    size_t hits_exact = 0, hits_approx = 0, hits_linked = 0, insert_failed = 0, link_failed = 0, invalid = 0;
 
     for (size_t i = 0; i < m; i++)
     {
@@ -219,8 +220,11 @@ int main(int argc, char** argv)
 
         if (hit != nullptr && !is_invalid)
         {
-            outcome[i] = similar ? 2 : 1;
-            (similar ? hits_approx : hits_exact)++;
+            // Equality only when the entry was stored under this exact vector id; a linked
+            // repeat (exact-id lookup that returns another query's entry) is approximate.
+            const bool own_entry = akerGetQueryVectorIdFromCacheEntry(hit) == queryId(uid);
+            outcome[i] = similar ? 2 : (own_entry ? 1 : 3);
+            (similar ? hits_approx : (own_entry ? hits_exact : hits_linked))++;
             for (size_t j = 0; j < k; j++)
             {
                 char* slot = akerGetResultVectorSlotAt(hit, static_cast<int>(j));
@@ -287,7 +291,7 @@ int main(int argc, char** argv)
 #else
         "standard"
 #endif
-            << "\nrequests=" << m << "\nhits_exact=" << hits_exact << "\nhits_approx=" << hits_approx
+            << "\nrequests=" << m << "\nhits_exact=" << hits_exact << "\nhits_approx=" << hits_approx << "\nhits_linked=" << hits_linked
             << "\ninsert_failed=" << insert_failed << "\nlink_failed=" << link_failed
             << "\ninvalid=" << invalid << "\nfinal_status=" << akerGetCacheStatusText(cache) << "\n";
     akerDestroyAnnsCache(cache);

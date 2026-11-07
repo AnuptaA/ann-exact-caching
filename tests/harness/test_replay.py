@@ -78,8 +78,11 @@ def test_exact_repeats_are_equality_hits_and_misses_have_backend_recall(dataset,
     miss = arrays["outcome"] == 0
     assert (arrays["recall"][miss] == 1.0).all()        # exact backend: misses are perfect
     assert header["summary"]["equality_hit_rate"] > 0.5  # 600 requests over 30 base queries
-    # a library exact/linked hit implies the vector was seen earlier, so it is also an equality hit
-    assert header["library_exact_hits_in_window"] <= header["equality_hits_in_window"]
+    # strict equality: served by an entry stored under this exact id; others are approximate
+    n_hits = (header["equality_hits_in_window"] + header["approximate_filter_hits_in_window"]
+              + header["linked_hits_in_window"])
+    assert n_hits == round(header["summary"]["hit_rate"] * header["summary"]["requests_measured"])
+    assert header["equality_hits_in_window"] <= header["seen_before_hits_in_window"]
     assert 0 < header["peak_pool_vectors_sampled"] <= header["settings"]["pool_size"]
 
 

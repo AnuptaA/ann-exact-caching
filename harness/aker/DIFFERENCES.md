@@ -42,9 +42,12 @@ third_party/aker/PATCHES.md). Driver: harness/cpp/ak_replay.cc.
   an exact (linked) hit. In Proximity mode linking is a no-op, so repeats are approximate hits again.
 - On a hit the answer is the matched entry's stored list (no re-ranking by distance to the new
   query); it is scored by its true recall against the exact top-10, never by the system's claim.
-- Equality versus approximate is classified by our definition (the request's vector id appeared in
-  an earlier request); the library's own exact/linked flag is recorded alongside and the count of
-  disagreements is stored in every result header (`kind_mismatch`).
+- Equality hit (strict): the lookup is served by an entry stored under this exact vector id
+  (the driver compares the returned entry's root id with the request's own id). Everything else
+  that hits is approximate: a filter hit, or a linked repeat (an earlier approximate hit that was
+  linked to its representative; the library reports it as an exact lookup but it is answered by
+  another query's list, so outcome code 3 is counted as approximate). "Seen before" and the
+  counts of each outcome code are stored in every result header as diagnostics.
 - Not used: the write log (risk_thresh), Potluck mode, dropout.
 - The driver stores real float32 vectors in the pool slots (the library needs payload bytes equal to
   vector_in_bytes), so the base must be readable; it is memory mapped.

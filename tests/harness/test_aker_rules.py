@@ -17,7 +17,7 @@ from harness import config, data
 DRIVERS = Path(os.environ.get("HARNESS_REPLAY_DIR", Path(__file__).resolve().parents[2] / "build" / "replay"))
 pytestmark = pytest.mark.skipif(not (DRIVERS / "ak_replay_standard").exists(), reason="drivers not built")
 
-MISS, EXACT, APPROX = 0, 1, 2
+MISS, EXACT, APPROX, LINKED = 0, 1, 2, 3
 
 
 def run(tmp_path, mode, xs, uids, settings):
@@ -70,3 +70,11 @@ def test_proximity_threshold_is_fixed_and_not_capped(tmp_path):
     wide = config.AkerSettings(mode="proximity", pool_size=40, global_thresh=9.0)
     assert run(tmp_path, "proximity", [0.0, 2.9], [0, 1], wide) == [MISS, APPROX]       # sq 8.41 < 9
     assert run(tmp_path, "standard", [0.0, 2.9], [0, 1], STANDARD) == [MISS, MISS]      # capped at minD=4
+
+
+def test_linked_repeat_is_approximate_and_proximity_never_links(tmp_path):
+    # standard: B approx-hits A and is linked; a repeat of B is served by A's entry (linked)
+    assert run(tmp_path, "standard", [0.0, 0.9, 0.9, 0.0], [0, 1, 1, 0], STANDARD) == [MISS, APPROX, LINKED, EXACT]
+    # proximity: linking is a no-op, so the repeat of B is an approximate hit again; A itself is equality
+    prox = config.AkerSettings(mode="proximity", pool_size=40, global_thresh=1.0)
+    assert run(tmp_path, "proximity", [0.0, 0.9, 0.9, 0.0], [0, 1, 1, 0], prox) == [MISS, APPROX, APPROX, EXACT]

@@ -174,3 +174,13 @@ def test_torch_candidates_match_the_numpy_path(device):
     ids_np, dist_np = groundtruth.exact_topk_chunk(queries, base, k=50, device="numpy", base_chunk=700)
     ids_t, dist_t = groundtruth.exact_topk_chunk(queries, base, k=50, device=device, base_chunk=700)
     assert np.array_equal(ids_np, ids_t) and np.array_equal(dist_np, dist_t)
+
+
+def test_zipf_rank_permutation_is_shared_across_exponents():
+    uni = universe.build_universe(200, n_groups=50, group_size=4, seed=0)
+    tops = []
+    for s in (0.3, 0.6, 0.99):
+        ids = streams.zipf_stream(uni, 100_000, s, seed=0)
+        counts = np.bincount(ids // uni.group_size, minlength=uni.n_groups)
+        tops.append(np.argsort(-counts)[:3].tolist())
+    assert tops[1] == tops[2] and tops[0][0] == tops[2][0]          # same popular groups
