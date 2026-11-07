@@ -50,3 +50,27 @@ def format_evidence(results: dict) -> str:
                      f"{r['lift']:.1f}x | {r['any_hit']:.3f} |")
     lines += ["", f"random-passage rate: {next(iter(results.values()))['base_rate']:.4f}"]
     return "\n".join(lines) + "\n"
+
+
+def run_evidence(sphere_parquet: str, questions_parquet: str, encoders: dict, out_path: str,
+                 n_questions: int = 300) -> dict:
+    """Encode questions with each encoder, score against sphere passages, write the log.
+
+    encoders maps a name to a callable list[str] -> (n, 768) array. Run it in the
+    isolated environment; sphere_parquet is a Hermes SPHERE_100K file (vector, raw)
+    and questions_parquet a TriviaQA rc.nocontext split (question, answer).
+    """
+    import pandas as pd
+    passages = pd.read_parquet(sphere_parquet, columns=["vector", "raw"])
+    pv = np.stack(passages["vector"].to_numpy()).astype(np.float32)
+    qa = pd.read_parquet(questions_parquet, columns=["question", "answer"]).head(n_questions * 3)
+    answers = [list(a["aliases"]) for a in qa["answer"]]
+    keep = [i for i, al in enumerate(answers) if any(len(a) >= MIN_ALIAS_LEN for a in al)][:n_questions]
+    questions = [qa["question"].iloc[i] for i in keep]
+    results = {}
+    for name, encode in encoders.items():
+        vecs = np.vstack([encode(questions[i:i + 64]) for i in range(0, len(questions), 64)])
+        results[name] = answer_lift(vecs, pv, passages["raw"].tolist(), [answers[i] for i in keep])
+    with open(out_path, "w") as f:
+        f.write(format_evidence(results))
+    return results
