@@ -5,8 +5,6 @@ import logging
 import sys
 from pathlib import Path
 
-import numpy as np
-
 from harness import data
 from harness.runner import manifest, replay, results
 
@@ -95,21 +93,6 @@ def _preflight(args):
     return preflight.main(["--datasets", *args.datasets, "--data-dir", args.data_dir, *extra])
 
 
-def _tune_ef(args):
-    import psycopg
-    from harness.backend import ef_tuning, pgvector
-    from workloads.q1 import groundtruth
-    base = data.read_f32bin(Path(args.dataset_dir) / "base.f32bin")
-    official = data.read_f32bin(Path(args.dataset_dir) / "official.f32bin")
-    rng = np.random.default_rng(args.seed)
-    sample = np.sort(rng.choice(len(official), min(args.n_queries, len(official)), replace=False))
-    queries = np.asarray(official[sample], dtype=np.float32)
-    _, dist = groundtruth.exact_topk_chunk(queries, base, k=10, device=args.gt_device)
-    with psycopg.connect(args.dsn, autocommit=True) as conn:
-        rows = ef_tuning.sweep(pgvector.PgvectorBackend(conn), queries, base, dist[:, 9])
-    for row in rows:
-        print(row)
-    print(ef_tuning.choose_ef(rows, args.list_size))
 
 
 def _answer_table(args):
@@ -127,32 +110,12 @@ def _answer_table(args):
                                         shard=args.shard)
 
 
-def _load_base(args):
-    import psycopg
-    from harness.backend import load
-    base = data.read_f32bin(Path(args.dataset_dir) / "base.f32bin")
-    with psycopg.connect(args.dsn) as conn:
-        load.load_base(conn, base)
 
 
-def _build_index(args):
-    import psycopg
-    from harness.backend import build_index
-    base = data.read_f32bin(Path(args.dataset_dir) / "base.f32bin")
-    with psycopg.connect(args.dsn) as conn:
-        print(build_index.build_index(conn, "base", "embedding", args.dataset, base.shape[0],
-                                      base.shape[1], workers=args.workers))
 
 
-def _prepare_inputs(args):
-    from harness.runner import prepare
-    prepare.prepare_inputs(Path(args.data_dir), args.dataset, data.read_f32bin(args.base),
-                           data.read_f32bin(args.official), no_locality=args.no_locality)
 
 
-def _groundtruth(args):
-    from harness.runner import prepare
-    prepare.prepare_ground_truth(Path(args.data_dir) / args.dataset, args.device)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -223,14 +186,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dsn", default=None)
     p.set_defaults(run=_preflight)
 
-    p = sub.add_parser("tune-ef", help="sweep ef_search on pgvector and apply the selection rule")
-    p.add_argument("--dataset-dir", required=True)
-    p.add_argument("--dsn", required=True)
-    p.add_argument("--n-queries", type=int, default=2000)
-    p.add_argument("--list-size", type=int, default=50)
-    p.add_argument("--gt-device", default="numpy")
-    p.add_argument("--seed", type=int, default=0)
-    p.set_defaults(run=_tune_ef)
 
     p = sub.add_parser("answer-table", help="build the backend answer table (resumable, shardable)")
     p.add_argument("--dataset-dir", required=True)
@@ -239,32 +194,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ef-search", type=int, required=True)
     p.add_argument("--shard", type=_shard_arg, default=(0, 1))
     p.set_defaults(run=_answer_table)
-
-    p = sub.add_parser("prepare-inputs", help="base, official, universe and streams from f32bin files")
-    p.add_argument("--data-dir", required=True)
-    p.add_argument("--dataset", required=True)
-    p.add_argument("--base", required=True, help="base.f32bin (see harness.data.write_f32bin)")
-    p.add_argument("--official", required=True, help="official queries as f32bin")
-    p.add_argument("--no-locality", action="store_true")
-    p.set_defaults(run=_prepare_inputs)
-
-    p = sub.add_parser("groundtruth", help="exact top-100 for every request vector (resumable)")
-    p.add_argument("--data-dir", required=True)
-    p.add_argument("--dataset", required=True)
-    p.add_argument("--device", default="numpy", help="numpy, cuda or mps")
-    p.set_defaults(run=_groundtruth)
-
-    p = sub.add_parser("load-base", help="load base.f32bin into PostgreSQL")
-    p.add_argument("--dataset-dir", required=True)
-    p.add_argument("--dsn", required=True)
-    p.set_defaults(run=_load_base)
-
-    p = sub.add_parser("build-index", help="CREATE INDEX with sized memory; fails if the graph outgrows it")
-    p.add_argument("--dataset-dir", required=True)
-    p.add_argument("--dataset", required=True, choices=["spacev", "sphere", "sift10m", "esci"])
-    p.add_argument("--dsn", required=True)
-    p.add_argument("--workers", type=int, default=8)
-    p.set_defaults(run=_build_index)
     return ap
 
 

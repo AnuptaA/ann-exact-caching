@@ -1,29 +1,18 @@
 """Command line: python -m workloads.q1 <command> ..."""
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
 import numpy as np
 
 from workloads.q1 import groundtruth, stats, streams, universe
-from workloads.q1.datasets import esci, sift10m, sphere, spacev, triviaqa
+from workloads.q1.datasets import triviaqa
 
 logger = logging.getLogger(__name__)
 
 
-def _fetch(args):
-    out = Path(args.out_dir)
-    {"sift10m": sift10m.fetch, "spacev": spacev.fetch, "sphere": sphere.fetch}[args.dataset](out)
 
-
-def _esci(args):
-    print(json.dumps(esci.build(Path(args.raw_dir), Path(args.out_dir))))
-
-
-def _triviaqa_questions(args):
-    print(json.dumps(triviaqa.fetch_questions(Path(args.out_dir))))
 
 
 def _triviaqa_encode(args):
@@ -69,19 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="python -m workloads.q1")
     sub = ap.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("fetch", help="download a dataset (sift10m, spacev, sphere)")
-    p.add_argument("dataset", choices=["sift10m", "spacev", "sphere"])
-    p.add_argument("--out-dir", required=True)
-    p.set_defaults(run=_fetch)
 
-    p = sub.add_parser("esci", help="embed all ESCI products and distinct queries")
-    p.add_argument("--raw-dir", required=True)
-    p.add_argument("--out-dir", required=True)
-    p.set_defaults(run=_esci)
 
-    p = sub.add_parser("triviaqa-questions", help="download and de-duplicate TriviaQA questions")
-    p.add_argument("--out-dir", required=True)
-    p.set_defaults(run=_triviaqa_questions)
 
     p = sub.add_parser("triviaqa-encode", help="encode questions with the DPR query encoder")
     p.add_argument("--questions", required=True)
