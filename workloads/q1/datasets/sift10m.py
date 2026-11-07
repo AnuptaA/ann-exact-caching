@@ -27,6 +27,7 @@ def fetch(out_dir: Path, n_base: int = N_BASE, base_url: str = BASE_URL,
         raise ValueError(f"unexpected source header (n={n_total}, d={dim})")
     base = common.download_slice(base_url, out_dir / "sift10m_base.u8bin", 8, 8 + n_base * dim,
                                  header=common.bin_header(n_base, dim))
+    common.ensure_verified(base, base_url, use_published=False)
     query = common.download_file(query_url, out_dir / "sift_query.u8bin")
     return base, query
 

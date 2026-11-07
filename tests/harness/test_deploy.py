@@ -23,10 +23,11 @@ def test_need_bytes_scale_with_sphere_graph():
     assert preflight.need_bytes("esci")["disk"] < preflight.need_bytes("spacev")["disk"]
 
 
-def test_need_bytes_counts_three_base_copies_graph_and_wal_for_sphere():
+def test_need_bytes_counts_raw_f32_table_graph_and_wal_for_sphere():
     need = preflight.need_bytes("sphere")
     base = 10_000_000 * 768 * 4
-    assert need["raw"] == need["f32"] == base and need["table"] > base
+    assert need["raw"] == 2 * base and need["f32"] == base and need["table"] > base   # raw is float64
+    assert preflight.need_bytes("spacev")["raw"] == 10_000_000 * 100
     assert need["index"] > 38 * 2 ** 30 and need["wal"] == base
     assert need["disk"] == sum(need[k] for k in ("raw", "f32", "table", "index", "wal", "other"))
     assert preflight.need_bytes("esci")["wal"] < preflight.MAX_WAL_BYTES
