@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from harness import data
+from harness import data, fingerprints
 from harness.backend.answer_table import build_answer_table
 from workloads.q1 import atomic, groundtruth, streams, universe
 
@@ -72,4 +72,5 @@ def prepare_dataset(root: Path, name: str, base, official, backend, ef_search: i
     build_answer_table(backend, request_vectors_of(ds), data.read_f32bin(ds / "base.f32bin"),
                        ds / "answers", list_size, ef_search)
     prepare_ground_truth(ds, gt_device)
+    fingerprints.store(ds, inputs.get("stream_seed", 0))
     return ds

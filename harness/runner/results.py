@@ -21,23 +21,28 @@ def result_path(out_dir: Path, cell_id: str) -> Path:
     return Path(out_dir) / f"{cell_id}.npz"
 
 
-def is_done(out_dir: Path, cell_id: str, commit: str | None = None) -> bool:
-    """A finished cell; with commit, a result from another commit counts as not done."""
+def is_done(out_dir: Path, cell_id: str, commit: str | None = None, reuse_key: dict | None = None) -> bool:
+    """A finished cell. A result from another commit, or made from other inputs or library
+    sources (reuse_key, see harness.fingerprints.reuse_key), counts as not done."""
     path = result_path(out_dir, cell_id)
     if not path.exists():
         return False
-    if commit is None:
+    if commit is None and reuse_key is None:
         return True
-    stored = read_result(path)[0].get("commit")
-    if stored != commit:
-        logger.warning(f"{path.name} was produced by commit {str(stored)[:8]}, not {commit[:8]}: redoing")
+    header = read_result(path)[0]
+    if commit is not None and header.get("commit") != commit:
+        logger.warning(f"{path.name} was produced by commit {str(header.get('commit'))[:8]}, "
+                       f"not {commit[:8]}: redoing")
+        return False
+    if reuse_key is not None and header.get("reuse_key") != reuse_key:
+        logger.warning(f"{path.name} was made from different inputs or library sources: redoing")
         return False
     return True
 
 
 def write_result(out_dir: Path, cell_id: str, header: dict, **per_request) -> Path:
-    """Header must carry config hash, commit, backend id, ef_search, library revision."""
-    required = {"cell", "config_hash", "commit", "backend", "ef_search", "aker_revision"}
+    """Header must carry config hash, commit, backend id, ef_search, library revision, reuse key."""
+    required = {"cell", "config_hash", "commit", "backend", "ef_search", "aker_revision", "reuse_key"}
     missing = required - set(header)
     if missing:
         raise ValueError(f"result header is missing {sorted(missing)}")
@@ -45,7 +50,7 @@ def write_result(out_dir: Path, cell_id: str, header: dict, **per_request) -> Pa
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp.npz")
     np.savez_compressed(tmp, header=json.dumps({**header, "schema": SCHEMA_VERSION}), **per_request)
-    tmp.rename(path)
+    tmp.replace(path)
     return path
 
 

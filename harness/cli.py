@@ -5,7 +5,7 @@ import logging
 import sys
 from pathlib import Path
 
-from harness import data
+from harness import data, fingerprints
 from harness.runner import manifest, replay, results
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,17 @@ def _grid(args):
 def _run(args):
     cells = _cells(args)
     commit = results.git_state()["commit"]
-    todo = [c for c in cells if not results.is_done(args.out_dir, c.cell_id, commit)]
+    code = fingerprints.code_fingerprints(replay.REPO, Path(args.driver_dir))
+    keys: dict = {}
+
+    def reuse_key(cell):
+        key = (cell.dataset, cell.stream_seed)
+        if key not in keys:
+            stored = fingerprints.verify(Path(args.data_dir) / cell.dataset, cell.stream_seed)
+            keys[key] = fingerprints.reuse_key(stored, code)
+        return keys[key]
+
+    todo = [c for c in cells if not results.is_done(args.out_dir, c.cell_id, commit, reuse_key(c))]
     logger.info(f"{len(cells)} cells in this shard, {len(todo)} to run")
     loaded: dict = {}
     for cell in todo:

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from harness import data
+from harness import data, fingerprints
 from harness.datasets import DatasetSpec, get_spec
 from workloads.q1 import K, atomic, groundtruth, streams as stream_mod
 from workloads.q1.recall import recall_batch
@@ -408,6 +408,7 @@ def stage_backend_recall(ctx: Context) -> dict:
     out = {"mean_recall_all_ids": float(recall.mean()), "per_stream": per_stream,
            "ef_search": json.loads((ctx.root / "tune.json").read_text())["ef_search"]}
     atomic.write_json(ctx.root / "backend_recall.json", out, indent=1)
+    fingerprints.store(ctx.root, ctx.seed)
     return {"mean_recall_all_ids": out["mean_recall_all_ids"]}
 
 

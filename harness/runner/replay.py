@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from harness import config, data, scoring, thresholds
+from harness import config, data, fingerprints, scoring, thresholds
 from harness.backend.answer_table import load_answer_table
 from harness.runner import manifest, results
 from harness.runner.manifest import Cell
@@ -22,6 +23,7 @@ from workloads.q1.cli import load_universe
 logger = logging.getLogger(__name__)
 
 AKER_REVISION = "e7639a52aec1320a47c5fa0b833c7214024931c9"
+REPO = Path(__file__).resolve().parents[2]
 
 
 class DatasetDir:
@@ -30,6 +32,7 @@ class DatasetDir:
     def __init__(self, root: Path, dataset: str, seed: int = 0):
         self.root = Path(root) / dataset
         self.dataset = dataset
+        self.seed = seed
 
         def need(path: Path, stage: str) -> Path:
             if not path.exists():
@@ -39,10 +42,17 @@ class DatasetDir:
             return path
 
         self.base_path = need(self.root / "base.f32bin", "to_f32")
+        official_path = need(self.root / "official.f32bin", "to_f32")
+        universe_path = need(self.root / "universe.npz", "inputs")
+        streams_path = need(self.root / f"streams_seed{seed}.npz", "inputs")
+        meta_path = need(self.root / "answers" / "meta.json", "answer_table")
+        need(self.root / "gt", "groundtruth")
+        self.fingerprints = fingerprints.verify(self.root, seed)
+        self.input_id = fingerprints.combine(self.fingerprints)
         self.base = data.read_f32bin(self.base_path)
-        self.official = data.read_f32bin(need(self.root / "official.f32bin", "to_f32"))
-        self.universe = load_universe(need(self.root / "universe.npz", "inputs"))
-        z = np.load(need(self.root / f"streams_seed{seed}.npz", "inputs"))
+        self.official = data.read_f32bin(official_path)
+        self.universe = load_universe(universe_path)
+        z = np.load(streams_path)
         self.streams = {k: z[k] for k in z.files if k != "history_fraction"}
         self.history_fraction = float(z["history_fraction"])
         first10 = self.root / "answers_first10.npz"
@@ -50,11 +60,9 @@ class DatasetDir:
             f = np.load(first10)
             self.answer_ids, self.answer_dist = f["ids"], f["dist"]
         else:
-            need(self.root / "answers", "answer_table")
             self.answer_ids, self.answer_dist = load_answer_table(self.root / "answers")
-        need(self.root / "gt", "groundtruth")
         self.gt_ids, self.gt_dist = groundtruth.load_ground_truth(self.root / "gt")
-        self.backend = json.loads(need(self.root / "answers" / "meta.json", "answer_table").read_text())
+        self.backend = json.loads(meta_path.read_text())
 
     def vectors_of(self, ids: np.ndarray) -> np.ndarray:
         return universe.request_vectors(self.universe, self.official, ids)
@@ -70,7 +78,7 @@ def history_percentiles(cell: Cell, ds: DatasetDir, stream_ids: np.ndarray, hist
     wanted = tuple(manifest.PROXIMITY_PERCENTILES)
     path = None
     if cache_dir is not None:
-        path = Path(cache_dir) / f"{cell.dataset}-{cell.stream}-s{seed}.json"
+        path = Path(cache_dir) / f"{cell.dataset}-{cell.stream}-s{seed}-{ds.input_id}.json"
         if path.exists():
             cached = json.loads(path.read_text())
             if all(str(p) in cached["history"] for p in wanted):
@@ -115,7 +123,7 @@ def stream_inputs(cell: Cell, ds: DatasetDir, ids: np.ndarray, work_dir: Path) -
     Built once into a temporary directory and renamed, so parallel runs never see a
     half-written set.
     """
-    final = Path(work_dir) / "inputs" / f"{cell.dataset}-{cell.stream}-s{cell.stream_seed}"
+    final = Path(work_dir) / "inputs" / f"{cell.dataset}-{cell.stream}-s{cell.stream_seed}-{ds.input_id}"
     if (final / "READY").exists():
         return final
     tmp = final.with_name(f"{final.name}.{os.getpid()}.tmp")
@@ -150,6 +158,11 @@ def run_driver(binary: Path, args: list, work: Path, timeout: float | None) -> N
                                f"{_tail(log_path)}") from exc
 
 
+def _generation_env(root: Path) -> dict:
+    path = Path(root) / "env.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
 def _tail(path: Path, lines: int = 30) -> str:
     return "\n".join(Path(path).read_text(errors="replace").splitlines()[-lines:])
 
@@ -158,6 +171,7 @@ def run_cell(cell: Cell, ds: DatasetDir, driver_dir: Path, out_dir: Path, work_d
              timeout: float | None = None) -> Path:
     """Replay one cell; skips nothing here (the caller checks results.is_done)."""
     started = time.time()
+    code = fingerprints.code_fingerprints(REPO, driver_dir)
     ids = ds.streams[cell.stream]
     history_len = stream_mod.history_split(len(ids), ds.history_fraction)
     logger.info(f"cell {cell.cell_id}: start ({len(ids)} requests)")
@@ -194,7 +208,11 @@ def run_cell(cell: Cell, ds: DatasetDir, driver_dir: Path, out_dir: Path, work_d
               "approximate_filter_hits_in_window": int((outcome[w] == scoring.APPROX).sum()),
               "linked_hits_in_window": int((outcome[w] == scoring.LINKED).sum()),
               "seen_before_hits_in_window": int(score.seen_before_hit[w].sum()),
-              "driver_summary": (work / "summary.txt").read_text()}
+              "driver_summary": (work / "summary.txt").read_text(),
+              "fingerprints": ds.fingerprints, "code": code,
+              "reuse_key": fingerprints.reuse_key(ds.fingerprints, code),
+              "generation_env": _generation_env(ds.root),
+              "versions": {"python": platform.python_version(), "numpy": np.__version__}}
     path = results.write_result(out_dir, cell.cell_id, header, outcome=outcome,
                                 recall=score.recall.astype(np.float32), equality=score.equality,
                                 approximate=score.approximate, stream_ids=ids)

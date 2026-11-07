@@ -142,7 +142,7 @@ def test_proximity_thresholds_are_cached_and_budgets_share_them(dataset, tmp_pat
         cell = manifest.Cell("toy", "zipf_0.99", "proximity", "p1", budget)
         header, _ = results.read_result(replay.run_cell(cell, ds, DRIVERS, tmp_path / "r", work))
         assert header["settings"]["global_thresh"] == header["thresholds"]["history"]["1.0"]
-    cached = list((work / "thresholds").glob("toy-zipf_0.99-s0.json"))
+    cached = list((work / "thresholds").glob("toy-zipf_0.99-s0-*.json"))
     assert len(cached) == 1
     info = header["thresholds"]
     assert info["universe_wide"]["1.0"] > 0 and info["distinct_history_queries"] > 1
@@ -183,10 +183,14 @@ def test_driver_crash_and_timeout_report_the_log_tail(tmp_path):
 
 def test_is_done_ignores_results_from_other_commits(tmp_path):
     header = {"cell": {}, "config_hash": "h", "commit": "aaaa1111", "backend": "b", "ef_search": 1,
-              "aker_revision": "r"}
+              "aker_revision": "r", "reuse_key": {"inputs": "i1", "tune": "t", "aker_tree": "a", "driver_src_tree": "d"}}
     results.write_result(tmp_path, "c1", header, x=np.zeros(1))
     assert results.is_done(tmp_path, "c1") and results.is_done(tmp_path, "c1", "aaaa1111")
     assert not results.is_done(tmp_path, "c1", "bbbb2222") and not results.is_done(tmp_path, "c2")
+    key = header["reuse_key"]
+    assert results.is_done(tmp_path, "c1", "aaaa1111", key)
+    for field, other in (("inputs", "i2"), ("tune", "t2"), ("aker_tree", "a2"), ("driver_src_tree", "d2")):
+        assert not results.is_done(tmp_path, "c1", "aaaa1111", {**key, field: other})
 
 
 @needs_driver
@@ -197,7 +201,7 @@ def test_stream_inputs_are_built_once_and_shared_by_configs(dataset, tmp_path):
                  manifest.Cell("toy", "uniform", "proximity", "p1", 5)):
         replay.run_cell(cell, ds, DRIVERS, tmp_path / "r", work)
     shared = list((work / "inputs").iterdir())
-    assert [p.name for p in shared] == ["toy-uniform-s0"] and (shared[0] / "READY").exists()
+    assert [p.name for p in shared] == [f"toy-uniform-s0-{ds.input_id}"] and (shared[0] / "READY").exists()
     assert not list((work / "inputs").glob("*.tmp"))
     with pytest.raises(FileNotFoundError, match="build the drivers"):
         replay.run_cell(manifest.Cell("toy", "uniform", "aker", "paper", 10), ds, tmp_path / "nodrivers",

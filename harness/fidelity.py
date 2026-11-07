@@ -5,13 +5,14 @@ over the request sequence, to be compared by eye with the paper's Figures 8 and
 9. Report only; nothing is tuned toward the paper.
 """
 
+import hashlib
 import io
 import pickle
 from pathlib import Path
 
 import numpy as np
 
-from harness import data
+from harness import data, fingerprints
 from harness.backend.answer_table import build_answer_table
 from workloads.q1 import groundtruth
 
@@ -55,6 +56,13 @@ class FidelityData:
         groundtruth.build_ground_truth(unique, self.base, self.root / "gt", device=gt_device)
         self.gt_ids, self.gt_dist = groundtruth.load_ground_truth(self.root / "gt")
         self.backend = {"backend": backend.name, "ef_search": ef_search, "list_size": list_size}
+        stream_sha = hashlib.sha256(self.streams["released"].tobytes() + unique.tobytes()).hexdigest()
+        self.fingerprints = {"base": fingerprints.base_signature(self.base_path), "official": None,
+                             "universe": None, "streams": stream_sha,
+                             "answers": fingerprints.answers_fingerprint(self.root),
+                             "answers_meta": fingerprints.sha256_or_none(self.root / "answers" / "meta.json"),
+                             "tune": None}
+        self.input_id = fingerprints.combine(self.fingerprints)
 
     def vectors_of(self, ids: np.ndarray) -> np.ndarray:
         return self.unique[ids]
