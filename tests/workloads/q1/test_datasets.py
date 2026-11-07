@@ -175,10 +175,12 @@ def test_fetch_encoder_extracts_the_archive_layout_and_rejects_escapes(server, t
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             top = tarfile.TarInfo("dpr_web_query_encoder_hf")
             top.type = tarfile.DIRTYPE
+            top.mode = 0o755
             tar.addfile(top)
             for name in names:
                 info = tarfile.TarInfo(name)
                 info.size = 2
+                info.mode = 0o644
                 tar.addfile(info, io.BytesIO(b"{}"))
         return buf.getvalue()
 

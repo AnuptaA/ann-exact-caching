@@ -138,7 +138,9 @@ def fetch_encoder(dest: Path) -> Path:
                 raise ValueError(f"unexpected tar member {member.name!r}")
             if parts[0] != "dpr_web_query_encoder_hf":
                 raise ValueError(f"tar member outside dpr_web_query_encoder_hf/: {member.name!r}")
-        tar.extractall(dest, filter="data")
+        # filter= exists from Python 3.10.12; members are validated above
+        extra = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
+        tar.extractall(dest, **extra)
     if not (target / "config.json").exists():
         raise ValueError("encoder archive has no dpr_web_query_encoder_hf/config.json")
     return target

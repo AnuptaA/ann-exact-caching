@@ -175,10 +175,10 @@ def test_driver_crash_and_timeout_report_the_log_tail(tmp_path):
     with pytest.raises(RuntimeError, match="(?s)exited with code 3.*about to fail"):
         replay.run_driver(crash, [], tmp_path, None)
     slow = tmp_path / "slow.sh"
-    slow.write_text("#!/bin/sh\necho started\nsleep 5\n")
+    slow.write_text("#!/bin/sh\necho started\nsleep 30\n")
     slow.chmod(0o755)
-    with pytest.raises(RuntimeError, match="(?s)timed out after 0.5s.*started"):
-        replay.run_driver(slow, [], tmp_path, 0.5)
+    with pytest.raises(RuntimeError, match="(?s)timed out after 2.0s.*started"):
+        replay.run_driver(slow, [], tmp_path, 2.0)
 
 
 def test_is_done_ignores_results_from_other_commits(tmp_path):
