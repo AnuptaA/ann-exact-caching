@@ -160,6 +160,7 @@ def build_ground_truth(
     if meta_path.exists() and json.loads(meta_path.read_text()) != meta:
         raise ValueError(f"{meta_path} was written for a different run: {meta_path.read_text()}")
     atomic.write_json(meta_path, meta)
+    atomic.remove_stale_temporaries(out_dir)
     # upload the base first (if it fits), then size the tiles from what is left
     resident = DeviceBase.try_load(base, device, base_chunk)
     query_chunk_used, base_chunk_used = query_chunk, base_chunk
@@ -181,9 +182,7 @@ def build_ground_truth(
                                   resident=resident) for i in range(0, len(block), query_chunk_used)]
         ids = np.concatenate([p[0] for p in parts])
         dist = np.concatenate([p[1] for p in parts])
-        tmp = path.with_suffix(".tmp.npz")
-        np.savez(tmp, ids=ids, dist=dist)
-        tmp.rename(path)
+        atomic.save_npz(path, ids=ids, dist=dist)
         built += 1
         per_chunk = (time.time() - began) / built
         remaining = n_chunks - c - 1

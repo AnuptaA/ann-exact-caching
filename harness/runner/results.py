@@ -7,6 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
+from workloads.q1 import atomic
+
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
@@ -48,9 +50,7 @@ def write_result(out_dir: Path, cell_id: str, header: dict, **per_request) -> Pa
         raise ValueError(f"result header is missing {sorted(missing)}")
     path = result_path(out_dir, cell_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp.npz")
-    np.savez_compressed(tmp, header=json.dumps({**header, "schema": SCHEMA_VERSION}), **per_request)
-    tmp.replace(path)
+    atomic.save_npz_compressed(path, header=json.dumps({**header, "schema": SCHEMA_VERSION}), **per_request)
     return path
 
 

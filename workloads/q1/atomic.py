@@ -2,6 +2,8 @@
 
 import json
 import os
+import re
+import time
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +30,35 @@ def save_npy(path: Path, array) -> Path:
 
 def save_npz(path: Path, **arrays) -> Path:
     return _replace(path, lambda f: np.savez(f, **arrays))
+
+
+def save_npz_compressed(path: Path, **arrays) -> Path:
+    return _replace(path, lambda f: np.savez_compressed(f, **arrays))
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def remove_stale_temporaries(directory: Path, legacy_age: float = 3600.0) -> list[Path]:
+    """Delete temporaries left by killed writers; files of live processes are kept."""
+    removed = []
+    for path in Path(directory).glob("*.tmp"):
+        match = re.search(r"\.(\d+)\.tmp$", path.name)
+        if match and not _alive(int(match.group(1))):
+            path.unlink(missing_ok=True)
+            removed.append(path)
+    for path in Path(directory).glob("*.tmp.npz"):
+        if time.time() - path.stat().st_mtime > legacy_age:
+            path.unlink(missing_ok=True)
+            removed.append(path)
+    return removed
 
 
 def write_text(path: Path, text: str) -> Path:

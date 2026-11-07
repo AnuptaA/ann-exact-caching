@@ -27,3 +27,19 @@ def test_a_failed_write_keeps_the_old_content(tmp_path):
         atomic._replace(tmp_path / "f.txt", boom)
     assert (tmp_path / "f.txt").read_text() == "old"
     assert [p.name for p in tmp_path.iterdir()] == ["f.txt"]
+
+
+def test_stale_temporaries_of_dead_writers_are_removed_and_live_ones_kept(tmp_path):
+    import os
+    import subprocess
+    import sys
+    dead = int(subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True,
+                              text=True).stdout)
+    (tmp_path / f"a.npz.{dead}.tmp").write_bytes(b"x")
+    (tmp_path / f"b.npz.{os.getpid()}.tmp").write_bytes(b"x")
+    (tmp_path / "old.tmp.npz").write_bytes(b"x")
+    os.utime(tmp_path / "old.tmp.npz", (1, 1))
+    (tmp_path / "fresh.tmp.npz").write_bytes(b"x")
+    removed = atomic.remove_stale_temporaries(tmp_path)
+    assert sorted(p.name for p in removed) == [f"a.npz.{dead}.tmp", "old.tmp.npz"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"b.npz.{os.getpid()}.tmp", "fresh.tmp.npz"]
