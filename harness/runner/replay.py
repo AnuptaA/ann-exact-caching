@@ -99,10 +99,11 @@ def run_cell(cell: Cell, ds: DatasetDir, driver_dir: Path, out_dir: Path, work_d
     ds.answer_ids[ids][:, :K].astype("<i8").tofile(work / "answers.i64")
     ds.answer_dist[ids][:, :K].astype("<f4").tofile(work / "dists.f32")
     binary = Path(driver_dir) / f"ak_replay_{settings.mode}"
-    subprocess.run([str(binary), "--base", str(ds.base_path),
-                    "--requests", str(work / "requests.f32bin"), "--stream", str(work / "stream.i64"),
-                    "--answers", str(work / "answers.i64"), "--dists", str(work / "dists.f32"),
-                    "--out-dir", str(work), "--status-every", "100", *settings.driver_args()], check=True, timeout=timeout)
+    with (work / "driver.log").open("w") as log:
+        subprocess.run([str(binary), "--base", str(ds.base_path),
+                        "--requests", str(work / "requests.f32bin"), "--stream", str(work / "stream.i64"),
+                        "--answers", str(work / "answers.i64"), "--dists", str(work / "dists.f32"),
+                        "--out-dir", str(work), "--status-every", "100", *settings.driver_args()], check=True, timeout=timeout, stdout=log, stderr=subprocess.STDOUT)
     outcome = np.fromfile(work / "outcome.u8", dtype=np.uint8)
     result_ids = np.fromfile(work / "result_ids.i64", dtype="<i8").reshape(len(ids), K)
     score = scoring.score_run(outcome, result_ids, ids, data.read_f32bin(work / "requests.f32bin"),

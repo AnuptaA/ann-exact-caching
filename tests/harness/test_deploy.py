@@ -42,3 +42,51 @@ def test_scripts_exist_and_refuse_dirty_trees(tmp_path):
     out = subprocess.run(["bash", str(ROOT / "harness/deploy/deploy.sh"), "unused-url", "HEAD", str(repo)],
                          capture_output=True, text=True)
     assert out.returncode != 0 and "dirty" in out.stderr
+
+
+def test_gpu_check_reports_missing_cuda(monkeypatch):
+    import sys
+    import types
+    fake = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setitem(sys.modules, "torch", fake)
+    assert preflight.check_gpu() == ["no CUDA device visible to torch"]
+    fake.cuda.is_available = lambda: True
+    assert preflight.check_gpu() == []
+
+
+def test_postgres_check_reports_unreachable_server():
+    problems = preflight.check_postgres("host=127.0.0.1 port=1 user=x connect_timeout=2")
+    assert problems and "not reachable" in problems[0]
+
+
+def test_postgres_check_against_a_real_server():
+    import os
+    dsn = os.environ.get("PGVECTOR_TEST_DSN")
+    if not dsn:
+        pytest.skip("needs PostgreSQL + pgvector")
+    assert preflight.check_postgres(dsn) == []
+    assert any("expected 0.7.0" in p for p in preflight.check_postgres(dsn, expected="0.7.0"))
+
+
+def test_make_targets_expand_to_the_expected_commands():
+    def dry(*args):
+        out = subprocess.run(["make", "-n", "Q1_ALLOW_DIRTY=1", *args], cwd=ROOT, capture_output=True, text=True)
+        assert out.returncode == 0, out.stderr
+        return out.stdout
+    aker = dry("q1-run-aker-b1")
+    assert "--systems aker" in aker and "--settings paper" in aker and "--budgets 1" in aker
+    prox = dry("q1-run-proximity-p0.1-b5")
+    assert "--systems proximity" in prox and "--settings p0.1" in prox and "--budgets 5" in prox
+    both = dry("q1-run", "SYSTEM=proximity", "BUDGET=10")
+    assert "--settings" not in both and "--budgets 10" in both          # both percentiles
+    gen = dry("q1-generate", "DATASET=esci")
+    assert "generate --dataset esci" in gen and "--pg-workers" in gen
+    assert "--stages groundtruth --force groundtruth" in dry("q1-stage", "DATASET=esci", "STAGE=groundtruth", "FORCE=1")
+    everything = dry("q1-run-all")
+    assert everything.count("q1-run-") >= 9 or "q1-run-proximity-p1-b10" in everything
+    guard = subprocess.run(["make", "q1-run", "SYSTEM=aker", "BUDGET=1", "-n"], cwd=ROOT, capture_output=True, text=True)
+    assert "git status --porcelain" in guard.stdout
+    refused = subprocess.run(["make", "q1-guard"], cwd=ROOT, capture_output=True, text=True,
+                             env={**__import__("os").environ})
+    dirty = bool(subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True).stdout.strip())
+    assert (refused.returncode != 0) == dirty

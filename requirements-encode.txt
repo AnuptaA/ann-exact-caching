@@ -1,0 +1,4 @@
+# Minimal isolated environment for the third-party DPR checkpoint (TriviaQA encoding)
+numpy
+torch
+transformers

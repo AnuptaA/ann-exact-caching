@@ -127,7 +127,8 @@ def stage_groundtruth(ctx: Context) -> dict:
 
 def _ensure_database(ctx: Context) -> None:
     import psycopg
-    with psycopg.connect(ctx.dsn, autocommit=True) as conn:
+    from psycopg.conninfo import make_conninfo
+    with psycopg.connect(make_conninfo(ctx.dsn, dbname="postgres"), autocommit=True) as conn:
         exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (ctx.db_name,)).fetchone()
         if not exists:
             conn.execute(f'CREATE DATABASE "{ctx.db_name}"')

@@ -1,0 +1,12 @@
+# Python dependencies for Q1 workload generation and runs (the GPU instance venv)
+numpy
+scipy
+pandas
+pyarrow
+psycopg[binary]
+matplotlib
+tqdm
+pytest
+torch
+transformers
+sentence-transformers

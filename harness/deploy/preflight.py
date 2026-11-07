@@ -48,13 +48,47 @@ def check(datasets, data_dir: Path, require_linux: bool = True, repo: Path | Non
     return problems
 
 
+def check_gpu() -> list[str]:
+    """A CUDA device must be visible for GPU ground truth and encoding."""
+    try:
+        import torch
+    except ImportError:
+        return ["torch is not installed"]
+    return [] if torch.cuda.is_available() else ["no CUDA device visible to torch"]
+
+
+def check_postgres(dsn: str, expected: str = "0.8.0") -> list[str]:
+    """PostgreSQL 16 reachable and pgvector available at the expected version."""
+    try:
+        import psycopg
+        from psycopg.conninfo import make_conninfo
+        with psycopg.connect(make_conninfo(dsn, dbname="postgres"), connect_timeout=10) as conn:
+            major = conn.execute("SHOW server_version_num").fetchone()[0][:2]
+            row = conn.execute("SELECT default_version FROM pg_available_extensions "
+                               "WHERE name = 'vector'").fetchone()
+    except Exception as exc:
+        return [f"PostgreSQL not reachable: {exc}"]
+    problems = []
+    if major != "16":
+        problems.append(f"PostgreSQL major version {major}, expected 16")
+    if row is None or row[0] != expected:
+        problems.append(f"pgvector {row[0] if row else 'missing'}, expected {expected}")
+    return problems
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--datasets", nargs="+", default=list(DATASETS), choices=list(DATASETS))
     ap.add_argument("--data-dir", default="/data")
     ap.add_argument("--allow-non-linux", action="store_true", help="for dry runs on a dev machine")
+    ap.add_argument("--require-gpu", action="store_true")
+    ap.add_argument("--dsn", default=None, help="also check PostgreSQL 16 and pgvector 0.8.0")
     args = ap.parse_args(argv)
     problems = check(args.datasets, Path(args.data_dir), not args.allow_non_linux)
+    if args.require_gpu:
+        problems += check_gpu()
+    if args.dsn:
+        problems += check_postgres(args.dsn)
     for p in problems:
         print(f"PREFLIGHT FAIL: {p}", file=sys.stderr)
     print("preflight ok" if not problems else f"{len(problems)} problem(s)")

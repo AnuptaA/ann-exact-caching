@@ -88,7 +88,8 @@ def _fidelity(args):
 
 def _preflight(args):
     from harness.deploy import preflight
-    return preflight.main(["--datasets", *args.datasets, "--data-dir", args.data_dir])
+    extra = (["--require-gpu"] if args.require_gpu else []) + (["--dsn", args.dsn] if args.dsn else [])
+    return preflight.main(["--datasets", *args.datasets, "--data-dir", args.data_dir, *extra])
 
 
 def _tune_ef(args):
@@ -212,6 +213,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("preflight", help="check the instance before a run")
     p.add_argument("--datasets", nargs="+", default=["spacev", "sift10m", "sphere", "esci"])
     p.add_argument("--data-dir", default="/data")
+    p.add_argument("--require-gpu", action="store_true")
+    p.add_argument("--dsn", default=None)
     p.set_defaults(run=_preflight)
 
     p = sub.add_parser("tune-ef", help="sweep ef_search on pgvector and apply the selection rule")
