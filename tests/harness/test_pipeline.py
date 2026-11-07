@@ -96,3 +96,12 @@ def test_fidelity_run_on_the_tiny_database(tmp_path):
                                 payload_path=tmp_path / "payload.npy")
     assert set(out["report"]) == {"1%", "5%"} and Path(out["plot"]).exists()
     assert out["report"]["5%"]["delivered_recall"] >= 0.8 and out["report"]["5%"]["hit_rate"] > 0.3
+
+
+def test_gpu_contexts_get_large_ground_truth_chunks_and_explicit_values_win(tmp_path):
+    gpu = pipeline.make_context("tiny", tmp_path, device="cuda")
+    assert (gpu.gt_query_chunk, gpu.gt_base_chunk) == (pipeline.GPU_QUERY_CHUNK, pipeline.GPU_BASE_CHUNK)
+    cpu = pipeline.make_context("tiny", tmp_path, device="numpy")
+    assert cpu.gt_query_chunk == pipeline.groundtruth.QUERY_CHUNK
+    explicit = pipeline.make_context("tiny", tmp_path, device="cuda", gt_query_chunk=64, gt_base_chunk=None)
+    assert explicit.gt_query_chunk == 64 and explicit.gt_base_chunk == pipeline.GPU_BASE_CHUNK

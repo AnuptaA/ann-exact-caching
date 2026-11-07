@@ -103,7 +103,8 @@ def run_cell(cell: Cell, ds: DatasetDir, driver_dir: Path, out_dir: Path, work_d
         subprocess.run([str(binary), "--base", str(ds.base_path),
                         "--requests", str(work / "requests.f32bin"), "--stream", str(work / "stream.i64"),
                         "--answers", str(work / "answers.i64"), "--dists", str(work / "dists.f32"),
-                        "--out-dir", str(work), "--status-every", "100", *settings.driver_args()], check=True, timeout=timeout, stdout=log, stderr=subprocess.STDOUT)
+                        "--out-dir", str(work), "--status-every", "100", *settings.driver_args()],
+                       check=True, timeout=timeout, stdout=log, stderr=subprocess.STDOUT)
     outcome = np.fromfile(work / "outcome.u8", dtype=np.uint8)
     result_ids = np.fromfile(work / "result_ids.i64", dtype="<i8").reshape(len(ids), K)
     score = scoring.score_run(outcome, result_ids, ids, data.read_f32bin(work / "requests.f32bin"),

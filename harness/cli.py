@@ -187,8 +187,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default="auto", help="auto, numpy, cuda or mps (ground truth)")
     p.add_argument("--encode-python", default=sys.executable)
     p.add_argument("--pg-workers", type=int, default=4)
-    p.add_argument("--gt-query-chunk", type=int, default=1024)
-    p.add_argument("--gt-base-chunk", type=int, default=262144)
+    p.add_argument("--gt-query-chunk", type=int, default=None, help="default 1024; 8192 on cuda")
+    p.add_argument("--gt-base-chunk", type=int, default=None, help="default 262144; 131072 on cuda")
     p.set_defaults(run=_generate)
 
     p = sub.add_parser("collect", help="table (and optional CSV) of all result cells")

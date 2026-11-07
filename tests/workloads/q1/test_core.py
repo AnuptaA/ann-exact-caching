@@ -150,3 +150,27 @@ def test_ground_truth_int8_base():
     q = RNG.integers(-100, 100, size=(4, 5)).astype(np.float32)
     ids, _ = groundtruth.exact_topk_chunk(q, base, k=10, base_chunk=50)
     assert np.array_equal(ids, _brute(q, base.astype(np.float32), 10))
+
+
+def _torch_devices():
+    try:
+        import torch
+    except ImportError:
+        return []
+    devices = ["cpu"]
+    if torch.cuda.is_available():
+        devices.append("cuda")
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        devices.append("mps")
+    return devices
+
+
+@pytest.mark.skipif(not _torch_devices(), reason="needs torch")
+@pytest.mark.parametrize("device", _torch_devices() or ["cpu"])
+def test_torch_candidates_match_the_numpy_path(device):
+    rng = np.random.default_rng(1)
+    base = rng.normal(size=(3000, 24)).astype(np.float32)
+    queries = rng.normal(size=(40, 24)).astype(np.float32)
+    ids_np, dist_np = groundtruth.exact_topk_chunk(queries, base, k=50, device="numpy", base_chunk=700)
+    ids_t, dist_t = groundtruth.exact_topk_chunk(queries, base, k=50, device=device, base_chunk=700)
+    assert np.array_equal(ids_np, ids_t) and np.array_equal(dist_np, dist_t)

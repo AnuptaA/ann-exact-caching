@@ -104,10 +104,14 @@ def fetch_encoder(dest: Path) -> Path:
     if (target / "config.json").exists():
         return target
     tar_path = common.download_file(ENCODER_URL, dest / "dpr_web_query_encoder_hf.tar.gz")
-    target.mkdir(parents=True, exist_ok=True)
     with tarfile.open(tar_path) as tar:
         for member in tar.getmembers():
-            if not member.isfile() or ".." in Path(member.name).parts or member.name.startswith("/"):
+            parts = Path(member.name).parts
+            if not (member.isfile() or member.isdir()) or ".." in parts or member.name.startswith("/"):
                 raise ValueError(f"unexpected tar member {member.name!r}")
-        tar.extractall(target, filter="data")
+            if parts[0] != "dpr_web_query_encoder_hf":
+                raise ValueError(f"tar member outside dpr_web_query_encoder_hf/: {member.name!r}")
+        tar.extractall(dest, filter="data")
+    if not (target / "config.json").exists():
+        raise ValueError("encoder archive has no dpr_web_query_encoder_hf/config.json")
     return target

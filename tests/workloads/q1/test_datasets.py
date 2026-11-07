@@ -164,3 +164,36 @@ def test_cli_universe_streams_groundtruth(tmp_path, capsys):
     assert len(list((tmp_path / "gt").glob("chunk_*.npz"))) == 1
     with pytest.raises(SystemExit):
         cli.main(["--help"])
+
+
+def test_fetch_encoder_extracts_the_archive_layout_and_rejects_escapes(server, tmp_path):
+    import io
+    import tarfile
+
+    def make(names):
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            top = tarfile.TarInfo("dpr_web_query_encoder_hf")
+            top.type = tarfile.DIRTYPE
+            tar.addfile(top)
+            for name in names:
+                info = tarfile.TarInfo(name)
+                info.size = 2
+                tar.addfile(info, io.BytesIO(b"{}"))
+        return buf.getvalue()
+
+    handler, url = server
+    handler.files["/enc"] = make(["dpr_web_query_encoder_hf/config.json"])
+    old = triviaqa.ENCODER_URL
+    triviaqa.ENCODER_URL = f"{url}/enc"
+    try:
+        out = triviaqa.fetch_encoder(tmp_path / "ok")
+        assert (out / "config.json").exists() and triviaqa.fetch_encoder(tmp_path / "ok") == out
+        handler.files["/enc"] = make(["../escape.txt"])
+        with pytest.raises(ValueError):
+            triviaqa.fetch_encoder(tmp_path / "bad")
+        handler.files["/enc"] = make(["other/config.json"])
+        with pytest.raises(ValueError):
+            triviaqa.fetch_encoder(tmp_path / "bad2")
+    finally:
+        triviaqa.ENCODER_URL = old

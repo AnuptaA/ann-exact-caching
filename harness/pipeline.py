@@ -260,5 +260,14 @@ def run_pipeline(ctx: Context, stages=None, force=None, runners=None) -> list[st
     return ran
 
 
+GPU_QUERY_CHUNK = 8192     # larger query chunks mean fewer passes over the base
+GPU_BASE_CHUNK = 131072
+
+
 def make_context(dataset: str, data_dir, dsn: str = "", device: str = "auto", **kw) -> Context:
-    return Context(Path(data_dir), get_spec(dataset), dsn, auto_device() if device == "auto" else device, **kw)
+    dev = auto_device() if device == "auto" else device
+    kw = {k: v for k, v in kw.items() if v is not None}
+    if dev == "cuda":
+        kw.setdefault("gt_query_chunk", GPU_QUERY_CHUNK)
+        kw.setdefault("gt_base_chunk", GPU_BASE_CHUNK)
+    return Context(Path(data_dir), get_spec(dataset), dsn, dev, **kw)
