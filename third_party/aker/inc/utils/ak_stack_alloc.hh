@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 /* This header provides a small helper to allocate a temporary buffer on the stack.
  *
@@ -20,30 +21,30 @@
 namespace aker
 {
     /**
-     * @brief Stack-allocated float buffer.
+     * @brief Float buffer for one converted query vector.
      *
-     * This helper allocates `length` floats on the caller's stack frame.
-     * The returned pointer is valid only until the allocating function returns.
+     * Local patch 5: upstream allocated with alloca() inside this constructor, so the
+     * buffer was released as soon as the constructor returned and every converted
+     * query read freed stack memory (observed: garbage vectors, approximate lookups
+     * never hit, with clang on macOS). The storage is now owned by the object.
      */
     class StackFloatBuffer
     {
     public:
         explicit StackFloatBuffer(std::size_t length) noexcept
-            : length_(length),
-              data_(length_ == 0 ? nullptr
-                                 : static_cast<float*>(AKER_STACK_ALLOCA(sizeof(float) * length_)))
+            : length_(length), storage_(length)
         {
         }
 
         StackFloatBuffer(const StackFloatBuffer&) = delete;
         StackFloatBuffer& operator=(const StackFloatBuffer&) = delete;
 
-        float* data() noexcept { return data_; }
-        const float* data() const noexcept { return data_; }
+        float* data() noexcept { return storage_.data(); }
+        const float* data() const noexcept { return storage_.data(); }
         std::size_t size() const noexcept { return length_; }
 
     private:
         std::size_t length_;
-        float* data_;
+        std::vector<float> storage_;
     };
 }

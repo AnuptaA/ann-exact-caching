@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <random>
 #include <vector>
 
 #include "core/ak_anns_cache_maintenance.hh"
@@ -826,7 +827,7 @@ namespace aker
         std::vector<VectorSlot*> pooled_list;
         context_->vector_pool->collectPooledVectors(pooled_list);
 
-        std::random_shuffle(pooled_list.begin(), pooled_list.end());
+        std::shuffle(pooled_list.begin(), pooled_list.end(), std::mt19937_64(std::random_device{}()));
 
         for (auto& vec : pooled_list)
         {
