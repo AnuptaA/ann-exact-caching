@@ -1385,6 +1385,51 @@ rate ~0.9 per query, drift clusters chosen so queries hit them (some balls
 there, which is why the score test sees the burst; a drift entirely outside
 all balls and shells would leave scores unchanged).
 
+## 5y. Takeaways so far (plain summary)
+
+The promise: on average over cache hits, a served answer keeps at least
+90% of the true top-10. The average is enough (user decision); no promise
+per group of queries.
+
+Workload shifts (the queries change):
+- Watch the score distribution every batch. It is cheap, needs no labels,
+  and catches harmful shifts within about one batch.
+- On an alarm, recalibrate only on queries that arrive after it (older
+  labels describe the old workload).
+- A few thousand queries later, try a shadow rebuild: build a candidate
+  cache from recent queries, switch only if it serves clearly more of them.
+- The audit-based retention test is too slow to matter here: it needs
+  about (noise / shortfall)^2 audited hits, i.e. thousands for small
+  shortfalls.
+
+Data changes (inserts and deletes):
+- Keep the cache up to date: inserts inside a cached neighborhood join it,
+  deletes leave. Essential; without it hits drop by a third and queries
+  with new neighbors keep only 57-84% of them.
+- Recalibrate every batch on recent labels (misses are labeled for free).
+  This alone keeps the promise under gradual change; no alarm was needed.
+- A sudden change can make the recent labels lag. The score test caught our
+  burst (the inserts changed what the cache holds) and its reset fixed it.
+  It cannot see changes far from anything cached; those mostly affect
+  misses, which the backend answers exactly.
+- Untested: a shadow rebuild every so much changed data (e.g. 5% of the
+  database), to win back hits when no alarm fires. It can only help
+  (switches only if better).
+- The retention test fired once in 100 runs; no evidence it is needed.
+
+Fundamental: need for upkeep; old labels can't certify a cutoff after a
+change; label-free tests are fast but blind to harm; label-based checks
+need many audits; only a new cache wins back hits.
+Specific: ESCI only, 10% of the database changed, one change per query,
+abrupt cluster-mixture workload shifts, untuned window sizes.
+
+Next steps:
+1. More datasets (SPACEV traces; data-change workloads need their own
+   neighbor rankings over all vectors).
+2. Baselines Aker and QVCache on the data-change workloads (they need a
+   rule for deletes; inserts make their stored answers stale).
+3. Shadow rebuild triggered by the amount of changed data.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
