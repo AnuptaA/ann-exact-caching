@@ -14,6 +14,7 @@ import argparse
 from pathlib import Path
 
 RES = Path("simulations/approximate_hits/results/online/esci1m")
+T = 0.9
 ORDER = ["static", "slide_none", "slide_score", "slide_ret", "slide_both", "slide_ret_loose",
          "slide_both_loose", "maint_none", "maint_ret", "maint_both", "noupkeep_both",
          "oracle", "known_reset"]
@@ -54,13 +55,42 @@ def row(d):
     r["alarm_kinds"] = ",".join(sorted({e["kind"] for e in ev if e["event"] == "alarm"}))
     r["rebuilds"] = sum(e["event"] == "rebuild" for e in ev)
     c = d["cost"]
-    r["topk"], r["checks"], r["labels"] = c["topk"], c["center_checks"], c["label_updates"]
+    r["topk"] = c["topk"]
+    r["checks"] = c.get("center_checks", c.get("refresh_dist", 0))
+    r["labels"] = c.get("label_updates", 0)
+    r["deleted_returned"] = c.get("deleted_returned", 0)
     return r
 
 
 def mean(rows, k):
     v = [r[k] for r in rows if r.get(k) is not None]
     return sum(v) / len(v) if v else None
+
+
+def load_rows(d, name, seeds):
+    rows = []
+    for s in seeds:
+        p = next(iter(sorted((d.parent / f"{d.name}_s{s}").glob(f"*_{name}.json"))), None) \
+            if not (d.parent / f"{d.name}_s{s}" / f"{name}.json").exists() \
+            else d.parent / f"{d.name}_s{s}" / f"{name}.json"
+        if p is not None:
+            rows.append(row(json.loads(p.read_text())))
+    return rows
+
+
+def best_of(d, pattern, seeds):
+    """Setting matching pattern with the highest mean hit rate among those
+    whose mean served retention >= T; if none meets T, the highest retention."""
+    names = sorted({p.stem for s in seeds for p in
+                    (d.parent / f"{d.name}_s{s}").glob(pattern)})
+    cand = [(n, load_rows(d, n, seeds)) for n in names]
+    cand = [(n, r) for n, r in cand if r]
+    if not cand:
+        return None
+    ok = [c for c in cand if mean(c[1], "ret") is not None and mean(c[1], "ret") >= T]
+    pick = (max(ok, key=lambda c: mean(c[1], "hit")) if ok else
+            max(cand, key=lambda c: mean(c[1], "ret") or 0.0))
+    return pick[0], pick[1], bool(ok), len(ok), len(cand)
 
 
 def main():
@@ -97,6 +127,25 @@ def main():
                 kinds = "/".join(sorted({r["alarm_kinds"] for r in rows if r["alarm_kinds"]}))
                 line += (f" | {g('alarms'):5.1f} {kinds:15s} {g('rebuilds'):4.1f} "
                          f"{g('topk') / 110000:6.3f}")
+                print(line)
+            d = RES / f"data_{kind}_{sched}"
+            for label, pat, seeds in (("lru (no tests)", "lru_k*_none.json", args.seeds),
+                                      ("lru (tests)", "lru_k*_both.json", args.seeds),
+                                      ("aker", "aker_*.json", [0]),
+                                      ("qvcache keep", "qvcache_*_keep.json", [0]),
+                                      ("qvcache remove", "qvcache_*_remove.json", [0])):
+                b = best_of(d, pat, seeds)
+                if b is None:
+                    continue
+                name, rows, ok, n_ok, n = b
+                g = lambda k: mean(rows, k)
+                line = (f"{label:18s} {f(g('hit'))} {f(g('ret'))} {g('below'):3.1f}/{g('n_win'):2.0f}"
+                        f" {f(g('worst'))} |      {f(g('aff_share'))} {f(g('aff_hit'))} "
+                        f"{f(g('aff_ret'))}")
+                if burst:
+                    line += (f" |     {f(g('pre_hit'))} {f(g('pre_ret'))} |     "
+                             f"{f(g('post_hit'))} {f(g('post_ret'))} {g('post_below'):3.1f}")
+                line += f" | {name}" + ("" if ok else " (none meets T)") + f" [{n_ok}/{n} meet T]"
                 print(line)
 
 

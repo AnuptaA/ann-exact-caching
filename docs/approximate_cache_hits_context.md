@@ -1487,6 +1487,30 @@ T, the highest retention, reported as not meeting T). Orchestration
 parallel, ~8-9 GB each) after its prep; flags DC2_A_DONE, DC2_B_DONE in
 results/online.
 
+First results, ESCI half of round 2 (352 runs + 44 workload-shift baseline
+re-runs on fresh seeds finished; no failures). Hit % / mean served
+retention, mean of seeds 0, 1 (baselines: best setting on seed 0, highest
+hit rate with retention >= 0.9, else highest retention):
+| | drift gradual | churn gradual |
+|---|---|---|
+| ours (sliding labels, no test) | 31.3 / .909 | 31.9 / .911 |
+| LRU (best K = 10) | 27.2 / .909 | 27.0 / .912 |
+| Aker (best: tau init .25, alpha_T .9, cap 1, reserve 0) | 0.2 / .910 | 0.2 / .912 |
+| QVCache, deletes kept (as published) | 0.6 / .884 (none meets T) | 0.6 / .890 (none meets T) |
+| QVCache, deletes removed | 0.7 / .905 | 0.6 / .913 |
+- Aker and QVCache reach under 1% hits on ESCI (as in the workload-shift
+  runs: ESCI queries never repeat, and their reuse rules need near-
+  identical queries), so ESCI cannot show how their update rules fare;
+  the SPACEV traces with repeated requests are the real test.
+- QVCache as published drops below T once vectors are deleted (0.884 under
+  drift; 0.67 for queries whose answers include new vectors) because
+  deleted vectors stay cached; removing them recovers 0.905. Small sample
+  (about 700 hits), differences of ~0.02 are about 3 standard errors.
+- Ours leads LRU by about 4-5 points at the same retention on ESCI.
+`online_data_summary.py` now also prints the best LRU / Aker / QVCache
+settings. SPACEV data prep (two exact top-1000 rankings over 10M vectors)
+was still running after 74 minutes; the 824 SPACEV runs start after it.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
