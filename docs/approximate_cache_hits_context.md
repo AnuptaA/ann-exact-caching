@@ -1511,6 +1511,48 @@ hit rate with retention >= 0.9, else highest retention):
 settings. SPACEV data prep (two exact top-1000 rankings over 10M vectors)
 was still running after 74 minutes; the 824 SPACEV runs start after it.
 
+## 5aa. Approximate backend, step 1 (controlled recall; built, first check)
+
+Model (online_sim.py `approximate_rows`): for each query the index misses
+each database vector independently with probability 1 - recall (a fixed
+draw per query and rank position, seeded) and returns the best vectors it
+still sees, in order, from the 1000-deep ranking. Recall at any k then
+equals 1 - miss probability (a surviving true top-k vector is always inside
+the returned top-k); measured recall is logged and matches (0.990 / 0.950 /
+0.900 at k = 10 and at R = 500). Everything the system can observe uses the
+backend's answers: cache balls and radii (from the answer list), the shell,
+audit and miss labels, the greedy objective, calibration. `D["truth"]` (the
+exact ranking) is used only to evaluate: every batch logs
+`served_retention_sum` (against the backend's answer, the label we can
+calibrate) and `served_retention_exact_sum` (against exact truth).
+Flags: `--backend-recall`, `--backend-seed`; fixed-database runs load
+`topU1000.npy`. Not yet supported with an approximate backend: Aker and
+QVCache (the simulator refuses to run them).
+Upkeep detail: membership comes from the backend's answer row, so an
+inserted vector joins a ball only if the backend (index) would have
+returned it for that center, i.e. upkeep is as imperfect as the index.
+
+First check (ESCI 1M, stationary stream, 60k queries, 10% budget, score
+test + rebuild, one seed; ~12,000 hits each):
+| backend recall | hit % | retention vs backend answer | retention vs exact truth |
+|---|---|---|---|
+| 1.00 | 30.1 | .912 | .912 |
+| 0.99 | 29.9 | .914 | .915 |
+| 0.95 | 29.8 | .911 | .913 |
+| 0.90 | 29.4 | .907 | .911 |
+- The promise holds against the backend's answer at every recall (>= .907
+  vs .90), and hits fall only 0.7 points at recall 0.9.
+- Retention against exact truth is slightly HIGHER than against the
+  backend's answer, the opposite of what I guessed beforehand. Likely
+  reason (unverified): with independent misses, a vector one query's search
+  missed is usually returned for nearby queries and so gets cached, while
+  the substitutes from deeper ranks that the backend returns instead are
+  farther and less often cached. Real index errors are correlated across
+  nearby queries (the same hard vectors get missed), so this benign result
+  need not hold for a real index: the reason step 2 (a real index tuned to a
+  target recall) is needed.
+- Small run: differences of 0.004 are about 2.5 standard errors.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes

@@ -103,20 +103,54 @@ def sq_dist(a, b, b_sq):
 
 def db_view(D):
     """Fill defaults for a fixed database: ranking = top-R lists, every
-    vector present."""
+    vector present. D["rank"] = what the backend returns for each query
+    (its ranked answer list; exact unless an approximate backend is
+    simulated); D["truth"] = the exact ranking, used only to evaluate."""
     if "rank" not in D:
         D["rank"] = D["top"]
+    D.setdefault("truth", D["rank"])
     if "present" not in D:
         D["present"] = np.ones(len(D["db"]), dtype=bool)
     D.setdefault("short", [0])
     return D
 
 
-def topk_present(D, qidx, n):
-    """First n present ids of each query's ranking (the exact top-n of the
-    current database). Rows with fewer than n present ids are padded with
-    their last present id and counted in D["short"]."""
-    R = D["rank"][np.asarray(qidx)]
+def approximate_rows(rows, recall, seed=123, chunk=4096):
+    """Backend answer lists from exact ranked rows: the index misses each
+    database vector independently with probability 1 - recall for each
+    query (a fixed draw per query and rank position), and returns the best
+    of the vectors it sees, still in order. Recall at any k is then 1 -
+    miss probability (a surviving true top-k vector is always inside the
+    returned top-k). Rows keep their width; the tail is padded with -1."""
+    out = np.empty_like(rows)
+    rng = np.random.default_rng(seed)
+    for s in range(0, len(rows), chunk):
+        r = rows[s:s + chunk]
+        drop = (rng.random(r.shape) < 1.0 - recall) | (r < 0)
+        order = np.argsort(drop, axis=1, kind="stable")
+        o = np.take_along_axis(r, order, axis=1)
+        keep = (~drop).sum(axis=1)
+        o[np.arange(r.shape[1])[None, :] >= keep[:, None]] = -1
+        out[s:s + chunk] = o
+    return out
+
+
+def measured_recall(truth_rows, answer_rows, k, n=20000, seed=0):
+    """Mean share of the exact top-k (first k ids of each truth row) found
+    in the first k ids of the answer row, on a sample of queries."""
+    idx = np.random.default_rng(seed).choice(len(truth_rows), min(n, len(truth_rows)),
+                                             replace=False)
+    t, a = truth_rows[idx, :k], answer_rows[idx, :k]
+    return float(np.mean([len(np.intersect1d(x, y)) / k for x, y in zip(t, a)]))
+
+
+def topk_present(D, qidx, n, key="rank"):
+    """First n present ids of each query's list: its backend answer
+    (key "rank") or the exact ranking (key "truth"); with an exact backend
+    both are the exact top-n of the current database. Rows with fewer than
+    n present ids are padded with their last present id and counted in
+    D["short"]."""
+    R = D[key][np.asarray(qidx)]
     m = (R >= 0) & D["present"][np.maximum(R, 0)]
     c = np.cumsum(m, axis=1)
     sel = m & (c <= n)
@@ -332,8 +366,14 @@ class Cache:
         return X, near
 
     def retention(self, qidx):
-        """Share of each query's current exact top-k that is cached."""
+        """Share of each query's current top-k, as the backend answers it,
+        that is cached (the label we can observe)."""
         return self.cached[topk_present(self.D, qidx, self.k)].mean(axis=1)
+
+    def retention_exact(self, qidx):
+        """Share of each query's exact top-k that is cached (evaluation
+        only; equals retention() with an exact backend)."""
+        return self.cached[topk_present(self.D, qidx, self.k, key="truth")].mean(axis=1)
 
     def mark_used(self, near_ids, t):
         """LRU: entries supplying any of the given vector ids were used at t."""
@@ -692,6 +732,7 @@ class Sim:
             serve = (score >= self.lam if self.lam is not None and cache.n_cached() >= self.k
                      else np.zeros(len(qb), bool))
             y = cache.retention(qb)
+            y_exact = y if self.D["truth"] is self.D["rank"] else cache.retention_exact(qb)
             rate = (a.alarm_audit_rate if last_alarm is not None
                     and s - last_alarm < a.alarm_audit_span else a.audit_rate)
             target = getattr(a, "audit_target", 0)
@@ -703,6 +744,7 @@ class Sim:
             self.cost["topk"] += int((~serve).sum() + audit.sum())
             self.log.append({"t": t, "n": len(qb), "served": int(serve.sum()),
                              "served_retention_sum": float(y[serve].sum()),
+                             "served_retention_exact_sum": float(y_exact[serve].sum()),
                              "ret_hist": np.bincount(np.rint(y * self.k).astype(int),
                                                      minlength=self.k + 1).tolist(),
                              "audited_served": int(audit.sum()),
@@ -794,6 +836,21 @@ def load(prep, args):
         D.update(rank=rank, present=dc["initial"].copy(), top=rank, initial=dc["initial"],
                  events={"t": t[order], "id": np.r_[dc["ins_ids"], dc["del_ids"]][order],
                          "insert": np.r_[np.ones(n, bool), np.zeros(n, bool)][order]})
+    recall = getattr(args, "backend_recall", 1.0)
+    if recall < 1.0:
+        # approximate backend: its answers miss each vector independently
+        # per query; replacements come from deeper ranks, so rows must be
+        # deeper than R (the union ranking, 1000 wide)
+        if kind == "none":
+            wide = Path(prep) / "topU1000.npy"
+            if not wide.exists():
+                raise SystemExit(f"{wide} needed for --backend-recall < 1 "
+                                 "(online_prepare_data.py computes it)")
+            D["rank"] = np.load(wide)
+        D["truth"] = D["rank"]
+        D["rank"] = D["top"] = approximate_rows(D["truth"], recall, args.backend_seed)
+        D["backend_recall_measured"] = {
+            f"at_{k}": measured_recall(D["truth"], D["rank"], k) for k in (args.k, args.R)}
     return D, streams
 
 
@@ -815,6 +872,10 @@ def main():
     ap.add_argument("--data-change", choices=["none", "churn", "drift"], default="none",
                     help="database inserts / deletes (online_prepare_data.py)")
     ap.add_argument("--schedule", choices=["gradual", "burst"], default="gradual")
+    ap.add_argument("--backend-recall", type=float, default=1.0,
+                    help="simulated approximate backend: recall of its answers (1 = exact); "
+                         "labels and caches use its answers, truth is logged separately")
+    ap.add_argument("--backend-seed", type=int, default=123)
     ap.add_argument("--no-maintain", action="store_true",
                     help="no cache upkeep on inserts (balls go stale; deletes still leave)")
     ap.add_argument("--cal-labels", choices=["serve", "maintained"], default="serve",
@@ -899,12 +960,17 @@ def main():
         args.alarm_audit_rate = args.audit_rate
     if args.method == "lru":
         args.response = "recal"
+    if args.method in ("aker", "qvcache") and args.backend_recall < 1.0:
+        raise SystemExit("baselines are not yet supported with an approximate backend")
     if args.method in ("aker", "qvcache"):
         from simulations.approximate_hits import online_baselines as ob
         cls = ob.Aker if args.method == "aker" else ob.QVCache
         res = dict(cls(D, stream, args).run(), method=args.method, args=vars(args))
     else:
         res = Sim(D, stream, args).run(args.method)
+    if "backend_recall_measured" in D:
+        res["backend"] = dict(D["backend_recall_measured"], target=args.backend_recall)
+        logger.info(f"backend recall measured {D['backend_recall_measured']}")
     key = f"phase_{args.stream}"
     if key in streams.files or (args.stream == "shift" and "phase" in streams.files):
         phase = streams[key] if key in streams.files else streams["phase"]

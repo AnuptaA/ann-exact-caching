@@ -292,3 +292,38 @@ def test_retention_alarm_fires_only_on_low_retention():
     assert not sim.retention_alarm(1000, 0.01)
     sim.audits = [(1000, np.full(400, 0.8), np.ones(400))]
     assert sim.retention_alarm(1000, 0.01)
+
+
+def test_approximate_rows_recall_order_and_padding():
+    rng = np.random.default_rng(0)
+    rows = np.stack([rng.permutation(5000)[:400] for _ in range(300)]).astype(np.int32)
+    rows[:5, 380:] = -1                                     # padded rows stay padded
+    assert np.array_equal(osim.approximate_rows(rows, 1.0), rows)
+    out = osim.approximate_rows(rows, 0.9)
+    for r, o in zip(rows[:20], out[:20]):
+        keep = o[o >= 0]
+        assert list(keep) == [x for x in r if x in set(keep.tolist())]    # subsequence, in order
+        assert (o[len(keep):] == -1).all()                                # tail padded
+    # recall at k equals the keep probability, at any k
+    for k in (10, 50):
+        assert abs(osim.measured_recall(rows, out, k, n=300) - 0.9) < 0.02
+    assert np.array_equal(osim.approximate_rows(rows, 0.9), out)          # deterministic
+    assert not np.array_equal(osim.approximate_rows(rows, 0.9, seed=1), out)
+
+
+def test_backend_answers_vs_truth_retention():
+    D = _dyn_data()
+    osim.db_view(D)
+    assert D["truth"] is D["rank"]                          # exact backend: same array
+    c = osim.Cache(D, k=3, R=40, bits=32, budget=1e9)
+    c.add(0, 10)
+    q = np.arange(10)
+    assert np.array_equal(c.retention(q), c.retention_exact(q))
+    D["truth"] = D["rank"]
+    D["rank"] = osim.approximate_rows(D["truth"], 0.7)      # strongly approximate backend
+    c2 = osim.Cache(D, k=3, R=40, bits=32, budget=1e9)
+    c2.add(0, 10)
+    # entries are built from the backend's answer; the exact truth is separate
+    members = set(c2.members(0).tolist())
+    assert members <= set(D["rank"][0].tolist())
+    assert not np.array_equal(c2.retention(q), c2.retention_exact(q))
