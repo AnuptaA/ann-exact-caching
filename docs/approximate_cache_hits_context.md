@@ -1561,6 +1561,14 @@ Priorities set by the user (after the current data-change runs finish):
    centroids), and the OS page cache can hold index pages; memory limits
    must be controlled and memory given to our cache compared at equal total
    memory with giving it to the index.
+   Backends: DiskANN swept from small compressed codes (8-32 bytes per
+   vector, node cache off) to its default, and pgvector IVFFlat (centers in
+   memory, Postgres buffer at its minimum, process memory capped) as the
+   minimal-memory end. Storage: EBS is fine for now (higher, more variable
+   latency than local NVMe; note it).
+   Cache budgets: start with 1% and 10% of the vectors (user decision; the
+   full 0.1%-10% sweep later). Aker's own settings were 1% / 5% (hit
+   ratios) and 1% / 2% / 5% (latency), counted as raw cached vectors.
 Other open items (ranked list in the conversation of this session): the
 rebuild-on-return flaw (5u), the score's dependence on the sampling rate p,
 mixed k, gradual shifts, model refit, TriviaQA and smaller budgets, a
