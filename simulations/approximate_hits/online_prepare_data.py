@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """
-Data-change inputs for the online simulator (context doc 5t), ESCI 1M.
+Data-change inputs for the online simulator (context doc 5t): ESCI 1M or a
+SPACEV / SPHERE trace (--prep of online_prepare.py --dataset trace).
 
 The query distribution stays fixed (random stream); the database changes:
   churn  hold out a uniform random --frac of the database (initially
@@ -98,8 +99,16 @@ def main():
     args = ap.parse_args()
     prep = Path(args.prep)
     rng = np.random.default_rng(args.seed + (args.kind == "drift"))
-    db = np.load(ESCI / f"esci_db{args.n_db}_s42.npy").astype(np.float32)
-    q = np.load(ESCI / "esci_queries.npy").astype(np.float32)
+    meta_path = prep / "meta.json"
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {"kind": "esci"}
+    if meta["kind"] == "trace":
+        # SPACEV / SPHERE traces (online_prepare.py --dataset trace)
+        from simulations.approximate_hits.run_e2e_oracle_trace import load_base
+        db = np.asarray(load_base(meta["trace"]), dtype=np.float32)
+        q = np.load(prep / "q.npy").astype(np.float32)
+    else:
+        db = np.load(ESCI / f"esci_db{args.n_db}_s42.npy").astype(np.float32)
+        q = np.load(ESCI / "esci_queries.npy").astype(np.float32)
     n_stream = len(np.load(prep / "streams.npz")["random"])
     topU = union_ranking(prep, q, db, args.R_union)
     info = {"kind": args.kind, "frac": args.frac, "R_union": args.R_union}

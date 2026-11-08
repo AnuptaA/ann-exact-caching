@@ -45,12 +45,54 @@ def baselines():
                f"--method qvcache --qv-D {D} --qv-mini {m} --qv-dims {dims} --qv-buckets {bk}")
 
 
+def best_baseline_jobs(seeds):
+    """Best Aker / QVCache setting per workload on seed 0 (highest hit rate
+    among settings whose mean served retention >= T, else the highest
+    retention), re-run on fresh seeds so the reported numbers are not selected on
+    the same run."""
+    import json
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent))
+    from online_summary import summarize
+    grids = dict(baselines())
+    out = []
+    for prep, stream, budget in WORKLOADS + MULTISHIFT:
+        d0 = Path(f"{RES}/{prep}/r2_{stream}_s0")
+        for fam in ("aker", "qvcache"):
+            rows = []
+            for name in grids:
+                if name.startswith(fam) and (d0 / f"{name}.json").exists():
+                    r = summarize(json.loads((d0 / f"{name}.json").read_text()), 5000)
+                    rows.append((name, r))
+            if not rows:
+                continue
+            ok = [x for x in rows if x[1]["ret"] is not None and x[1]["ret"] >= 0.9]
+            # none meets T: the setting closest to the promise (highest retention)
+            name = (max(ok, key=lambda x: x[1]["hit"]) if ok else
+                    max(rows, key=lambda x: x[1]["ret"] or 0.0))[0]
+            tag = name.split("_", 1)[1]
+            for seed in seeds:
+                o = f"{RES}/{prep}/r2_{stream}_s{seed}"
+                out.append(f"mkdir -p {o}/logs && [ -f {o}/{name}.json ] || "
+                           f"{SIM} --prep {RES}/{prep} --stream {stream} --budget {budget} "
+                           f"--seed {seed} {grids[name]} --tag _{tag} --out {o} "
+                           f"> {o}/logs/{name}.txt 2>&1")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1])
     ap.add_argument("--baseline-seeds", type=int, nargs="+", default=[0])
     ap.add_argument("--multishift", action="store_true", help="the multishift workloads")
+    ap.add_argument("--best-baselines", type=int, nargs="*", default=None,
+                    help="only re-run the best seed-0 Aker / QVCache settings on these seeds")
     args = ap.parse_args()
+    if args.best_baselines:
+        for cmd in best_baseline_jobs(args.best_baselines):
+            print(cmd)
+        return
     jobs = []
     for prep, stream, budget in (MULTISHIFT if args.multishift else WORKLOADS):
         for seed in sorted(set(args.seeds) | set(args.baseline_seeds)):

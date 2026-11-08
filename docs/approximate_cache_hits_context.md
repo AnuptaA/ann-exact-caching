@@ -1452,6 +1452,41 @@ neither paper specifies one):
   minimal fix that removes deleted vectors from its mini-indexes (any
   deployment would need this; its index type supports deletion).
 
+## 5z. Data-change round 2 (baselines, SPACEV; setup)
+
+Baseline update rules implemented (online_baselines.py; tests in
+test_online_baselines.py): Aker as in its paper (reserve D, immediate
+deletes with promotion / drop below k, insert log with fast path and
+round-robin slow path when risk >= 0.3, batch 16; reserves count against
+the memory budget); QVCache as published (deletes kept and countable as
+deleted_returned) or with deletes removed. Both use the current exact
+top-k as the backend answer. Fixed-database runs reproduce round 2 exactly
+for both (served counts and retention in every batch). QVCache's retention
+now counts a cached true neighbor as returned if it is at least as close
+as the answer's k-th vector (ESCI has equal-distance duplicate vectors;
+deleted vectors still cached that are closer push true neighbors out).
+Smoke runs (ESCI drift gradual, one setting each): Aker 0.1% hits; QVCache
+~1% hits at retention 0.84-0.85 (affected queries 0.68-0.70).
+
+Data prep generalized to traces (online_prepare_data.py reads meta.json):
+spacev-aker-0.6 (94k distinct queries) and spacev-real (115k), 10M
+vectors, 10% changed (~12 changes per query), churn and drift.
+
+Round 2 (online_data_jobs.py --round 2; 1176 runs): ESCI: Aker grid (tau
+init x alpha_T x cap x reserve 0 / 10; 36), QVCache grid (D x mini x
+deletes keep / remove; PCA 16 x 8 fixed, best in every earlier grid; 36),
+seed 0; LRU K 10 / 20 / 50 / 100 x tests none / both, seeds 0, 1. SPACEV
+Zipf 0.6 and real log: our configurations (static, sliding none / score /
+both / retention loose, no upkeep, oracle, known reset; maintained labels
+skipped: no gain on ESCI at 5x cost) and LRU, seeds 0, 1; the same baseline
+grids, seed 0. Plus (online_round2_jobs.py --best-baselines 1 2, 44 runs)
+the best seed-0 Aker / QVCache setting per workload-shift workload re-run on
+seeds 1 and 2 (best = highest hit rate with retention >= T; if none meets
+T, the highest retention, reported as not meeting T). Orchestration
+/tmp/run_round_dc2.sh: ESCI + re-runs (40 parallel), then SPACEV (30
+parallel, ~8-9 GB each) after its prep; flags DC2_A_DONE, DC2_B_DONE in
+results/online.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes

@@ -869,6 +869,15 @@ def main():
     ap.add_argument("--aker-alpha-t", type=float, default=0.25)
     ap.add_argument("--aker-tau-init", type=float, default=0.25)
     ap.add_argument("--aker-cap", type=float, default=1.0)
+    ap.add_argument("--aker-reserve", type=int, default=0,
+                    help="extra neighbors stored per entry for deletes (paper: 0; 10 / 30 "
+                         "in its refresh test)")
+    ap.add_argument("--aker-risk", type=float, default=0.3,
+                    help="risk threshold that triggers slow-path refresh of inserts")
+    ap.add_argument("--aker-batch", type=int, default=16,
+                    help="insert log records checked per slow-path step")
+    ap.add_argument("--qv-deletes", choices=["keep", "remove"], default="keep",
+                    help="QVCache on deletes: keep (as published) or remove from the cache")
     ap.add_argument("--qv-mini", type=int, default=4)
     ap.add_argument("--qv-D", type=float, default=0.075, help="QVCache deviation factor")
     ap.add_argument("--qv-alpha", type=float, default=0.9)
@@ -890,8 +899,6 @@ def main():
         args.alarm_audit_rate = args.audit_rate
     if args.method == "lru":
         args.response = "recal"
-    if args.method in ("aker", "qvcache") and args.data_change != "none":
-        raise SystemExit("baselines do not support database changes yet")
     if args.method in ("aker", "qvcache"):
         from simulations.approximate_hits import online_baselines as ob
         cls = ob.Aker if args.method == "aker" else ob.QVCache

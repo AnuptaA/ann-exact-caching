@@ -6,20 +6,33 @@ Prior approximate vector caches for the online simulator (online_sim.py).
 Both start empty and process the warm-up queries like any others (misses
 fill the cache); metrics are logged after warm-up, costs from the start.
 As for our methods, cache contents change only between batches; per-query
-state (thresholds) is updated in arrival order within a batch.
+state (thresholds) is updated in arrival order within a batch. Retention of
+a served query = share of its current exact top-k in the returned answer.
 
 Aker (density-aware approximate cache):
-  representative entry per inserted miss: the query, its backend top-k ids
-  (neighbor reference list), minD = distance to its nearest neighbor, and a
-  threshold tau initialized to --aker-tau-init x minD (paper: 1/4) and capped
-  at --aker-cap x minD (paper: 1).
+  representative entry per inserted miss: the query, its backend top-(k + D)
+  ids (neighbor reference list; D = --aker-reserve, paper default 0), minD
+  = distance to its nearest neighbor, and a threshold tau initialized to
+  --aker-tau-init x minD (paper: 1/4) and capped at --aker-cap x minD
+  (paper: 1).
   lookup: exact repeat of a cached query (equality hit; tau *= 1.1), repeat
   of an earlier approximate-hit query (alias hit), or the nearest
   representative with d(query, representative) < tau (approximate hit; tau
-  *= 0.25). The answer is that entry's top-k (not a union over the cache).
-  miss: backend top-k inserted as a new representative. Capacity: distinct
-  vectors in the neighbor object pool (budget M); FIFO eviction of
-  representative entries (with their aliases).
+  *= 0.25). The answer is that entry's first k neighbors.
+  miss: backend top-(k + D) inserted as a new representative. Capacity:
+  distinct vectors in the neighbor object pool (budget M, reserves
+  included); FIFO eviction of representative entries (with their aliases).
+  database changes ("del-consistency", paper section 4.6):
+    delete  removed from every entry holding it; the next reserve neighbor
+            moves up; an entry left with fewer than k neighbors is dropped
+    insert  appended to an insert log; fast path: the entry whose query is
+            closest to the new vector takes it if it is closer than that
+            entry's farthest stored neighbor (the farthest is then dropped);
+            slow path, whenever risk R >= --aker-risk (paper 0.3), on every
+            insert and lookup: the next entry in round-robin order checks
+            the next --aker-batch (paper 16) log records from its checkpoint;
+            R = mean over entries of d_k / d_{k+D} (1 if D = 0) x mean
+            unchecked records per entry / log size
 
 QVCache (query-aware vector cache):
   M vectors split into --qv-mini mini-indexes; a miss inserts the backend's
@@ -32,25 +45,32 @@ QVCache (query-aware vector cache):
   d_backend[k] (initialized to d_backend[k] in a new region). Answer = the k
   nearest cached vectors. Cache search is exact here (the paper uses graph
   indexes), which can only help QVCache.
+  database changes: the paper does not handle them (writes go to the
+  backend only). --qv-deletes keep: as published (deleted vectors stay
+  cached and can be returned; counted as deleted_returned); remove: a
+  minimal fix that drops deleted vectors from the mini-indexes. Inserts
+  reach the cache only through later misses.
 """
 
 import numpy as np
 
-from simulations.approximate_hits.online_sim import sq_dist
+from simulations.approximate_hits.online_sim import db_view, sq_dist, topk_present
 
 #-------------------------------------------------------------------------------
 
 
 class Base:
     def __init__(self, D, stream, args):
-        self.D, self.stream, self.a = D, stream, args
+        self.D, self.stream, self.a = db_view(D), stream, args
         self.k = args.k
         self.M = args.budget * len(D["db"])
         self.ref = np.zeros(len(D["db"]), dtype=np.int32)
         self.log, self.events = [], []
-        self.cost = {"topk": 0, "topR": 0}
+        self.cost = {"topk": 0, "topR": 0, "refresh_dist": 0, "deleted_returned": 0}
         self.fetched = 0
         self.n_c = 0            # distinct cached vectors
+        self.ev = D.get("events")
+        self.ev_i = 0
 
     def _acquire(self, ids):
         new = int((self.ref[ids] == 0).sum())
@@ -69,14 +89,39 @@ class Base:
         x = self.D["db"][ids]
         return np.sqrt(((x - self.D["q"][qi]) ** 2).sum(axis=-1))
 
+    def apply_events(self, s):
+        """Inserts / deletes scheduled before stream position s, in order."""
+        ev = self.ev
+        if ev is None:
+            return 0
+        j = int(np.searchsorted(ev["t"], s, side="right"))
+        if j <= self.ev_i:
+            return 0
+        ids, ins = ev["id"][self.ev_i:j], ev["insert"][self.ev_i:j]
+        pres = self.D["present"]
+        pres[ids[ins]] = True
+        pres[ids[~ins]] = False
+        self.on_delete(ids[~ins])
+        self.on_insert(ids[ins])
+        n = j - self.ev_i
+        self.ev_i = j
+        return n
+
+    def on_delete(self, ids):
+        pass
+
+    def on_insert(self, ids):
+        pass
+
     def run(self):
         a = self.a
         for s in range(0, len(self.stream), a.batch):
+            n_ev = self.apply_events(s)
             qb = self.stream[s:s + a.batch]
-            # retention counts under the cache as it is when the batch starts
-            # (best possible answer: the k nearest cached vectors)
-            counts = (self.ref[self.D["top"][qb, :self.k]] > 0).sum(axis=1)
-            served, ret = self.batch(qb, s)
+            truth = topk_present(self.D, qb, self.k)
+            # oracle reference: share of each query's exact top-k cached
+            counts = (self.ref[truth] > 0).sum(axis=1)
+            served, ret = self.batch(qb, s, truth)
             self.cost["topk"] += int((~served).sum())
             if s + len(qb) > a.warmup:
                 keep = np.arange(len(qb)) + s >= a.warmup
@@ -87,7 +132,11 @@ class Base:
                                                          minlength=self.k + 1).tolist(),
                                  "audited_served": 0, "lambda": None,
                                  "memory": self.n_cached(), "cached": self.n_cached(),
-                                 "entries": self.n_entries()})
+                                 "entries": self.n_entries(), "events": n_ev})
+                if "initial" in self.D:
+                    aff = (~self.D["initial"][truth]).any(axis=1) & keep
+                    self.log[-1].update(aff_n=int(aff.sum()), aff_served=int((aff & served).sum()),
+                                        aff_ret_sum=float(ret[aff & served].sum()))
         return {"log": self.log, "events": self.events,
                 "cost": dict(self.cost, vectors_fetched=self.fetched)}
 
@@ -95,32 +144,158 @@ class Base:
 class Aker(Base):
     def __init__(self, D, stream, args):
         super().__init__(D, stream, args)
-        self.reps = {}          # center query -> [tau, minD]
+        self.n_keep = args.k + getattr(args, "aker_reserve", 0)
+        self.reps = {}          # center -> {"tau", "cap", "ids", "d", "lc"}
         self.fifo = []          # insertion order of representatives
         self.alias = {}         # query -> representative
         self.children = {}      # representative -> its aliases
+        self.holders = {}       # vector id -> representatives holding it
+        self.ilog = []          # insert log (vector ids)
+        self.sum_lc = 0         # sum of log checkpoints over representatives
+        self.sum_r = 0.0        # sum of d_k / d_{k+D} over representatives
+        self.rr = []            # round-robin order for the slow path
 
     def n_entries(self):
         return len(self.reps)
 
+    # -- entry bookkeeping ---------------------------------------------------
+
+    def _r(self, e):
+        d = e["d"]
+        if self.n_keep == self.k or len(d) < self.n_keep:
+            return 1.0
+        return float(d[self.k - 1] / max(d[-1], 1e-12))
+
+    def _hold(self, c, ids):
+        for x in ids.tolist():
+            self.holders.setdefault(x, set()).add(c)
+
+    def _unhold(self, c, ids):
+        for x in ids.tolist():
+            h = self.holders.get(x)
+            if h is not None:
+                h.discard(c)
+                if not h:
+                    del self.holders[x]
+
     def _insert(self, c):
-        ids = self.D["top"][c, :self.k]
-        min_d = float(self._dist(c, ids[:1])[0])
+        ids = topk_present(self.D, [c], self.n_keep)[0]
+        d = self._dist(c, ids)
         self._acquire(ids)
-        # [tau, cap]: tau starts at tau_init * minD and never exceeds cap * minD
-        self.reps[c] = [self.a.aker_tau_init * min_d, self.a.aker_cap * min_d]
+        self._hold(c, ids)
+        # tau starts at tau_init * minD and never exceeds cap * minD
+        e = {"tau": self.a.aker_tau_init * float(d[0]), "cap": self.a.aker_cap * float(d[0]),
+             "ids": ids, "d": d, "lc": len(self.ilog)}
+        self.reps[c] = e
+        self.sum_lc += e["lc"]
+        self.sum_r += self._r(e)
         self.fifo.append(c)
         while self.n_cached() > self.M and self.fifo:
             v = self.fifo.pop(0)
-            if v not in self.reps:
-                continue
-            self._release(self.D["top"][v, :self.k])
-            del self.reps[v]
-            for al in self.children.pop(v, []):
-                self.alias.pop(al, None)
+            if v in self.reps:
+                self._drop(v)
 
-    def batch(self, qb, s):
-        k, top, Q = self.k, self.D["top"], self.D["q"]
+    def _drop(self, v):
+        e = self.reps.pop(v)
+        self._release(e["ids"])
+        self._unhold(v, e["ids"])
+        self.sum_lc -= e["lc"]
+        self.sum_r -= self._r(e)
+        for al in self.children.pop(v, []):
+            self.alias.pop(al, None)
+
+    def _offer(self, c, x, dx):
+        """Insert vector x (distance dx to c's query) into c's neighbor list
+        if it is closer than the farthest stored neighbor."""
+        e = self.reps[c]
+        if dx >= e["d"][-1] or x in set(e["ids"].tolist()):
+            return
+        self.sum_r -= self._r(e)
+        pos = int(np.searchsorted(e["d"], dx))
+        ids, d = np.insert(e["ids"], pos, x), np.insert(e["d"], pos, dx)
+        self._acquire(np.array([x]))
+        self._hold(c, np.array([x]))
+        if len(ids) > self.n_keep:
+            gone = ids[-1:]
+            self._release(gone)
+            self._unhold(c, gone)
+            ids, d = ids[:-1], d[:-1]
+        e["ids"], e["d"] = ids, d
+        self.sum_r += self._r(e)
+
+    # -- database changes ----------------------------------------------------
+
+    def on_delete(self, ids):
+        for x in ids.tolist():
+            for c in list(self.holders.get(x, ())):
+                e = self.reps[c]
+                keep = e["ids"] != x
+                self.sum_r -= self._r(e)
+                e["ids"], e["d"] = e["ids"][keep], e["d"][keep]
+                self._release(np.array([x]))
+                self._unhold(c, np.array([x]))
+                self.sum_r += self._r(e)
+                if len(e["ids"]) < self.k:
+                    self._drop(c)
+
+    def risk(self):
+        W = len(self.ilog)
+        n = len(self.reps)
+        if not W or not n:
+            return 0.0
+        return (self.sum_r / n) * (W - self.sum_lc / n) / W
+
+    def slow_step(self):
+        """Next representative (round-robin) checks the next batch of log
+        records since its checkpoint."""
+        if not self.reps:
+            return
+        while True:
+            if not self.rr:
+                self.rr = list(self.reps)
+            c = self.rr.pop()
+            if c in self.reps:
+                break
+        e = self.reps[c]
+        lo, hi = e["lc"], min(e["lc"] + self.a.aker_batch, len(self.ilog))
+        if hi > lo:
+            xs = np.array(self.ilog[lo:hi], dtype=np.int64)
+            xs = xs[self.D["present"][xs]]
+            self.cost["refresh_dist"] += len(xs)
+            for x, dx in zip(xs.tolist(), self._dist(c, xs).tolist()):
+                self._offer(c, x, dx)
+        self.sum_lc += hi - e["lc"]
+        e["lc"] = hi
+
+    def on_insert(self, ids):
+        if not len(ids):
+            return
+        # fast path: for each new vector, the entry whose query is closest
+        # (query filter); entries do not change while inserts are offered
+        best = None
+        if self.reps:
+            cs = np.fromiter(self.reps, dtype=np.int64)
+            cq = self.D["q"][cs]
+            cq_sq = (cq * cq).sum(axis=1)
+            best, best_d = [], []
+            for s in range(0, len(ids), 4096):
+                d2 = sq_dist(self.D["db"][ids[s:s + 4096]], cq, cq_sq)
+                j = d2.argmin(axis=1)
+                best.append(cs[j])
+                best_d.append(np.sqrt(d2[np.arange(len(j)), j]))
+            best, best_d = np.concatenate(best), np.concatenate(best_d)
+        for i, x in enumerate(ids.tolist()):
+            self.ilog.append(x)
+            if best is not None and int(best[i]) in self.reps:
+                self.cost["refresh_dist"] += 1
+                self._offer(int(best[i]), x, float(best_d[i]))
+            if self.risk() >= self.a.aker_risk:
+                self.slow_step()
+
+    # -- lookups -------------------------------------------------------------
+
+    def batch(self, qb, s, truth):
+        k, Q = self.k, self.D["q"]
         n = len(qb)
         served = np.zeros(n, dtype=bool)
         ret = np.zeros(n)
@@ -135,20 +310,24 @@ class Aker(Base):
             e = None
             if q in self.reps:                       # equality hit
                 e = q
-                self.reps[e][0] = min(self.reps[e][0] * self.a.aker_alpha_l, self.reps[e][1])
+                r = self.reps[e]
+                r["tau"] = min(r["tau"] * self.a.aker_alpha_l, r["cap"])
             elif q in self.alias and self.alias[q] in self.reps:
                 e = self.alias[q]                    # alias hit (approximate)
-                self.reps[e][0] *= self.a.aker_alpha_t
-            elif len(centers) and int(near[i]) in self.reps and near_d[i] < self.reps[int(near[i])][0]:
+                self.reps[e]["tau"] *= self.a.aker_alpha_t
+            elif len(centers) and int(near[i]) in self.reps \
+                    and near_d[i] < self.reps[int(near[i])]["tau"]:
                 e = int(near[i])                     # approximate hit
-                self.reps[e][0] *= self.a.aker_alpha_t
+                self.reps[e]["tau"] *= self.a.aker_alpha_t
                 self.alias[q] = e
                 self.children.setdefault(e, []).append(q)
             if e is None:
                 misses.append(q)
             else:
                 served[i] = True
-                ret[i] = np.isin(top[q, :k], top[e, :k]).mean()
+                ret[i] = np.isin(truth[i], self.reps[e]["ids"][:k]).mean()
+            if self.ilog and self.risk() >= self.a.aker_risk:
+                self.slow_step()
         for q in misses:
             if q not in self.reps:
                 self._insert(q)
@@ -166,6 +345,7 @@ class QVCache(Base):
         self.fill = 0
         self.theta = {}
         self.owner = np.full(len(D["db"]), -1, dtype=np.int64)  # mini-index of a cached id
+        self.remove_deleted = getattr(args, "qv_deletes", "keep") == "remove"
         w = np.asarray(D["q"][stream[:args.warmup]], dtype=np.float64)
         self.mu = w.mean(axis=0)
         _, _, vt = np.linalg.svd(w - self.mu, full_matrices=False)
@@ -181,12 +361,22 @@ class QVCache(Base):
         b = np.floor((z - self.lo) / np.maximum(self.hi - self.lo, 1e-12) * self.a.qv_buckets)
         return tuple(np.clip(b, 0, self.a.qv_buckets - 1).astype(int))
 
+    def on_delete(self, ids):
+        if not self.remove_deleted:
+            return
+        gone = ids[self.ref[ids] > 0]
+        for x in gone.tolist():
+            self.size[int(self.owner[x])] -= 1
+        self._release(gone)
+        self.owner[gone] = -1
+
     def _next_fill(self, t):
         empty = [i for i in range(self.n_mini) if self.size[i] == 0]
         if empty:
             return empty[0]
         v = min(range(self.n_mini), key=lambda i: self.last_used[i])
         ids = np.asarray(self.mini[v], dtype=np.int64)
+        ids = ids[self.owner[ids] == v] if len(ids) else ids
         self._release(ids)
         self.owner[ids] = -1
         self.mini[v], self.size[v] = [], 0
@@ -194,7 +384,7 @@ class QVCache(Base):
         return v
 
     def _insert(self, q, t):
-        ids = self.D["top"][q, :self.k]
+        ids = topk_present(self.D, [q], self.k)[0]
         new = ids[self.ref[ids] == 0]
         if self.size[self.fill] + len(new) > self.cap:
             self.fill = self._next_fill(t)
@@ -204,8 +394,8 @@ class QVCache(Base):
         self.size[self.fill] += len(new)
         self.last_used[self.fill] = t
 
-    def batch(self, qb, s):
-        k, top, Q, a = self.k, self.D["top"], self.D["q"], self.a
+    def batch(self, qb, s, truth):
+        k, Q, a = self.k, self.D["q"], self.a
         n = len(qb)
         served = np.zeros(n, dtype=bool)
         ret = np.zeros(n)
@@ -215,8 +405,16 @@ class QVCache(Base):
             d2 = sq_dist(Q[qb], cv, (cv * cv).sum(axis=1))
             part = np.argpartition(d2, k - 1, axis=1)[:, :k]
             dk = np.sqrt(np.take_along_axis(d2, part, axis=1).max(axis=1))
-            near = ids[part]
-        cached = self.ref > 0
+            # answer = the k nearest cached vectors by exact distance (float32
+            # distances can misorder near-ties): re-rank a few extra candidates
+            m = min(k + 10, len(ids))
+            cand = ids[np.argpartition(d2, m - 1, axis=1)[:, :m]]
+            exact = ((self.D["db"][cand].astype(np.float64)
+                      - Q[qb][:, None, :].astype(np.float64)) ** 2).sum(axis=2)
+            near = np.take_along_axis(cand, np.argsort(exact, axis=1)[:, :k], axis=1)
+            near_dk = np.sqrt(np.sort(exact, axis=1)[:, k - 1])
+        present = self.D["present"]
+        cached_now = self.ref > 0
         misses = []
         for i, q in enumerate(qb):
             q = int(q)
@@ -224,12 +422,17 @@ class QVCache(Base):
             th = self.theta.get(key)
             if len(ids) >= k and th is not None and dk[i] <= (1 + a.qv_D) * th:
                 served[i] = True
-                ret[i] = cached[top[q, :k]].mean()
+                # a cached true neighbor is returned if it is at least as close as
+                # the answer's k-th vector (equal-distance duplicates count;
+                # cached deleted vectors that are closer push true ones out)
+                dt = self._dist(q, truth[i])
+                ret[i] = (cached_now[truth[i]] & (dt <= near_dk[i] + 1e-6)).mean()
+                self.cost["deleted_returned"] += int((~present[near[i]]).sum())
                 for m in set(self.owner[near[i]].tolist()):
                     if m >= 0:
                         self.last_used[m] = s + i
             else:
-                db_k = float(self._dist(q, top[q, k - 1:k])[0])
+                db_k = float(self._dist(q, truth[i, k - 1:k])[0])
                 self.theta[key] = db_k if th is None else (1 - a.qv_alpha) * th + a.qv_alpha * db_k
                 misses.append(q)
         for q in misses:
