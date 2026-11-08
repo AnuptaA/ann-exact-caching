@@ -1548,11 +1548,19 @@ Real SIFT (SIFT1M 50k base subsample, queries from the learn set, k = 10):
 ## 7. Candidate next steps
 
 Priorities set by the user (after the current data-change runs finish):
-1. Approximate backend: stop assuming exact answers (controlled recall,
-   then a real ANN index); measure retention against what the backend
-   returns and against exact truth.
-2. Real performance numbers: latency / throughput with the cache in front
-   of a real vector database.
+1. Approximate backend: stop assuming exact answers. Both steps: a
+   backend with controlled recall in the simulator, then a real ANN index.
+   Report retention both against what the backend returns and against
+   exact truth (user: both matter; decide later which the promise uses).
+2. Real performance numbers: the cache in front of a DISK-BASED index
+   (user decision). Time everything on the online hot path needed to decide
+   hit vs miss (features: distances to cached vectors and the shell sample,
+   the model, the cutoff check), plus the backend call on a miss.
+   Disk-based indexes also keep data in memory (DiskANN: compressed PQ codes
+   of all vectors, a cache of nodes near the entry point; SPANN / IVF:
+   centroids), and the OS page cache can hold index pages; memory limits
+   must be controlled and memory given to our cache compared at equal total
+   memory with giving it to the index.
 Other open items (ranked list in the conversation of this session): the
 rebuild-on-return flaw (5u), the score's dependence on the sampling rate p,
 mixed k, gradual shifts, model refit, TriviaQA and smaller budgets, a
