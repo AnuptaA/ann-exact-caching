@@ -29,6 +29,8 @@ make q1-setup 2>&1 | tee ~/setup.log
 
 Setup first waits (at most 10 min for cloud-init, 15 min for the apt/dpkg locks) and then proceeds; if a lock stays held it stops and prints the lock file, the holder's pid and its command line. It never kills anything and never touches a lock file. An idle `unattended-upgrade-shutdown` daemon does not count as a holder.
 
+Setup can be re-run: every step skips what is already done, and `pg.sh start` accepts a cluster that already runs. `tail -f ~/setup.log` never exits by itself; the run is over when the log ends with `setup done` or `setup FAILED: <steps>` (then press Ctrl-C). If `pg_start` fails, the summary note and the log show the end of the server log; the full file is `/data/q1/pgdata.log` (`/data/q1/pgdata` is the data directory, `pg_ctl -D /data/q1/pgdata status` tells whether it runs).
+
 Setup runs every independent step and ends with a summary table (PASS, FAIL, SKIPPED, N/A, NOT RUN per step); the GPU check is the last step, so a missing GPU never hides the builds. Exit code 0 needs every step to pass.
 
 Watch for: Boost 1.84 build (only on 22.04), CMake wheel, FAISS v1.8.0 build, PostgreSQL 16 + pgvector 0.8.0, both drivers, then the `preflight` call. Expected end: `preflight ok`. `build/replay/TOOLCHAIN.txt` lists commit, cmake, gcc, boost, faiss. `git status --short` must still print nothing.
