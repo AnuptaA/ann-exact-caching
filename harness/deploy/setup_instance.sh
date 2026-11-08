@@ -39,6 +39,8 @@ MIN_DATA_GB="${Q1_MIN_DATA_GB:-400}"
 PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -viE 'conda|miniforge|mambaforge' | paste -sd: -)"
 export PATH
 unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_SHLVL VIRTUAL_ENV PYTHONPATH PYTHONHOME PIP_REQUIRE_VIRTUALENV
+# Nothing may prompt: a failed credential or password request must fail the step, not hang it.
+export GIT_TERMINAL_PROMPT=0 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 
 if [ -z "${Q1_SETUP_ALLOW_NON_LINUX:-}" ] && { [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; }; then
     die "expected Linux x86_64, found $(uname -s) $(uname -m)"
@@ -74,7 +76,7 @@ run sudo chown "$(id -u):$(id -g)" "$Q1_TOOLS"
 
 # --- toolchain ---------------------------------------------------------------------------------------
 [ -z "${Q1_DRYRUN:-}" ] || log "dry run: state-changing commands are only printed"
-[ -n "${Q1_DRYRUN:-}" ] || wait_for_apt
+[ -n "${Q1_DRYRUN:-}" ] || { require_sudo; wait_for_cloud_init; wait_for_apt; }
 ensure_build_packages
 ensure_cmake
 ensure_boost

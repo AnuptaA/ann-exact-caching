@@ -4,6 +4,10 @@
 #   usage: deploy.sh <repo-url> <commit> <checkout-dir> [data-dir]
 set -euo pipefail
 
+# A private repo or an unknown host key must fail, not prompt.
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o ConnectTimeout=30}"
+
 repo_url="${1:?repo url}"
 commit="${2:?commit sha}"
 dest="${3:?checkout dir}"

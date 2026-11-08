@@ -12,11 +12,22 @@ nvidia-smi                                                                      
 
 Go only if `/data` is a separate mounted volume. Do not set `Q1_ALLOW_ROOT_VOLUME=1` to get past this.
 
+Check the apt lock wait against the real kernel once (it must fail and name the python pid, then pass after the holder is gone):
+
+```
+sudo python3 -c 'import fcntl,time;f=open("/var/lib/dpkg/lock-frontend","a");fcntl.lockf(f,fcntl.LOCK_EX);time.sleep(60)' &
+Q1_APT_WAIT_SECONDS=5 bash -c '. harness/deploy/lib.sh; wait_for_apt'    # fails: .../lock-frontend held by pid N: python3 -c ...
+sudo kill N                                                                # N from the message, or wait 60 s
+Q1_APT_WAIT_SECONDS=5 bash -c '. harness/deploy/lib.sh; wait_for_apt' && echo free
+```
+
 ## 1. Setup (10-20 min, mostly compiling)
 
 ```
 make q1-setup 2>&1 | tee ~/setup.log
 ```
+
+Setup first waits (at most 10 min for cloud-init, 15 min for the apt/dpkg locks) and then proceeds; if a lock stays held it stops and prints the lock file, the holder's pid and its command line. It never kills anything and never touches a lock file. An idle `unattended-upgrade-shutdown` daemon does not count as a holder.
 
 Watch for: Boost 1.84 build (only on 22.04), CMake wheel, FAISS v1.8.0 build, PostgreSQL 16 + pgvector 0.8.0, both drivers, then the `preflight` call. Expected end: `preflight ok`. `build/replay/TOOLCHAIN.txt` lists commit, cmake, gcc, boost, faiss. `git status --short` must still print nothing.
 

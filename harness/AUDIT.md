@@ -28,6 +28,7 @@ Bugs that would have failed or silently damaged a run on the instance:
 | 2dcf06b | An unmounted `/data` after a reboot would fill the root volume. | Runtime refusal on the root volume (`Q1_ALLOW_ROOT_VOLUME=1` to accept). |
 | a762209 | `tarfile.extractall(filter=)` does not exist before Python 3.10.12; one timing-sensitive test. | Use the filter only when supported (members are validated first). |
 | 63d6842 | `triviaqa-encode` could fall back to downloading the tokenizer. | `--tokenizer-dir` required. |
+| (this fix) | Found on the first real instance (Ubuntu 24.04): `wait_for_apt` matched process names with `pgrep -x unattended-upgr`. The kernel cuts a script's name to 15 characters, so the idle `unattended-upgrade-shutdown` daemon that runs on every Ubuntu server matched forever (the real upgrader has the same name) and setup never got past the wait. The audit missed it because `Q1_DRYRUN` skips the function, no test executed it, and a Mac has no unattended-upgrades. | Wait by lock ownership: inode of each apt/dpkg lock file looked up in `/proc/locks`, bounded by `Q1_APT_WAIT_SECONDS` (900), error names lock, pid and command line, nothing is killed or deleted; every `apt_get` waits first and passes `Acquire::Retries`/timeouts; `cloud-init status` is awaited; `sudo -n` check; timeouts on `curl` and `git fetch`; no git/pip/ssh prompts. Tests in `tests/harness/test_apt_wait.py`. |
 | 084cf7b | No record of the values the driver and FAISS actually hold; peak pool was sampled every 100 requests. | Driver prints a `PARAM` line and a `FILTER` line (M, efConstruction, efSearch as held by FAISS); Python checks them against the intended settings and fails on a mismatch. Exact peak pool via a constant-time accessor (local patch 6). Library counters cross-checked with our classification (header field `counter_disagreements`, 0 in all tests). |
 
 ## Measurements (scratch PostgreSQL 16.15 with the same settings as `setup_instance.sh`)
@@ -52,6 +53,8 @@ Naive loop recall equals production on ties, duplicates, short lists and padding
 - SPHERE-scale memory: the fitted graph size is exact per tuple, but build time at 10M x 768 is unmeasured; the estimate says about 49.5 GB of `maintenance_work_mem` plus 4 GiB.
 - Binary checksum of the multipart ETag of the DPR archive is implemented with an 8 MiB part-size assumption and tested only on synthetic files; if it mismatches on the real archive, check the part size before suspecting the file.
 - Unverified WAL behavior at full size under `wal_level=minimal`.
+- The apt lock wait reads `/proc/locks`; its real-kernel test (`test_real_kernel_lock_is_seen_and_released`) only runs on Linux, so it is first exercised on the instance (see `EC2_FIRST_RUN.md`).
+- `harness/status.py` treats a pid file as running if the pid exists; after a reboot a reused pid would show as running (display only).
 
 ## Could not be verified here
 

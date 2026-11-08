@@ -5,6 +5,9 @@
 # Expects from the caller: root, Q1_TOOLS, PYTHON_BIN.
 # shellcheck disable=SC2154
 
+# git aborts a transfer that stays below 1 kB/s for 60 s.
+GIT_STALL_OPTS=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60)
+
 ensure_build_packages() {
     apt_get update
     apt_get install build-essential git curl ca-certificates gnupg lsb-release pkg-config \
@@ -61,7 +64,7 @@ ensure_boost() {
     local src="$Q1_TOOLS/src"
     guard_path "$src"
     run mkdir -p "$src"
-    run curl -fL --retry 5 --retry-delay 10 -o "$src/boost.tar.bz2" "$BOOST_URL"
+    run curl -fL --retry 5 --retry-delay 10 --connect-timeout 30 --max-time 1800 -o "$src/boost.tar.bz2" "$BOOST_URL"
     [ -n "${Q1_DRYRUN:-}" ] || sha256_check "$src/boost.tar.bz2" "$BOOST_SHA256"
     safe_rm_rf "$src/boost_src"
     run mkdir -p "$src/boost_src"
@@ -83,7 +86,7 @@ ensure_faiss() {
     safe_rm_rf "$src"
     run mkdir -p "$src"
     run git -C "$src" init --quiet
-    run git -C "$src" fetch --quiet --depth 1 https://github.com/facebookresearch/faiss "$FAISS_COMMIT"
+    run git -C "$src" "${GIT_STALL_OPTS[@]}" fetch --quiet --depth 1 https://github.com/facebookresearch/faiss "$FAISS_COMMIT"
     run git -C "$src" checkout --quiet FETCH_HEAD
     run "$CMAKE_BIN" -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release -DFAISS_ENABLE_GPU=OFF \
         -DFAISS_ENABLE_PYTHON=OFF -DBUILD_TESTING=OFF -DCMAKE_INSTALL_PREFIX="$FAISS_ROOT"
@@ -97,7 +100,7 @@ ensure_postgres() {
     local pg_bin="/usr/lib/postgresql/$PG_MAJOR/bin"
     if [ ! -x "$pg_bin/pg_ctl" ]; then
         run sudo install -d /usr/share/postgresql-common/pgdg
-        run sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        run sudo curl -fsSL --retry 3 --connect-timeout 30 --max-time 120 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
         run bash -c "echo \"deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt \$(lsb_release -cs)-pgdg main\" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null"
         apt_get update
         apt_get install "postgresql-$PG_MAJOR" "postgresql-server-dev-$PG_MAJOR" "postgresql-client-$PG_MAJOR"
@@ -112,7 +115,7 @@ ensure_postgres() {
         tmp=$(mktemp -d)
         guard_path "$tmp"
         run git -C "$tmp" init --quiet
-        run git -C "$tmp" fetch --quiet --depth 1 https://github.com/pgvector/pgvector "$PGVECTOR_COMMIT"
+        run git -C "$tmp" "${GIT_STALL_OPTS[@]}" fetch --quiet --depth 1 https://github.com/pgvector/pgvector "$PGVECTOR_COMMIT"
         run git -C "$tmp" checkout --quiet FETCH_HEAD
         run make -C "$tmp" PG_CONFIG="$pg_bin/pg_config"
         run sudo make -C "$tmp" PG_CONFIG="$pg_bin/pg_config" install
