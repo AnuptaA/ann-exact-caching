@@ -1426,9 +1426,31 @@ abrupt cluster-mixture workload shifts, untuned window sizes.
 Next steps:
 1. More datasets (SPACEV traces; data-change workloads need their own
    neighbor rankings over all vectors).
-2. Baselines Aker and QVCache on the data-change workloads (they need a
-   rule for deletes; inserts make their stored answers stale).
+2. Baselines Aker and QVCache on the data-change workloads, using their
+   own update rules (below).
 3. Shadow rebuild triggered by the amount of changed data.
+
+Baseline update rules (from the papers; correction: an earlier note said
+neither paper specifies one):
+- Aker (sections 4.5-4.6, refresh test 5.4): "del-consistency": never
+  return a deleted vector; new vectors may be missing for a while.
+  Each entry stores its top-k plus a reserve of D extra neighbors.
+  Delete: remove the vector from every entry holding it, promote the
+  closest reserve neighbor; an entry left with fewer than k is dropped
+  (its query becomes a miss). Insert: appended to an insert log. Fast
+  path: check it against the single entry whose query is closest; if
+  closer than that entry's farthest stored neighbor, swap it in. Slow
+  path: entries visited round-robin, each visit checks the next 16 log
+  records against that entry; it runs when a risk score R >= 0.3, where
+  R = (average over entries of d_k / d_{k+D}) x (average unchecked log
+  records per entry) / (log size). Main experiments use D = 0; the
+  refresh test uses D = 10 / 30, threshold 0.3, batch 16 (1M SPACEV:
+  warm up, insert 5%, delete 5-25%, replay the queries).
+- QVCache (arXiv 2602.02057): does not handle inserts or deletes; they go
+  to the backend only ("future work"). Unpatched it returns deleted
+  vectors and never sees new ones. Plan: run it as published, plus a
+  minimal fix that removes deleted vectors from its mini-indexes (any
+  deployment would need this; its index type supports deletion).
 
 ## 6. Radius-estimation findings so far
 
