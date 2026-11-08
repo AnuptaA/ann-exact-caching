@@ -90,6 +90,7 @@ N_BALLS = 3
 POOR_FIT = 10.0
 EPS = 1e-12
 CHUNK = 1024
+SCAN = (1000, 2000, 5000, 10000, 20000)   # retention test windows (queries)
 
 #-------------------------------------------------------------------------------
 
@@ -100,48 +101,145 @@ def sq_dist(a, b, b_sq):
     return np.maximum(d, 0.0)
 
 
-class Cache:
-    """Cache entries plus shell sample over a fixed database."""
+def db_view(D):
+    """Fill defaults for a fixed database: ranking = top-R lists, every
+    vector present."""
+    if "rank" not in D:
+        D["rank"] = D["top"]
+    if "present" not in D:
+        D["present"] = np.ones(len(D["db"]), dtype=bool)
+    D.setdefault("short", [0])
+    return D
 
-    def __init__(self, D, k, R, bits, budget):
-        self.D, self.k, self.R, self.bits, self.budget = D, k, R, bits, budget
+
+def topk_present(D, qidx, n):
+    """First n present ids of each query's ranking (the exact top-n of the
+    current database). Rows with fewer than n present ids are padded with
+    their last present id and counted in D["short"]."""
+    R = D["rank"][np.asarray(qidx)]
+    m = (R >= 0) & D["present"][np.maximum(R, 0)]
+    c = np.cumsum(m, axis=1)
+    sel = m & (c <= n)
+    cnt = sel.sum(axis=1)
+    if (cnt == n).all():
+        return R[sel].reshape(len(R), n)
+    D["short"][0] += int((cnt < n).sum())
+    out = np.empty((len(R), n), dtype=R.dtype)
+    for i in range(len(R)):
+        ids = R[i][sel[i]]
+        if not len(ids):
+            ids = R[i][:1]
+        out[i] = np.r_[ids, np.full(n - len(ids), ids[-1])]
+    return out
+
+
+class Cache:
+    """Cache entries plus shell sample; the database may change.
+
+    An entry (center c, K) is a ball: center c, radius = distance to its K-th
+    present neighbor when the entry was added. Members = present vectors
+    inside the ball, i.e. present ids in the prefix of c's ranking up to that
+    neighbor; its shell = present ids after it up to the R-th present
+    neighbor at creation. With --maintain (default) inserts inside a ball
+    become members and deleted vectors leave, so every ball stays exact;
+    without, the member and shell sets are frozen at creation (deleted
+    vectors still leave: a cache never returns a deleted vector).
+    """
+
+    def __init__(self, D, k, R, bits, budget, maintain=True):
+        self.D = db_view(D)
+        self.k, self.R, self.bits, self.budget = k, R, bits, budget
+        self.maintain = maintain
         self.n_db = len(D["db"])
-        self.ref = np.zeros(self.n_db, dtype=np.int32)
         self.entries = {}          # center query -> K
+        self.geo = {}              # center -> (ball prefix end, shell prefix end, radius)
+        self.frozen = {}           # center -> (ball ids, shell ids) without maintenance
         self.p = 0.0
         self.last_used = {}
-        self.vectors_fetched = 0
+        self._fetched = 0
+        self._count = np.zeros(self.n_db, dtype=np.int32)
+        self._shell = np.empty(0, dtype=np.int64)
+        self._members_dirty = True
         self._dirty = True
 
     # -- membership --------------------------------------------------------
 
-    def members(self, c, K):
-        return self.D["top"][c, :K]
-
     def add(self, c, K):
         """Add (or resize) an entry; vectors already cached are not refetched."""
-        ids = self.members(c, K)
-        self.vectors_fetched += int((self.ref[ids] == 0).sum())
-        self.ref[ids] += 1
-        if c in self.entries:
-            self.ref[self.members(c, self.entries[c])] -= 1
+        row = self.D["rank"][c]
+        pres = (row >= 0) & self.D["present"][np.maximum(row, 0)]
+        cum = np.cumsum(pres)
+        pe = int(np.searchsorted(cum, K)) + 1 if cum[-1] >= K else len(row)
+        ps = int(np.searchsorted(cum, self.R)) + 1 if cum[-1] >= self.R else len(row)
+        ps = max(ps, pe)
+        kth = row[pe - 1]
+        rad = float(np.sqrt(((self.D["q"][c] - self.D["db"][kth]) ** 2).sum()))
         self.entries[c] = K
-        self._dirty = True
+        self.geo[c] = (pe, ps, rad)
+        if not self.maintain:
+            self.frozen[c] = (row[:pe][pres[:pe]], row[pe:ps][pres[pe:ps]])
+        self._members_dirty = self._dirty = True
 
     def remove(self, c):
-        K = self.entries.pop(c)
-        self.ref[self.members(c, K)] -= 1
+        self.entries.pop(c)
+        self.geo.pop(c)
+        self.frozen.pop(c, None)
         self.last_used.pop(c, None)
-        self._dirty = True
+        self._members_dirty = self._dirty = True
 
     def replace(self, entries):
-        """Swap to a new entry set: add new / resized entries first, then drop
-        leaving ones, so shared vectors are never refetched."""
+        """Swap to a new entry set (vectors kept across the swap are not
+        refetched)."""
         for c, K in entries.items():
             if self.entries.get(c) != K:
                 self.add(c, K)
         for c in [c for c in self.entries if c not in entries]:
             self.remove(c)
+
+    def data_changed(self):
+        """The database changed (inserts / deletes): recompute membership."""
+        self._members_dirty = self._dirty = True
+
+    def _ball_shell(self, c):
+        if self.maintain:
+            pe, ps, _ = self.geo[c]
+            row = self.D["rank"][c]
+            return row[:pe], row[pe:ps]
+        return self.frozen[c]
+
+    def _update_members(self):
+        if not self._members_dirty:
+            return
+        present = self.D["present"]
+        balls, shells = [], []
+        for c in self.entries:
+            b, s = self._ball_shell(c)
+            balls.append(b)
+            shells.append(s)
+        old = self._count > 0
+        if balls:
+            b = np.concatenate(balls)
+            b = b[(b >= 0)]
+            b = b[present[b]]
+            self._count = np.bincount(b, minlength=self.n_db).astype(np.int32)
+            s = np.unique(np.concatenate(shells))
+            s = s[s >= 0]
+            self._shell = s[present[s] & (self._count[s] == 0)]
+        else:
+            self._count = np.zeros(self.n_db, dtype=np.int32)
+            self._shell = np.empty(0, dtype=np.int64)
+        self._fetched += int(((self._count > 0) & ~old).sum())
+        self._members_dirty = False
+
+    @property
+    def vectors_fetched(self):
+        self._update_members()
+        return self._fetched
+
+    @property
+    def ref(self):
+        self._update_members()
+        return self._count
 
     @property
     def cached(self):
@@ -150,15 +248,16 @@ class Cache:
     def n_cached(self):
         return int((self.ref > 0).sum())
 
+    def members(self, c):
+        b, _ = self._ball_shell(c)
+        b = b[b >= 0]
+        return b[self.D["present"][b]]
+
     # -- shell sample ------------------------------------------------------
 
     def shell_ids(self):
-        top = self.D["top"]
-        parts = [top[c, K:self.R] for c, K in self.entries.items() if K < self.R]
-        if not parts:
-            return np.empty(0, dtype=np.int64)
-        ids = np.unique(np.concatenate(parts))
-        return ids[self.ref[ids] == 0]
+        self._update_members()
+        return self._shell
 
     def set_p_to_fill(self):
         """Largest p (<= 1) such that cache + sample fits the budget."""
@@ -176,19 +275,18 @@ class Cache:
     # -- arrays for features -----------------------------------------------
 
     def prepare(self):
+        self._update_members()
         if not self._dirty:
             return
         db, Q = self.D["db"], self.D["q"]
-        self.cached_ids = np.flatnonzero(self.ref > 0)
+        self.cached_ids = np.flatnonzero(self._count > 0)
         self.cv = db[self.cached_ids]
         self.cv_sq = (self.cv * self.cv).sum(axis=1)
         self.centers = np.array(list(self.entries), dtype=np.int64)
         cq = Q[self.centers]
         self.cq, self.cq_sq = cq, (cq * cq).sum(axis=1)
-        Ks = np.array([self.entries[c] for c in self.centers], dtype=np.int64)
-        kth = self.D["top"][self.centers, Ks - 1]
-        self.radius = np.sqrt(((cq - db[kth]) ** 2).sum(axis=1))
-        sid = self.shell_ids()
+        self.radius = np.array([self.geo[c][2] for c in self.centers], dtype=np.float64)
+        sid = self._shell
         self.samp_ids = sid[self.D["draw"][sid] < self.p]
         sv = quantize(db[self.samp_ids].astype(np.float64), self.bits).astype(np.float32) \
             if len(self.samp_ids) else np.zeros((0, db.shape[1]), np.float32)
@@ -234,7 +332,8 @@ class Cache:
         return X, near
 
     def retention(self, qidx):
-        return self.cached[self.D["top"][qidx, :self.k]].mean(axis=1)
+        """Share of each query's current exact top-k that is cached."""
+        return self.cached[topk_present(self.D, qidx, self.k)].mean(axis=1)
 
     def mark_used(self, near_ids, t):
         """LRU: entries supplying any of the given vector ids were used at t."""
@@ -242,8 +341,8 @@ class Cache:
             return
         hit = np.zeros(self.n_db, dtype=bool)
         hit[near_ids.ravel()] = True
-        for c, K in self.entries.items():
-            if hit[self.members(c, K)].any():
+        for c in self.entries:
+            if hit[self.members(c)].any():
                 self.last_used[c] = t
 
 
@@ -254,33 +353,42 @@ def greedy_entries(D, cand, score, score_w, budget, k, target):
     """Greedy cache (dict center -> K) and its oracle hits on the scoring set.
 
     cand: list of (center query, largest K whose top-K ids are known); each
-    expands to the K_VALUES up to that K.
+    expands to the K_VALUES up to that K. Uses the current database.
     """
-    top = D["top"]
-    pairs = [(c, K) for c, kmax in cand for K in K_VALUES if K <= kmax]
-    pop = GreedyPopulator([top[c, :K] for c, K in pairs], top[score, :k], len(D["db"]), k,
-                          target, score_weights=np.asarray(score_w, dtype=np.int64))
+    D = db_view(D)
+    centers = np.array([c for c, _ in cand], dtype=np.int64)
+    kmax = max([km for _, km in cand] + [1])
+    tops = topk_present(D, centers, min(kmax, max(K_VALUES))) if len(centers) else None
+    pairs = [(i, c, K) for i, (c, km) in enumerate(cand) for K in K_VALUES if K <= km]
+    pop = GreedyPopulator([tops[i, :K] for i, _, K in pairs], topk_present(D, score, k),
+                          len(D["db"]), k, target,
+                          score_weights=np.asarray(score_w, dtype=np.int64))
     while pop.step(int(budget)) is not None:
         pass
     entries = {}
     for j in pop.selected:
-        c, K = pairs[j]
+        _, c, K = pairs[j]
         entries[int(c)] = max(entries.get(int(c), 0), K)
     return entries, int(pop.score_hits)
 
 
 def oracle_hits(cache, score, score_w, k, target):
-    counts = cache.cached[cache.D["top"][score, :k]].sum(axis=1)
+    counts = cache.cached[topk_present(cache.D, score, k)].sum(axis=1)
     hist = np.bincount(counts, weights=score_w, minlength=k + 1).astype(np.int64)
     return int(hits_from_histograms(hist, target, k)[0])
 
 
 def hits_of_entries(D, entries, score, score_w, k, target):
-    """Oracle hits on a scoring set of a cache given as {center: K}."""
+    """Oracle hits on a scoring set of a cache given as {center: K} (current
+    database)."""
+    D = db_view(D)
     cached = np.zeros(len(D["db"]), dtype=bool)
-    for c, K in entries.items():
-        cached[D["top"][c, :K]] = True
-    counts = cached[D["top"][score, :k]].sum(axis=1)
+    if entries:
+        cs = np.array(list(entries), dtype=np.int64)
+        tops = topk_present(D, cs, max(entries.values()))
+        for i, c in enumerate(cs):
+            cached[tops[i, :entries[int(c)]]] = True
+    counts = cached[topk_present(D, score, k)].sum(axis=1)
     hist = np.bincount(counts, weights=score_w, minlength=k + 1).astype(np.int64)
     return int(hits_from_histograms(hist, target, k)[0])
 
@@ -304,9 +412,16 @@ class Sim:
         self.k, self.T = args.k, args.target
         self.rng = np.random.default_rng(args.seed)
         self.M = args.budget * len(D["db"])
-        self.cache = Cache(D, args.k, args.R, args.bits, self.M)
+        self.cache = Cache(D, args.k, args.R, args.bits, self.M,
+                           maintain=not getattr(args, "no_maintain", False))
         self.log = []
-        self.cost = {"topk": 0, "topR": 0}
+        self.cost = {"topk": 0, "topR": 0, "center_checks": 0, "label_updates": 0}
+        self.maintained = getattr(args, "cal_labels", "serve") == "maintained"
+        self.cal_stale = False
+        self.since_refresh = 0      # batches since maintained labels were refreshed
+        ev = D.get("events")
+        self.ev = ev                # database events (data-change runs) or None
+        self.ev_i = 0
         self.events = []
         self.lam = None
         self.reset_detection()
@@ -315,9 +430,9 @@ class Sim:
     def reset_detection(self):
         """Start calibration and the drift tests afresh (after an alarm or a
         rebuild): only labels arriving from now on are used."""
-        self.cal = []               # (t, scores, retentions, weights) of labeled queries
+        self.cal = []               # (t, scores, retentions, weights, queries) of labeled queries
         self.ref = []               # (t, scores) of all queries (score / hit-rate tests)
-        self.recent_ret = []        # retentions of audited served queries (retention test)
+        self.audits = []            # (batch end t, retentions, weights) of audited hits
         self.n_checks = 0
 
     # -- calibration -------------------------------------------------------
@@ -328,9 +443,28 @@ class Sim:
         lo = t - self.a.cal_span
         self.cal = [c for c in self.cal if c[0] > lo]
         self.ref = [r for r in self.ref if r[0] > lo]
+        self.audits = [r for r in self.audits if r[0] > lo]
         if not self.cal:
             self.lam = None
             return
+        self.since_refresh += 1
+        every = getattr(self.a, "maintain_every", 1)
+        if self.maintained and self.cal_stale and (self.since_refresh >= every
+                                                   or self.cal_stale == "now"):
+            # maintained labels: each stored query's answer is kept current
+            # (updated on inserts / deletes), so its score and retention are
+            # recomputed against the current cache and database
+            qs = np.concatenate([c[4] for c in self.cal])
+            X, _ = self.cache.features(qs)
+            sc, yy = self.model(X), self.cache.retention(qs)
+            out, i = [], 0
+            for c in self.cal:
+                n = len(c[4])
+                out.append((c[0], sc[i:i + n], yy[i:i + n], c[3], c[4]))
+                i += n
+            self.cal = out
+            self.cal_stale = False
+            self.since_refresh = 0
         s = np.concatenate([c[1] for c in self.cal])
         y = np.concatenate([c[2] for c in self.cal])
         w = np.concatenate([c[3] for c in self.cal])
@@ -354,7 +488,7 @@ class Sim:
         self.model = fit_logistic(X, self.cache.retention(fit))
         X, _ = self.cache.features(cal)
         s = self.model(X)
-        self.cal = [(a.warmup, s, self.cache.retention(cal), np.ones(len(cal)))]
+        self.cal = [(a.warmup, s, self.cache.retention(cal), np.ones(len(cal)), cal)]
         self.ref = [(a.warmup, s)]
         self.calibrate(a.warmup)
         logger.info(f"warm-up: {len(entries)} entries, {self.cache.n_cached()} cached vectors, "
@@ -363,20 +497,43 @@ class Sim:
 
     # -- drift tests -------------------------------------------------------
 
-    def detect(self):
+    def retention_alarm(self, t, level):
+        """Audited hits of the last w queries, for each w in SCAN (level split
+        over them): normal upper bound on their (weighted) mean retention
+        < T. Weights 1 / audit rate; effective n = (sum w)^2 / sum w^2."""
+        if not self.audits:
+            return False
+        ts = np.concatenate([np.full(len(x[1]), x[0]) for x in self.audits])
+        ys = np.concatenate([x[1] for x in self.audits])
+        ws = np.concatenate([x[2] for x in self.audits])
+        z = NormalDist().inv_cdf(1 - level / len(SCAN))
+        for w in SCAN:
+            m = ts > t - w
+            if m.sum() < 30:
+                continue
+            W = ws[m].sum()
+            mu = (ws[m] * ys[m]).sum() / W
+            ne = W ** 2 / (ws[m] ** 2).sum()
+            sd = np.sqrt((ws[m] * (ys[m] - mu) ** 2).sum() / W * ne / max(ne - 1, 1))
+            if mu + z * sd / np.sqrt(ne) < self.T:
+                return True
+        return False
+
+    def detect(self, t):
         """Run the enabled tests; each at level delta_alarm / (m j (j + 1)) for
-        the j-th check since the last reset (m tests; jointly valid). Returns
-        the name of the first test that fires, or None."""
+        the j-th check since the last reset (m tests; jointly valid), or at
+        a fixed per-check level (--alarm-level; false alarms accumulate).
+        Returns the name of the first test that fires, or None."""
         a = self.a
         tests = a.detect
         if not tests:
             return None
         self.n_checks += 1
-        level = a.delta_alarm / (len(tests) * self.n_checks * (self.n_checks + 1))
-        if "retention" in tests:
-            r = self.recent_ret[-a.drift_window:]
-            if len(r) >= 30 and hoeffding_upper(r, level) < self.T:
-                return "retention"
+        fixed = getattr(a, "alarm_level", None)
+        level = (fixed / len(tests) if fixed else
+                 a.delta_alarm / (len(tests) * self.n_checks * (self.n_checks + 1)))
+        if "retention" in tests and self.retention_alarm(t, level):
+            return "retention"
         allsc = np.concatenate([r[1] for r in self.ref]) if self.ref else np.empty(0)
         recent, base = allsc[-a.drift_queries:], allsc[:-a.drift_queries]
         if len(recent) < a.drift_queries or len(base) < a.min_ref:
@@ -447,11 +604,12 @@ class Sim:
         s = self.model(X)
         self.reset_detection()
         hl = lab[hold]
-        self.cal = [(t, s[hl], self.cache.retention(hq)[hl], 1 / pi[hold][hl])]
+        self.cal = [(t, s[hl], self.cache.retention(hq)[hl], 1 / pi[hold][hl], hq[hl])]
         self.ref = [(t, s)]
         self.calibrate(t)
         self.events.append({"t": t, "event": "rebuild", "new": new_hits, "cur": cur_hits,
                             "lambda": self.lam})
+        self.cal_stale = "now"
         return True
 
     # -- LRU ---------------------------------------------------------------
@@ -480,6 +638,35 @@ class Sim:
             i += n_ev
             mem = cache.memory()
 
+    # -- database events ---------------------------------------------------
+
+    def apply_events(self, s):
+        """Apply inserts / deletes scheduled before stream position s. Cache
+        upkeep cost: one distance per (insert, entry center); maintained
+        labels: one per (insert, stored calibration query)."""
+        ev = self.ev
+        if ev is None:
+            return 0
+        j = int(np.searchsorted(ev["t"], s, side="right"))
+        if j <= self.ev_i:
+            return 0
+        sl = slice(self.ev_i, j)
+        ins = ev["insert"][sl]
+        ids = ev["id"][sl]
+        pres = self.D["present"]
+        pres[ids[ins]] = True
+        pres[ids[~ins]] = False
+        self.ev_i = j
+        n_ins = int(ins.sum())
+        self.cost["center_checks"] += n_ins * len(self.cache.entries)
+        if self.maintained:
+            self.cost["label_updates"] += n_ins * sum(len(c[4]) for c in self.cal)
+        self.cache.data_changed()
+        if self.a.method != "lru" and self.cache.memory() > self.M:
+            self.cache.set_p_to_fill()
+        self.cal_stale = True
+        return j - sl.start
+
     # -- main loop ---------------------------------------------------------
 
     def run(self, method):
@@ -489,9 +676,17 @@ class Sim:
         last_alarm = None
         last_check = a.warmup
         pending = []                # scheduled post-alarm rebuild checks (times)
+        hits_prev = None
         for s in range(a.warmup, len(self.stream), a.batch):
             qb = self.stream[s:s + a.batch]
             t = s + len(qb)
+            n_ev = self.apply_events(s)
+            reset_frac = getattr(a, "reset_on_change", 0)
+            if reset_frac and n_ev >= reset_frac * len(self.D["db"]):
+                # a known large change: calibrate only on labels from now on
+                self.events.append({"t": t, "event": "known_change", "n": n_ev})
+                self.reset_detection()
+                self.window = []
             X, near = cache.features(qb)
             score = self.model(X)
             serve = (score >= self.lam if self.lam is not None and cache.n_cached() >= self.k
@@ -499,7 +694,12 @@ class Sim:
             y = cache.retention(qb)
             rate = (a.alarm_audit_rate if last_alarm is not None
                     and s - last_alarm < a.alarm_audit_span else a.audit_rate)
+            target = getattr(a, "audit_target", 0)
+            if target and hits_prev is not None:
+                # adaptive: aim at `target` audits per batch when hits are few
+                rate = float(np.clip(target / max(hits_prev, 1), rate, 1.0))
             audit = serve & (rng.random(len(qb)) < rate)
+            hits_prev = int(serve.sum())
             self.cost["topk"] += int((~serve).sum() + audit.sum())
             self.log.append({"t": t, "n": len(qb), "served": int(serve.sum()),
                              "served_retention_sum": float(y[serve].sum()),
@@ -507,7 +707,13 @@ class Sim:
                                                      minlength=self.k + 1).tolist(),
                              "audited_served": int(audit.sum()),
                              "lambda": self.lam, "memory": cache.memory(),
-                             "cached": cache.n_cached(), "entries": len(cache.entries)})
+                             "cached": cache.n_cached(), "entries": len(cache.entries),
+                             "events": n_ev, "audit_rate": rate})
+            if "initial" in self.D:
+                # queries whose current exact top-k contains inserted vectors
+                aff = (~self.D["initial"][topk_present(self.D, qb, self.k)]).any(axis=1)
+                self.log[-1].update(aff_n=int(aff.sum()), aff_served=int((aff & serve).sum()),
+                                    aff_ret_sum=float(y[aff & serve].sum()))
             if method != "static":
                 # labels: every miss (free) and audited hits (weight 1 / rate);
                 # serve-time (score, retention) pairs, i.e. against the cache
@@ -515,14 +721,15 @@ class Sim:
                 lab = np.ones(len(qb), bool) if a.oracle_cal else (~serve | audit)
                 wt = np.where(serve & (not a.oracle_cal), 1 / rate, 1.0)
                 # the window is used only to build caches (greedy rebuilds)
-                self.cal.append((t, score[lab], y[lab], wt[lab]))
+                self.cal.append((t, score[lab], y[lab], wt[lab], qb[lab]))
                 self.ref.append((t, score))
-                self.recent_ret = (self.recent_ret + list(y[audit]))[-a.drift_window:]
+                self.audits.append((t, y[audit], np.full(int(audit.sum()), 1 / rate)))
                 self.window = (self.window + [(int(q), bool(v), bool(u), rate)
                                               for q, v, u in zip(qb, serve, audit)])[-a.window:]
                 if method == "lru":
                     self.lru_update(qb, serve, near, t, p_lru)
-                kind = self.detect()
+                    self.cal_stale = True
+                kind = self.detect(t)
                 if kind:
                     self.events.append({"t": t, "event": "alarm", "kind": kind})
                     self.reset_detection()
@@ -544,7 +751,7 @@ class Sim:
                             f"lambda {self.lam} entries {len(cache.entries)} mem {done['memory']:.0f}")
         return {"method": method, "args": vars(a), "log": self.log, "events": self.events,
                 "cost": dict(self.cost, vectors_fetched=cache.vectors_fetched,
-                             warmup_topR=a.warmup)}
+                             warmup_topR=a.warmup, short_rows=self.D["short"][0])}
 
 
 #-------------------------------------------------------------------------------
@@ -563,7 +770,31 @@ def load(prep, args):
     top = np.load(Path(prep) / f"top{args.R}.npy")
     draw = np.random.default_rng(1).random(len(db))
     streams = np.load(Path(prep) / "streams.npz")
-    return {"db": db, "q": q, "top": top, "draw": draw}, streams
+    D = {"db": db, "q": q, "top": top, "draw": draw}
+    kind = getattr(args, "data_change", "none")
+    if kind != "none":
+        # changing database (online_prepare_data.py): union ranking (merged
+        # with an initial-database ranking for flagged queries), initial
+        # presence, insert / delete schedule
+        topU = np.load(Path(prep) / "topU1000.npy")
+        extra = np.load(Path(prep) / f"rank_extra_{kind}.npz")
+        width = extra["rows"].shape[1] if len(extra["flagged"]) else topU.shape[1]
+        rank = np.full((len(q), width), -1, dtype=np.int32)
+        rank[:, :topU.shape[1]] = topU
+        if len(extra["flagged"]):
+            rank[extra["flagged"]] = extra["rows"]
+        dc = np.load(Path(prep) / f"data_{kind}.npz")
+        n = len(dc["ins_ids"])
+        if args.schedule == "burst":
+            t_ins = t_del = np.full(n, int(dc["burst_at"]))
+        else:
+            t_ins, t_del = dc["ins_t"], dc["del_t"]
+        t = np.r_[t_ins, t_del]
+        order = np.argsort(t, kind="stable")
+        D.update(rank=rank, present=dc["initial"].copy(), top=rank, initial=dc["initial"],
+                 events={"t": t[order], "id": np.r_[dc["ins_ids"], dc["del_ids"]][order],
+                         "insert": np.r_[np.ones(n, bool), np.zeros(n, bool)][order]})
+    return D, streams
 
 
 def main():
@@ -581,6 +812,25 @@ def main():
                     help="reference: every query is labeled for calibration at no cost")
     ap.add_argument("--stream", choices=["random", "shift", "trace", "multishift"],
                     default="shift")
+    ap.add_argument("--data-change", choices=["none", "churn", "drift"], default="none",
+                    help="database inserts / deletes (online_prepare_data.py)")
+    ap.add_argument("--schedule", choices=["gradual", "burst"], default="gradual")
+    ap.add_argument("--no-maintain", action="store_true",
+                    help="no cache upkeep on inserts (balls go stale; deletes still leave)")
+    ap.add_argument("--cal-labels", choices=["serve", "maintained"], default="serve",
+                    help="calibration pairs as measured at serve time, or kept current")
+    ap.add_argument("--maintain-every", type=int, default=5,
+                    help="refresh maintained calibration labels every this many batches "
+                         "(and right after a rebuild)")
+    ap.add_argument("--reset-on-change", type=float, default=0.0,
+                    help="reset calibration when one batch changes >= this share of the "
+                         "database (0 = never)")
+    ap.add_argument("--alarm-level", type=float, default=None,
+                    help="fixed per-check false-alarm level (default: delta_alarm "
+                         "spread over checks, no accumulation)")
+    ap.add_argument("--audit-target", type=int, default=30,
+                    help="raise the audit rate to aim at this many audits per batch "
+                         "(0 = fixed rate)")
     ap.add_argument("--n-db", type=int, default=1000000)
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--target", type=float, default=0.9)
@@ -600,8 +850,6 @@ def main():
                     help="recent queries (since the last alarm) used to build a cache")
     ap.add_argument("--cand-share", type=float, default=0.2,
                     help="share of the building queries proposing candidates")
-    ap.add_argument("--drift-window", type=int, default=500,
-                    help="recent audited served queries in the retention test")
     ap.add_argument("--drift-queries", type=int, default=2000,
                     help="recent queries in the score and hit-rate tests")
     ap.add_argument("--min-ref", type=int, default=1000,
@@ -642,6 +890,8 @@ def main():
         args.alarm_audit_rate = args.audit_rate
     if args.method == "lru":
         args.response = "recal"
+    if args.method in ("aker", "qvcache") and args.data_change != "none":
+        raise SystemExit("baselines do not support database changes yet")
     if args.method in ("aker", "qvcache"):
         from simulations.approximate_hits import online_baselines as ob
         cls = ob.Aker if args.method == "aker" else ob.QVCache
@@ -662,3 +912,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

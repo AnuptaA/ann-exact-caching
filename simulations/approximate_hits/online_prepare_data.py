@@ -23,7 +23,9 @@ that at the start and the end is reported (simulator flags them).
 
 Writes into --prep: topU<R'>.npy (shared), db_clusters.npy (drift),
 data_<kind>.npz (held, initial mask, ins_ids, del_ids, ins_t / del_t for
-the gradual schedule, burst_at) and data_<kind>.json (summary).
+the gradual schedule, burst_at), rank_extra_<kind>.npz (queries whose union
+ranking holds fewer than R vectors present throughout: their ranking merged
+with one over the initial database, width 2 R') and data_<kind>.json.
 """
 
 import sys
@@ -135,6 +137,28 @@ def main():
         c = present_counts(topU, pres)
         info[f"share_below_R_{name}"] = float((c < args.R).mean())
         info[f"min_present_{name}"] = int(c.min())
+    # queries whose union ranking may run out of present vectors at some time
+    # (fewer than R vectors that are present throughout): also rank the
+    # initial database for them and merge by distance (width 2 R')
+    always = initial.copy()
+    always[del_ids] = False
+    flagged = np.flatnonzero(present_counts(topU, always) < args.R)
+    rows = np.full((len(flagged), 2 * args.R_union), -1, dtype=np.int32)
+    if len(flagged):
+        from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk_blocked
+        init_ids = np.flatnonzero(initial)
+        logger.info(f"{len(flagged)} queries need the initial-database ranking...")
+        topI = init_ids[exact_topk_blocked(q[flagged], db[init_ids], args.R_union,
+                                           q_chunk=1024)]
+        for i, qi in enumerate(flagged):
+            ids = np.unique(np.r_[topU[qi], topI[i]])
+            d = ((db[ids].astype(np.float64) - q[qi]) ** 2).sum(axis=1)
+            ids = ids[np.argsort(d, kind="stable")][:rows.shape[1]]
+            rows[i, :len(ids)] = ids
+        ok = (always[np.maximum(rows, 0)] & (rows >= 0)).sum(axis=1)
+        info["flagged_min_always_present_after_merge"] = int(ok.min())
+    info["n_flagged"] = int(len(flagged))
+    np.savez(prep / f"rank_extra_{args.kind}.npz", flagged=flagged, rows=rows)
     np.savez(prep / f"data_{args.kind}.npz", held=held, initial=initial, ins_ids=ins_ids,
              del_ids=del_ids, ins_t=t, del_t=t, burst_at=args.burst_at)
     (prep / f"data_{args.kind}.json").write_text(json.dumps(info, indent=1))

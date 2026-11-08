@@ -206,3 +206,89 @@ def test_multishift_phases_mix_and_no_reuse():
     mix = lambda m: np.bincount(lab[m], minlength=12) / m.sum()
     assert np.abs(mix(phase == 0) - mix(phase == 3)).sum() < 0.02
     assert all(abs((phase == i).sum() - L) <= 12 for i in (2, 3))
+
+
+def _dyn_data(n_db=300, n_q=20, d=3, seed=1):
+    """Database with a full ranking per query and a presence mask."""
+    rng = np.random.default_rng(seed)
+    db = rng.standard_normal((n_db, d)).astype(np.float32)
+    q = rng.standard_normal((n_q, d)).astype(np.float32)
+    rank = np.argsort(((q[:, None] - db[None]) ** 2).sum(-1), axis=1).astype(np.int32)
+    present = rng.random(n_db) < 0.8
+    return {"db": db, "q": q, "top": rank, "rank": rank, "present": present,
+            "draw": rng.random(n_db)}
+
+
+def test_topk_present_matches_brute_force():
+    D = _dyn_data()
+    ids = osim.topk_present(D, np.arange(5), 7)
+    for i in range(5):
+        pres = np.flatnonzero(D["present"])
+        d = ((D["db"][pres] - D["q"][i]) ** 2).sum(-1)
+        assert list(ids[i]) == list(pres[np.argsort(d)[:7]])
+
+
+def _ball_exact(c, D, center):
+    """Every present vector inside the entry's ball is cached."""
+    pe, ps, rad = c.geo[center]
+    d = np.sqrt(((D["db"] - D["q"][center]) ** 2).sum(-1))
+    inside = D["present"] & (d <= rad + 1e-6)
+    return bool(c.cached[inside].all())
+
+
+def test_maintained_ball_stays_exact_under_inserts_and_deletes():
+    D = _dyn_data()
+    c = osim.Cache(D, k=3, R=40, bits=32, budget=1e9)
+    c.add(0, 10)
+    assert c.n_cached() == 10 and _ball_exact(c, D, 0)
+    row = D["rank"][0]
+    absent_inside = [i for i in row[:c.geo[0][0]] if not D["present"][i]]
+    gone = int(osim.topk_present(D, [0], 1)[0, 0])
+    # insert absent vectors inside the ball, delete the nearest member
+    D["present"][absent_inside] = True
+    D["present"][gone] = False
+    c.data_changed()
+    assert _ball_exact(c, D, 0) and not c.cached[gone]
+    assert c.n_cached() == 10 + len(absent_inside) - 1
+    # radius is fixed at creation
+    c.prepare()
+    assert np.isclose(c.geo[0][2], c.radius[0])
+
+
+def test_unmaintained_ball_ignores_inserts_but_drops_deletes():
+    D = _dyn_data()
+    c = osim.Cache(D, k=3, R=40, bits=32, budget=1e9, maintain=False)
+    c.add(0, 10)
+    row = D["rank"][0]
+    absent_inside = [i for i in row[:c.geo[0][0]] if not D["present"][i]]
+    member = int(osim.topk_present(D, [0], 1)[0, 0])
+    D["present"][absent_inside] = True
+    D["present"][member] = False
+    c.data_changed()
+    assert not c.cached[absent_inside].any() and not c.cached[member]
+    assert c.n_cached() == 9
+
+
+def test_apply_events_updates_presence_and_costs():
+    D = _dyn_data()
+    pres0 = D["present"].copy()
+    ins = np.flatnonzero(~pres0)[:4]
+    dele = np.flatnonzero(pres0)[:3]
+    D["events"] = {"t": np.array([5, 5, 5, 5, 9, 9, 9]), "id": np.r_[ins, dele],
+                   "insert": np.r_[np.ones(4, bool), np.zeros(3, bool)]}
+    sim = _sim(D, R=40, method="greedy")
+    sim.cache.add(0, 10)
+    sim.cache.add(1, 10)
+    assert sim.apply_events(4) == 0
+    assert sim.apply_events(6) == 4 and D["present"][ins].all()
+    assert sim.cost["center_checks"] == 4 * 2
+    assert sim.apply_events(20) == 3 and not D["present"][dele].any()
+
+
+def test_retention_alarm_fires_only_on_low_retention():
+    D = _data()
+    sim = _sim(D, target=0.9)
+    sim.audits = [(1000, np.full(400, 0.95), np.ones(400))]
+    assert not sim.retention_alarm(1000, 0.01)
+    sim.audits = [(1000, np.full(400, 0.8), np.ones(400))]
+    assert sim.retention_alarm(1000, 0.01)
