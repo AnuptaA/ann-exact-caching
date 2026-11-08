@@ -1547,6 +1547,17 @@ Real SIFT (SIFT1M 50k base subsample, queries from the learn set, k = 10):
 
 ## 7. Candidate next steps
 
+Priorities set by the user (after the current data-change runs finish):
+1. Approximate backend: stop assuming exact answers (controlled recall,
+   then a real ANN index); measure retention against what the backend
+   returns and against exact truth.
+2. Real performance numbers: latency / throughput with the cache in front
+   of a real vector database.
+Other open items (ranked list in the conversation of this session): the
+rebuild-on-return flaw (5u), the score's dependence on the sampling rate p,
+mixed k, gradual shifts, model refit, TriviaQA and smaller budgets, a
+data-volume-triggered shadow rebuild, and the items below.
+
 - Evaluate retention-estimate error and its bias directly, not radius error,
   including the selection effect under a running-average policy.
 - Compact density-aligned estimator: C cluster centers (e.g. a k-means coarse
