@@ -1299,6 +1299,92 @@ Where a loose retention test could still pay: changes the score test cannot
 see (data drift: retention drops while scores stay), where it is the only
 detector; to test with the data-change workloads.
 
+## 5x. Data-change round 1 (ESCI 1M; setup)
+
+Takeaway carried over from workload shifts: score test as the alarm, reset
+(fresh-only calibration) on an alarm, shadow rebuild to decide whether a new
+cache is worth it. For data changes the query stream is fixed, so scores
+move only a little (inserts inside balls / shells); the audit-based
+retention test is expected to be the main detector.
+
+Setup (decided with the user): random query order; churn (random 10% of
+the database held out, inserted gradually from the end of warm-up, as many
+random deletes) and drift (6 whole clusters, 10.3%, same schedule); each
+gradual and burst (all at query 40000); our method only; seeds 0, 1.
+Ground-truth fix: 5209 drift queries (3.1% below 500 present ranks at the
+start, some 0) got their union ranking merged with a ranking of the initial
+database (width 2000); each then has >= 843 vectors present throughout.
+
+Simulator (online_sim.py):
+- Cache entries are balls with a radius fixed at creation (distance to the
+  K-th present neighbor); members = present vectors inside, so inserts
+  inside a ball join it and deletes leave (balls stay exact); shells
+  likewise. --no-maintain freezes member / shell sets at creation (deletes
+  still leave). Fixed-database runs reproduce round 2 exactly (served
+  counts identical in every batch; lambda equal to 1e-6).
+- Ground truth: first k present ids of each query's ranking
+  (topk_present); greedy and shadow checks use the current database.
+- Events applied before each batch; memory over budget -> lower p. Costs:
+  center checks (insert x entries), label updates (insert x stored
+  calibration queries, maintained mode).
+- Calibration labels: serve (as measured at serve time; age out of the 20k
+  window) or maintained (kept current; stored queries' scores and
+  retentions recomputed every 5 batches and right after a rebuild).
+- Retention test now as the detector study recommended: audited hits of
+  the last 1k / 2k / 5k / 10k / 20k queries, normal bound; adaptive audits
+  (aim at 30 per batch, default); --alarm-level for a fixed per-check
+  false-alarm chance; --reset-on-change for a known large change.
+- Logged per batch: queries whose current exact top-10 contains inserted
+  vectors (affected), how many are served and their retention.
+Configurations (online_data_jobs.py; 100 runs; results
+esci1m/data_<kind>_<schedule>_s<seed>/): static; sliding labels x {no
+test, score, retention, both, both loose 5%, retention loose 5%};
+maintained labels x {no test, retention, both}; no upkeep + both; oracle
+calibration; burst: known-change reset. Response: reset + shadow rebuild.
+Memory: each run ~4.3 GB (ranking arrays); 84 parallel runs exhausted
+memory (7 GB free), so 20 churn runs were stopped (re-run automatically)
+Results (100 runs; `online_data_summary.py`; mean of seeds 0, 1; hit % /
+mean served retention; "affected" = queries whose current exact top-10
+contains inserted vectors):
+| config | churn gradual | churn burst | drift gradual | drift burst (after burst) | drift: affected queries' retention |
+|---|---|---|---|---|---|
+| static (upkeep, no recalibration) | 33.1 / .905 | 33.1 / .906 | 35.5 / .887 | 38.7 / .861 | .846 / .818 |
+| sliding labels, no test | 31.9 / .911 | 31.8 / .912 | 31.3 / .909 | 30.0 / .906 (3 of 18 windows < T, worst .868) | .878 / .872 |
+| sliding + score test | same | same | same (never fires) | 28.8 / .911 (1 window, worst .894) | .878 / .878 |
+| known-change reset (burst) | | 31.6 / .913 | | 29.2 / .911 (1.5 windows) | / .878 |
+| maintained labels, any test | 32.0 / .911 | 31.8 / .912 | 31.0 / .911 | 29.4 / .910 | .880 / .877 |
+| no upkeep + both tests | 21.0 / .903 (affected .837) | 27.5 / .908 | 25.3 / .908 | 22.5 / .904 | .584 / .570 |
+| oracle calibration | 33.0 / .906 | 33.1 / .906 | 32.8 / .902 | 31.3 / .900 | .869 / .865 |
+Findings:
+1. Random churn does not threaten the promise, even without recalibration
+   (static 0.905-0.906), as long as the cache is kept up to date.
+2. Cache upkeep is essential: without it hit rate falls by a third (churn
+   gradual 31.9 -> 21.0%) and queries whose answers include new vectors get
+   retention 0.57-0.58 (drift) / 0.84 (churn).
+3. Drift into new regions breaks the promise if the cutoff is never
+   recalibrated (static 0.887 gradual, 0.861 after the burst).
+4. Recalibrating every batch on recent labels (misses are free) already
+   tracks gradual drift (0.909): no detector fired and none was needed.
+5. After a burst, the sliding window lags (3 windows below T, worst 0.868);
+   the score test fires (inserts change the cache's own contents: balls
+   and shells), its reset matches knowing the change time (1-1.5 windows,
+   worst 0.894).
+6. The retention test (strict) fired only once in all data runs (naive
+   cache, churn burst; led to a rebuild); loose 5% fired in half the drift
+   burst runs, no earlier than the score test. Consistent with the
+   sample-size law (deficits here 0.01-0.04).
+7. Maintained labels: no measurable gain over sliding labels at this rate
+   of change (<= 0.004 retention), ~5x compute.
+8. The promise is on the average over hits: queries whose answers include
+   new vectors (15-19% of drift queries) get 0.87-0.88 under every
+   calibrated configuration while the average is 0.909-0.911.
+9. "Windows below T" is noisy: oracle calibration sits closer to T (mean
+   0.900-0.902), so more 5000-query windows dip below by chance.
+Specific to this setup: 10% changed, ESCI, the 20k-query window, insert
+rate ~0.9 per query, drift clusters chosen so queries hit them (some balls
+there, which is why the score test sees the burst; a drift entirely outside
+all balls and shells would leave scores unchanged).
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
