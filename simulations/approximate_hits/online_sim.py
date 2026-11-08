@@ -103,11 +103,14 @@ def sq_dist(a, b, b_sq):
 
 def db_view(D):
     """Fill defaults for a fixed database: ranking = top-R lists, every
-    vector present. D["rank"] = what the backend returns for each query
-    (its ranked answer list; exact unless an approximate backend is
-    simulated); D["truth"] = the exact ranking, used only to evaluate."""
+    vector present. What the backend returns for each query: D["rank"] =
+    its deep list (top-R, asked when building cache entries and shells) and
+    D["answer"] = its top-k answer (misses, audits); both exact unless an
+    approximate backend is used. D["truth"] = the exact ranking, used only
+    to evaluate."""
     if "rank" not in D:
         D["rank"] = D["top"]
+    D.setdefault("answer", D["rank"])
     D.setdefault("truth", D["rank"])
     if "present" not in D:
         D["present"] = np.ones(len(D["db"]), dtype=bool)
@@ -145,8 +148,9 @@ def measured_recall(truth_rows, answer_rows, k, n=20000, seed=0):
 
 
 def topk_present(D, qidx, n, key="rank"):
-    """First n present ids of each query's list: its backend answer
-    (key "rank") or the exact ranking (key "truth"); with an exact backend
+    """First n present ids of each query's list: the backend's deep list
+    (key "rank"), its top-k answer ("answer") or the exact ranking
+    ("truth"); with an exact backend
     both are the exact top-n of the current database. Rows with fewer than
     n present ids are padded with their last present id and counted in
     D["short"]."""
@@ -368,7 +372,7 @@ class Cache:
     def retention(self, qidx):
         """Share of each query's current top-k, as the backend answers it,
         that is cached (the label we can observe)."""
-        return self.cached[topk_present(self.D, qidx, self.k)].mean(axis=1)
+        return self.cached[topk_present(self.D, qidx, self.k, key="answer")].mean(axis=1)
 
     def retention_exact(self, qidx):
         """Share of each query's exact top-k that is cached (evaluation
@@ -400,7 +404,8 @@ def greedy_entries(D, cand, score, score_w, budget, k, target):
     kmax = max([km for _, km in cand] + [1])
     tops = topk_present(D, centers, min(kmax, max(K_VALUES))) if len(centers) else None
     pairs = [(i, c, K) for i, (c, km) in enumerate(cand) for K in K_VALUES if K <= km]
-    pop = GreedyPopulator([tops[i, :K] for i, _, K in pairs], topk_present(D, score, k),
+    pop = GreedyPopulator([tops[i, :K] for i, _, K in pairs],
+                          topk_present(D, score, k, key="answer"),
                           len(D["db"]), k, target,
                           score_weights=np.asarray(score_w, dtype=np.int64))
     while pop.step(int(budget)) is not None:
@@ -413,7 +418,7 @@ def greedy_entries(D, cand, score, score_w, budget, k, target):
 
 
 def oracle_hits(cache, score, score_w, k, target):
-    counts = cache.cached[topk_present(cache.D, score, k)].sum(axis=1)
+    counts = cache.cached[topk_present(cache.D, score, k, key="answer")].sum(axis=1)
     hist = np.bincount(counts, weights=score_w, minlength=k + 1).astype(np.int64)
     return int(hits_from_histograms(hist, target, k)[0])
 
@@ -428,7 +433,7 @@ def hits_of_entries(D, entries, score, score_w, k, target):
         tops = topk_present(D, cs, max(entries.values()))
         for i, c in enumerate(cs):
             cached[tops[i, :entries[int(c)]]] = True
-    counts = cached[topk_present(D, score, k)].sum(axis=1)
+    counts = cached[topk_present(D, score, k, key="answer")].sum(axis=1)
     hist = np.bincount(counts, weights=score_w, minlength=k + 1).astype(np.int64)
     return int(hits_from_histograms(hist, target, k)[0])
 
@@ -732,7 +737,7 @@ class Sim:
             serve = (score >= self.lam if self.lam is not None and cache.n_cached() >= self.k
                      else np.zeros(len(qb), bool))
             y = cache.retention(qb)
-            y_exact = y if self.D["truth"] is self.D["rank"] else cache.retention_exact(qb)
+            y_exact = y if self.D["truth"] is self.D["answer"] else cache.retention_exact(qb)
             rate = (a.alarm_audit_rate if last_alarm is not None
                     and s - last_alarm < a.alarm_audit_span else a.audit_rate)
             target = getattr(a, "audit_target", 0)
@@ -753,7 +758,8 @@ class Sim:
                              "events": n_ev, "audit_rate": rate})
             if "initial" in self.D:
                 # queries whose current exact top-k contains inserted vectors
-                aff = (~self.D["initial"][topk_present(self.D, qb, self.k)]).any(axis=1)
+                aff = (~self.D["initial"][topk_present(self.D, qb, self.k,
+                                                         key="truth")]).any(axis=1)
                 self.log[-1].update(aff_n=int(aff.sum()), aff_served=int((aff & serve).sum()),
                                     aff_ret_sum=float(y[aff & serve].sum()))
             if method != "static":
@@ -848,9 +854,23 @@ def load(prep, args):
                                  "(online_prepare_data.py computes it)")
             D["rank"] = np.load(wide)
         D["truth"] = D["rank"]
-        D["rank"] = D["top"] = approximate_rows(D["truth"], recall, args.backend_seed)
+        D["rank"] = D["top"] = D["answer"] = approximate_rows(D["truth"], recall,
+                                                             args.backend_seed)
         D["backend_recall_measured"] = {
             f"at_{k}": measured_recall(D["truth"], D["rank"], k) for k in (args.k, args.R)}
+    bfile = getattr(args, "backend_file", None)
+    if bfile:
+        # a real index (eval_real_backend.py): its deep lists and top-k
+        # answers at the tuned search effort for --backend-target
+        if kind != "none":
+            raise SystemExit("real-index backends support a fixed database only")
+        z = np.load(bfile)
+        D["truth"] = np.load(Path(prep) / "topU1000.npy")
+        D["rank"] = D["top"] = z[f"deep_{args.backend_target}"]
+        D["answer"] = z[f"answer_{args.backend_target}"]
+        D["backend_recall_measured"] = {
+            f"answer_at_{args.k}": measured_recall(D["truth"], D["answer"], args.k),
+            f"deep_at_{args.R}": measured_recall(D["truth"], D["rank"], args.R)}
     return D, streams
 
 
@@ -876,6 +896,10 @@ def main():
                     help="simulated approximate backend: recall of its answers (1 = exact); "
                          "labels and caches use its answers, truth is logged separately")
     ap.add_argument("--backend-seed", type=int, default=123)
+    ap.add_argument("--backend-file", type=str, default=None,
+                    help="real-index answers (results/backends/<prep>/<index>.npz)")
+    ap.add_argument("--backend-target", type=str, default="0.95",
+                    help="which tuned recall target of --backend-file to use")
     ap.add_argument("--no-maintain", action="store_true",
                     help="no cache upkeep on inserts (balls go stale; deletes still leave)")
     ap.add_argument("--cal-labels", choices=["serve", "maintained"], default="serve",
@@ -960,7 +984,7 @@ def main():
         args.alarm_audit_rate = args.audit_rate
     if args.method == "lru":
         args.response = "recal"
-    if args.method in ("aker", "qvcache") and args.backend_recall < 1.0:
+    if args.method in ("aker", "qvcache") and (args.backend_recall < 1.0 or args.backend_file):
         raise SystemExit("baselines are not yet supported with an approximate backend")
     if args.method in ("aker", "qvcache"):
         from simulations.approximate_hits import online_baselines as ob
@@ -969,7 +993,9 @@ def main():
     else:
         res = Sim(D, stream, args).run(args.method)
     if "backend_recall_measured" in D:
-        res["backend"] = dict(D["backend_recall_measured"], target=args.backend_recall)
+        res["backend"] = dict(D["backend_recall_measured"],
+                              target=args.backend_target if args.backend_file
+                              else args.backend_recall, file=args.backend_file)
         logger.info(f"backend recall measured {D['backend_recall_measured']}")
     key = f"phase_{args.stream}"
     if key in streams.files or (args.stream == "shift" and "phase" in streams.files):

@@ -320,7 +320,7 @@ def test_backend_answers_vs_truth_retention():
     q = np.arange(10)
     assert np.array_equal(c.retention(q), c.retention_exact(q))
     D["truth"] = D["rank"]
-    D["rank"] = osim.approximate_rows(D["truth"], 0.7)      # strongly approximate backend
+    D["rank"] = D["answer"] = osim.approximate_rows(D["truth"], 0.7)   # approximate backend
     c2 = osim.Cache(D, k=3, R=40, bits=32, budget=1e9)
     c2.add(0, 10)
     # entries are built from the backend's answer; the exact truth is separate
