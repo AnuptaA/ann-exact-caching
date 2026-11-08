@@ -1553,6 +1553,59 @@ test + rebuild, one seed; ~12,000 hits each):
   target recall) is needed.
 - Small run: differences of 0.004 are about 2.5 standard errors.
 
+## 5ab. Approximate backend, step 2 (real indexes; HNSW and IVF done)
+
+Code: `eval_real_backend.py` (run with `.venv-ann`: faiss-cpu 1.8.0,
+diskannpy 0.7.0, numpy 1.25, packaging 24.1; separate from `.venv` because
+diskannpy pins numpy 1.25). Index over the ESCI 1M database; search effort
+tuned on 5000 queries to the smallest setting whose mean recall@10 reaches
+0.99 / 0.95 / 0.90; then every query answered twice, as the system asks:
+top-10 answers (misses, audits; tuned effort) and top-500 deep lists
+(cache entries and shells). Asking HNSW / DiskANN for 500 results forces a
+search list >= 500, so their deep lists are much better than their
+answers; IVF keeps its tuned number of probed lists, so its deep lists
+degrade too. Simulator: `--backend-file results/backends/esci1m/<index>.npz
+--backend-target 0.95`: D["rank"] = deep lists (entries, shells, greedy
+candidates), D["answer"] = top-10 answers (labels, retention, scoring),
+D["truth"] = exact (evaluation only). Real-index backends: fixed database
+only.
+
+Index recall (all 131k queries) and how concentrated misses are (share of
+all misses on the 10% of vectors missed most often; in brackets the same
+for independent misses at that rate):
+| index, target | answers recall@10 | deep recall@10 / @500 | misses on top 10% vectors |
+|---|---|---|---|
+| HNSW (M 32), 0.99 (ef 160) | .992 | .998 / .977 | (too few misses) |
+| HNSW, 0.95 (ef 40) | .957 | .998 / .977 | 57% (32%) |
+| HNSW, 0.90 (ef 20) | .908 | .998 / .977 | 35% (18%) |
+| IVF-Flat (4096 lists), 0.99 (nprobe 384) | .994 | .994 / .980 | (too few misses) |
+| IVF, 0.95 (nprobe 64) | .960 | .960 / .885 | 87% (34%) |
+| IVF, 0.90 (nprobe 24) | .913 | .913 / .777 | 60% (19%) |
+Real errors are concentrated on particular vectors (IVF: a vector in a
+cluster the search does not probe is missed by every nearby query), unlike
+the independent misses of step 1.
+
+Our method on these backends (ESCI 1M, stationary stream, 60k queries, 10%
+budget, score test + rebuild, one seed, ~12,000 hits each; exact backend:
+30.1% / .912):
+| backend | hit % | retention vs backend answer | vs exact truth |
+|---|---|---|---|
+| HNSW .99 / .95 / .90 | 30.3 / 30.5 / 30.8 | .909 / .911 / .909 | .908 / .909 / .907 |
+| IVF .99 / .95 / .90 | 30.2 / 30.8 / 30.7 | .912 / .909 / .908 | .912 / .906 / .901 |
+- The promise holds against the backend's answer for every index and
+  recall (>= .908), and the hit rate is unchanged.
+- Against exact truth retention is slightly lower than against the
+  backend, most for IVF at 0.90 (.901, gap .007): with concentrated
+  errors the cache reproduces the backend's mistakes (its deep lists miss
+  the same vectors). Opposite sign to step 1 (independent misses), as
+  suspected there.
+- Retention vs exact (.90-.91) is about the backend's own recall or above:
+  the cache answers with the nearest cached vectors, which can include true
+  neighbors the backend missed for that query (cached from other queries'
+  deep lists).
+- One seed; differences of .002-.003 are within about 1-2 standard errors.
+DiskANN (32 bytes per vector in memory, node cache off) still tuning.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
