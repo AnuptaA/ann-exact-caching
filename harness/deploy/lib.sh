@@ -2,7 +2,12 @@
 # Shared helpers for the deploy scripts (sourced, not executed).
 
 log() { printf '[q1 %s] %s\n' "$(date +%T)" "$*"; }
-die() { printf '[q1] ERROR: %s\n' "$*" >&2; exit 1; }
+# die: Q1_ERR_FILE, when set by the setup step runner, keeps the message for the summary.
+die() {
+    printf '[q1] ERROR: %s\n' "$*" >&2
+    [ -z "${Q1_ERR_FILE:-}" ] || printf '%s\n' "$*" > "$Q1_ERR_FILE"
+    exit 1
+}
 
 # run <cmd...>: execute, or only print when Q1_DRYRUN is set (used by the decision-logic tests).
 run() {
@@ -18,9 +23,9 @@ version_ge() {
     [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
 }
 
-# first dotted version number in a string ("cmake version 3.22.1" -> 3.22.1).
+# first dotted version number in a string ("cmake version 3.22.1" -> 3.22.1); empty, status 0, when none.
 first_version() {
-    printf '%s\n' "$1" | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1
+    printf '%s\n' "$1" | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1 || true
 }
 
 # guard_path P: refuse paths that must never be deleted or recreated (empty, relative, short, system roots).

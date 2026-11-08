@@ -56,11 +56,13 @@ def test_scripts_exist_and_refuse_dirty_trees(tmp_path):
 
 def test_gpu_check_reports_missing_cuda(monkeypatch):
     import sys
-    import types
-    fake = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: False))
-    monkeypatch.setitem(sys.modules, "torch", fake)
-    assert preflight.check_gpu() == ["no CUDA device visible to torch"]
-    fake.cuda.is_available = lambda: True
+    from harness.deploy import gpu_check
+    from tests.harness.test_gpu_check import NO_DRIVER, fake_torch
+    monkeypatch.setattr(gpu_check, "query_smi", lambda: None)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch(error=NO_DRIVER))
+    problems = preflight.check_gpu()
+    assert len(problems) == 1 and "no NVIDIA driver or GPU" in problems[0]
+    monkeypatch.setitem(sys.modules, "torch", fake_torch())
     assert preflight.check_gpu() == []
 
 

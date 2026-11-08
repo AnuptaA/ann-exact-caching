@@ -201,4 +201,6 @@ q1-smoke: q1-guard
 	$(MAKE) q1-run SYSTEM=proximity SETTING=p1 BUDGET=5 DATASETS=tiny Q1_RESULTS=$(Q1_DATA)/smoke_results
 	$(PY) -m harness collect --out-dir $(Q1_DATA)/smoke_results
 	$(PYTHON) -m pytest tests/workloads/q1/test_core.py -q -k "torch or resident"
+	@if [ -z "$(Q1_ALLOW_DIRTY)" ] && [ -n "$$(git status --porcelain)" ]; then \
+		echo "q1-smoke: git status is not empty after the smoke test:"; git status --short; exit 1; fi
 

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from harness.backend.build_index import BUILD_PARAMS, hnsw_graph_bytes
+from harness.deploy import gpu_check
 
 GIB = 2 ** 30
 # dataset: (vectors, dim)
@@ -64,9 +65,11 @@ def check(datasets, data_dir: Path, require_linux: bool = True, repo: Path | Non
     elif status.stdout.strip():
         problems.append("git tree is dirty: commit or stash before deploying")
     problems += check_data_volume(data_dir)
-    needs = [need_bytes(d) for d in datasets]
-    disk_needed = sum(n["disk"] for n in needs)
     Path(data_dir).mkdir(parents=True, exist_ok=True)
+    needs = [need_bytes(d) for d in datasets]
+    if not needs:
+        return problems
+    disk_needed = sum(n["disk"] for n in needs)
     free = shutil.disk_usage(data_dir).free
     if free < disk_needed:
         problems.append(f"disk: {free / GIB:.0f} GiB free in {data_dir}, need {disk_needed / GIB:.0f} GiB")
@@ -78,12 +81,13 @@ def check(datasets, data_dir: Path, require_linux: bool = True, repo: Path | Non
 
 
 def check_gpu() -> list[str]:
-    """A CUDA device must be visible for GPU ground truth and encoding."""
+    """A CUDA device must be usable for GPU ground truth and encoding."""
     try:
         import torch
     except ImportError:
         return ["torch is not installed"]
-    return [] if torch.cuda.is_available() else ["no CUDA device visible to torch"]
+    code, message = gpu_check.diagnose(torch)
+    return [] if code == gpu_check.EXIT_OK else [message]
 
 
 def check_postgres(dsn: str, expected: str = "0.8.0") -> list[str]:
@@ -107,7 +111,8 @@ def check_postgres(dsn: str, expected: str = "0.8.0") -> list[str]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--datasets", nargs="+", default=list(DATASETS), choices=list(DATASETS))
+    ap.add_argument("--datasets", nargs="*", default=list(DATASETS), choices=list(DATASETS),
+                    help="datasets to size disk and RAM for; none skips the sizing")
     ap.add_argument("--data-dir", default="/data")
     ap.add_argument("--allow-non-linux", action="store_true", help="for dry runs on a dev machine")
     ap.add_argument("--require-gpu", action="store_true")

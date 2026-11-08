@@ -29,6 +29,8 @@ make q1-setup 2>&1 | tee ~/setup.log
 
 Setup first waits (at most 10 min for cloud-init, 15 min for the apt/dpkg locks) and then proceeds; if a lock stays held it stops and prints the lock file, the holder's pid and its command line. It never kills anything and never touches a lock file. An idle `unattended-upgrade-shutdown` daemon does not count as a holder.
 
+Setup runs every independent step and ends with a summary table (PASS, FAIL, SKIPPED, N/A, NOT RUN per step); the GPU check is the last step, so a missing GPU never hides the builds. Exit code 0 needs every step to pass.
+
 Watch for: Boost 1.84 build (only on 22.04), CMake wheel, FAISS v1.8.0 build, PostgreSQL 16 + pgvector 0.8.0, both drivers, then the `preflight` call. Expected end: `preflight ok`. `build/replay/TOOLCHAIN.txt` lists commit, cmake, gcc, boost, faiss. `git status --short` must still print nothing.
 
 Checks:
@@ -42,6 +44,23 @@ psql "host=127.0.0.1 port=54320 user=postgres" -Atc "show wal_level; show max_pa
 ```
 
 Expected: `minimal`, a number between 1 and 7, `0.8.0`.
+
+## 1b. CPU-only dry run (cheap instance or CI, before paying for a GPU)
+
+Verifies the Linux build, PostgreSQL 16, pgvector 0.8.0, both drivers and the smoke test without a GPU:
+
+```
+Q1_ALLOW_NO_GPU=1 Q1_MIN_DATA_GB=10 Q1_SETUP_DATASETS=none make q1-setup 2>&1 | tee ~/setup.log
+make q1-smoke 2>&1 | tee ~/smoke.log
+git status --short                                   # prints nothing
+```
+
+Expected: every row of the summary is PASS except `gpu`, which is `WARN` with the message "no NVIDIA driver or GPU found" (a
+driver that is too old for torch gives a different message), and the exit code is 0. Without `Q1_ALLOW_NO_GPU=1` the same run
+exits 1 and the summary shows `gpu FAIL`, with every other step still PASS. The flag only downgrades the setup check: ground truth,
+ESCI/SPHERE encoding and `--device cuda` still refuse to run without a GPU, and nothing real can be generated on that machine.
+`Q1_SETUP_DATASETS=none` skips the disk and RAM sizing for the four real datasets (`make q1-preflight` and the per-stage checks still
+apply to real runs). A GPU instance must still pass `preflight --require-gpu` (step 1) before the first generation.
 
 ## 2. Smoke test (1 min)
 

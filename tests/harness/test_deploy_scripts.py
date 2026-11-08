@@ -92,6 +92,8 @@ def test_version_and_path_helpers():
     assert _bash("version_ge 3.23.1 3.23.1 && echo yes || echo no").stdout.strip() == "yes"
     assert _bash("version_ge 3.9 3.10 && echo yes || echo no").stdout.strip() == "no"
     assert _bash("first_version 'cmake version 3.22.1'").stdout.strip() == "3.22.1"
+    empty = _bash("set -euo pipefail; v=$(first_version ''); echo \"[$v]\"")
+    assert empty.returncode == 0 and empty.stdout.strip() == "[]"
     for bad in ("''", "/", "/usr", "/usr/local", "relative/path", "/a/b", "/opt", "/data", "/x/../y/zzzzzz"):
         out = _bash(f"guard_path {bad}")
         assert out.returncode != 0, bad
