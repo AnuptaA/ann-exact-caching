@@ -38,7 +38,7 @@ Variables: `Q1_DATA` (default /data/q1), `Q1_LIST_SIZE` (L, default 200), `Q1_AL
 truth or CPU ESCI embedding), `Q1_PG_DSN`, `Q1_PG_WORKERS` (parallel answer-table processes), `Q1_DEVICE` (auto, cuda, numpy), `DATASETS` (restrict a run to some datasets),
 `Q1_DRIVERS`, `GT_QUERY_CHUNK`/`GT_BASE_CHUNK`.
 
-Setup (`make q1-setup`) overrides are listed in the header of `harness/deploy/setup_instance.sh`: `Q1_MIN_DATA_GB`, `Q1_SETUP_DATASETS`, `Q1_ALLOW_ROOT_VOLUME`, `Q1_ALLOW_NO_GPU=1` (CPU dry run: a missing GPU is a warning, see `EC2_FIRST_RUN.md` section 1b).
+Setup (`make q1-setup`) overrides are listed in the header of `harness/deploy/setup_instance.sh`: `Q1_MIN_DATA_GB`, `Q1_SETUP_DATASETS`, `Q1_ALLOW_ROOT_VOLUME`, `Q1_ALLOW_NO_GPU=1` and `Q1_ALLOW_SHORTFALL=1` (CPU dry run on a small machine: a missing GPU and disk/RAM shortfalls are warnings, see `EC2_FIRST_RUN.md` section 1b).
 
 `q1-generate` runs these stages in order and skips finished ones (markers in
 `$Q1_DATA/<dataset>/.done/`): fetch, embed, to_f32, inputs, groundtruth, pg_load, pg_index,

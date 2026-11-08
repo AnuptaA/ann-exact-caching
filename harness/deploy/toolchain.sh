@@ -76,12 +76,20 @@ ensure_boost() {
 # FAISS pinned commit, CPU only, built with the chosen CMake into $Q1_TOOLS/faiss.
 ensure_faiss() {
     FAISS_ROOT="$Q1_TOOLS/faiss"
+    local src="$Q1_TOOLS/src/faiss"
     local marker="$FAISS_ROOT/.installed-$FAISS_COMMIT"
     if [ -f "$marker" ]; then
-        log "FAISS $FAISS_VERSION already built in $FAISS_ROOT"
-        return 0
+        if [ -f "$FAISS_ROOT/BLAS_INFO" ]; then
+            log "FAISS $FAISS_VERSION already built in $FAISS_ROOT"
+            return 0
+        fi
+        if [ -f "$src/build/CMakeCache.txt" ]; then
+            record_faiss_blas "$src/build/CMakeCache.txt" "$FAISS_ROOT/BLAS_INFO"
+            log "FAISS $FAISS_VERSION already built in $FAISS_ROOT (BLAS recorded from its build tree)"
+            return 0
+        fi
+        log "FAISS in $FAISS_ROOT has no BLAS record and no build tree: rebuilding"
     fi
-    local src="$Q1_TOOLS/src/faiss"
     guard_path "$src"
     safe_rm_rf "$src"
     run mkdir -p "$src"
@@ -89,10 +97,31 @@ ensure_faiss() {
     run git -C "$src" "${GIT_STALL_OPTS[@]}" fetch --quiet --depth 1 https://github.com/facebookresearch/faiss "$FAISS_COMMIT"
     run git -C "$src" checkout --quiet FETCH_HEAD
     run "$CMAKE_BIN" -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release -DFAISS_ENABLE_GPU=OFF \
-        -DFAISS_ENABLE_PYTHON=OFF -DBUILD_TESTING=OFF -DCMAKE_INSTALL_PREFIX="$FAISS_ROOT"
+        -DFAISS_ENABLE_PYTHON=OFF -DBUILD_TESTING=OFF -DBLA_VENDOR="$BLAS_VENDOR" -DCMAKE_INSTALL_PREFIX="$FAISS_ROOT"
     run "$CMAKE_BIN" --build "$src/build" -j "$(nproc)"
     run "$CMAKE_BIN" --install "$src/build"
+    record_faiss_blas "$src/build/CMakeCache.txt" "$FAISS_ROOT/BLAS_INFO"
     run touch "$marker"
+}
+
+# record_faiss_blas CMakeCache.txt OUT: the BLAS and LAPACK libraries libfaiss.a was built with. The static
+# archive does not link them itself, so the drivers must link the same ones.
+record_faiss_blas() {
+    if [ -n "${Q1_DRYRUN:-}" ]; then
+        printf 'DRYRUN: record the FAISS BLAS libraries from %s into %s\n' "$1" "$2"
+        return 0
+    fi
+    cache_blas_info "$1" > "$2"
+    [ -s "$2" ] || die "no BLAS/LAPACK entries in $1: FAISS did not record its BLAS (install libopenblas-dev and rebuild)"
+}
+
+# drop_packaged_cluster: the Debian package may create a PG_MAJOR/main cluster; drop it only when it exists.
+drop_packaged_cluster() {
+    if [ -n "${Q1_DRYRUN:-}" ] || pg_lsclusters --no-header 2>/dev/null | awk -v v="$PG_MAJOR" '$1 == v && $2 == "main" { found = 1 } END { exit !found }'; then
+        run sudo pg_dropcluster --stop "$PG_MAJOR" main
+    else
+        log "no packaged cluster $PG_MAJOR/main to drop"
+    fi
 }
 
 # PostgreSQL PG_MAJOR from PGDG (jammy ships 14; noble ships 16 but PGDG works for both).
@@ -107,7 +136,7 @@ ensure_postgres() {
     fi
     # our own cluster only: the packaged cluster must not run next to it
     run sudo systemctl disable --now postgresql || true
-    run sudo pg_dropcluster --stop "$PG_MAJOR" main || true
+    drop_packaged_cluster
     local ctl
     ctl="$("$pg_bin/pg_config" --sharedir 2>/dev/null || echo /nonexistent)/extension/vector.control"
     if [ -n "${Q1_DRYRUN:-}" ] || ! grep -q "default_version = '$PGVECTOR_VERSION'" "$ctl" 2>/dev/null; then

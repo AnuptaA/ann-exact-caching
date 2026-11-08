@@ -21,10 +21,16 @@ set(Boost_USE_STATIC_LIBS OFF)
 set(Boost_USE_MULTITHREADED ON)
 find_package(Boost 1.80 REQUIRED COMPONENTS program_options log log_setup date_time thread
     system filesystem regex atomic chrono)
-find_path(FAISS_INCLUDE_DIR NAMES faiss/Index.h
-    PATHS "${FAISS_ROOT}/include" /usr/local/include /usr/include REQUIRED)
-find_library(FAISS_LIBRARY NAMES faiss
-    PATHS "${FAISS_ROOT}/lib" "${FAISS_ROOT}/lib64" /usr/local/lib /usr/lib /usr/lib64 REQUIRED)
+# With FAISS_ROOT only that prefix is searched: a system libfaiss must not shadow the pinned build.
+if(FAISS_ROOT)
+    find_path(FAISS_INCLUDE_DIR NAMES faiss/Index.h PATHS "${FAISS_ROOT}/include" NO_DEFAULT_PATH REQUIRED)
+    find_library(FAISS_LIBRARY NAMES faiss PATHS "${FAISS_ROOT}/lib" "${FAISS_ROOT}/lib64" NO_DEFAULT_PATH REQUIRED)
+else()
+    find_path(FAISS_INCLUDE_DIR NAMES faiss/Index.h
+        PATHS /usr/local/include /usr/include REQUIRED)
+    find_library(FAISS_LIBRARY NAMES faiss
+        PATHS /usr/local/lib /usr/lib /usr/lib64 REQUIRED)
+endif()
 
 if(LIBOMP_ROOT)
     set(OMP_INCLUDE "${LIBOMP_ROOT}/include")
@@ -33,6 +39,25 @@ else()
     find_package(OpenMP REQUIRED)
     set(OMP_INCLUDE "")
     set(OMP_LIBS OpenMP::OpenMP_CXX)
+endif()
+
+# A static libfaiss.a does not carry its dependencies: the link line needs the BLAS and LAPACK FAISS was built
+# with (pass the same -DBLA_VENDOR as the FAISS build), after libfaiss.a. A shared libfaiss records them itself.
+set(FAISS_DEPS "")
+if(FAISS_LIBRARY MATCHES "\\.a$")
+    find_package(BLAS)
+    find_package(LAPACK)
+    if(NOT BLAS_FOUND OR NOT LAPACK_FOUND)
+        message(FATAL_ERROR "libfaiss.a needs BLAS and LAPACK but CMake found BLAS=${BLAS_FOUND} "
+            "LAPACK=${LAPACK_FOUND} (BLA_VENDOR='${BLA_VENDOR}'). Install libopenblas-dev, or pass the same "
+            "-DBLA_VENDOR as the FAISS build.")
+    endif()
+    set(FAISS_DEPS ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES})
+    message(STATUS "FAISS is static: linking BLAS ${BLAS_LIBRARIES} and LAPACK ${LAPACK_LIBRARIES}")
+    file(WRITE "${CMAKE_BINARY_DIR}/blas_info.txt"
+        "BLA_VENDOR=${BLA_VENDOR}\nBLAS_LIBRARIES=${BLAS_LIBRARIES}\nLAPACK_LIBRARIES=${LAPACK_LIBRARIES}\n")
+else()
+    file(WRITE "${CMAKE_BINARY_DIR}/blas_info.txt" "shared libfaiss: BLAS and LAPACK are recorded in the library\n")
 endif()
 
 # Drivers find the (possibly non-system) FAISS and Boost libraries without LD_LIBRARY_PATH.
@@ -53,7 +78,7 @@ function(add_replay name proximity)
         AKER_ENABLE_PROXIMITY_MODE=${proximity} AKER_ENABLE_POTLUCK_MODE=0
         AKER_STANDARD_MODE=$<IF:$<BOOL:${proximity}>,0,1>)
     target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-w>)
-    target_link_libraries(${name} PRIVATE Threads::Threads ${FAISS_LIBRARY} ${OMP_LIBS}
+    target_link_libraries(${name} PRIVATE Threads::Threads ${FAISS_LIBRARY} ${FAISS_DEPS} ${OMP_LIBS}
         Boost::program_options Boost::log Boost::log_setup Boost::date_time Boost::thread
         Boost::system Boost::filesystem Boost::regex Boost::atomic Boost::chrono)
 endfunction()

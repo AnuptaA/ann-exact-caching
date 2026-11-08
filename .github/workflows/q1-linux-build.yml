@@ -1,0 +1,50 @@
+name: Q1 Linux build
+
+# Manual only. Runs the real setup (toolchain, FAISS, both drivers, PostgreSQL 16 with pgvector) and the smoke
+# test on stock Ubuntu x86_64, without a GPU. Steps: Actions tab, "Q1 Linux build", Run workflow, pick the branch.
+on:
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    env:
+      Q1_DATA: ${{ runner.temp }}/q1
+      Q1_SETUP_DATASETS: none
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup (CI mode: no GPU check, no data volume, no encoder venv)
+        run: bash harness/deploy/setup_instance.sh --ci 2>&1 | tee "$RUNNER_TEMP/setup.log"
+
+      - name: Drivers resolve every shared library
+        run: |
+          for exe in ak_replay_standard ak_replay_proximity; do
+            ldd "build/replay/$exe"
+            if ldd "build/replay/$exe" | grep "not found"; then exit 1; fi
+          done
+          cat build/replay/TOOLCHAIN.txt
+
+      - name: Smoke test (tiny dataset, CPU)
+        run: make q1-smoke Q1_DEVICE=numpy 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+
+      - name: Working tree is clean
+        run: test -z "$(git status --short)" || { git status --short; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: q1-linux-build-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/setup.log
+            ${{ runner.temp }}/smoke.log
+            build/replay/TOOLCHAIN.txt

@@ -149,6 +149,61 @@ apt_get() {
         -o Acquire::https::Timeout=60 -o Dpkg::Options::=--force-confold "$@"
 }
 
+# real_path P: canonical path (GNU readlink -f, also on recent macOS).
+real_path() { realpath "$1" 2>/dev/null || readlink -f "$1" 2>/dev/null || printf '%s\n' "$1"; }
+
+# cache_blas_info CMakeCache.txt: the BLAS/LAPACK entries a CMake build resolved, one key=value per line.
+cache_blas_info() {
+    { grep -E '^(BLA_VENDOR|BLAS_[A-Za-z0-9_]+_LIBRARY|LAPACK_[A-Za-z0-9_]+_LIBRARY):' "$1" || true; } |
+        { grep -v 'NOTFOUND' || true; } | sed -E 's/^([^:]+):[A-Za-z]+=/\1=/'
+}
+
+# blas_info_paths FILE: canonical paths of the BLAS/LAPACK library files named in a BLAS_INFO or blas_info.txt file.
+blas_info_paths() {
+    local item
+    { grep -E '(_LIBRARY|_LIBRARIES)=' "$1" 2>/dev/null || true; } | sed -E 's/^[^=]+=//' | tr ';' '\n' |
+        while read -r item; do
+            if [ -f "$item" ]; then real_path "$item"; fi
+        done | sort -u
+}
+
+# check_blas_match FAISS_BLAS_INFO DRIVER_BLAS_INFO: the drivers must link a BLAS the FAISS build also used.
+check_blas_match() {
+    local faiss_paths driver_paths common
+    faiss_paths=$(blas_info_paths "$1")
+    driver_paths=$(blas_info_paths "$2")
+    if [ -z "$faiss_paths" ]; then
+        log "WARNING: no BLAS libraries recorded for FAISS in $1; cannot compare with the drivers"
+        return 0
+    fi
+    common=$(printf '%s\n%s\n' "$faiss_paths" "$driver_paths" | sort | uniq -d)
+    [ -n "$common" ] || die "the drivers link a different BLAS than FAISS was built with: FAISS $(printf '%s' "$faiss_paths" | tr '\n' ' ')| drivers $(printf '%s' "$driver_paths" | tr '\n' ' ')"
+}
+
+# package_of_file F: "package version" owning a file (dpkg systems), empty otherwise.
+package_of_file() {
+    command -v dpkg >/dev/null 2>&1 || return 0
+    local pkg
+    pkg=$(dpkg -S "$1" 2>/dev/null | head -n1 | cut -d: -f1 || true)
+    [ -z "$pkg" ] || printf '%s %s\n' "$pkg" "$(dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null || true)"
+}
+
+# toolchain_blas_lines BUILD_DIR: BLAS, LAPACK and OpenMP lines for TOOLCHAIN.txt, from the driver build tree.
+toolchain_blas_lines() {
+    local build="$1" info="$1/blas_info.txt" path vendor
+    vendor=$(sed -n 's/^BLA_VENDOR=//p' "$info" 2>/dev/null | head -n1)
+    if grep -q '^shared libfaiss' "$info" 2>/dev/null; then
+        echo "blas recorded in the shared libfaiss"
+    else
+        echo "blas_vendor ${vendor:-default search}"
+        while read -r path; do
+            echo "blas_lib $path $(package_of_file "$path")"
+        done < <(blas_info_paths "$info")
+    fi
+    { grep -E '^OpenMP_(CXX_FLAGS|gomp_LIBRARY|omp_LIBRARY):' "$build/CMakeCache.txt" 2>/dev/null || true; } |
+        sed -E 's/^OpenMP_([A-Za-z_]+):[A-Za-z]+=/openmp \1 /'
+}
+
 # need_cmd C: the command must exist.
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
 

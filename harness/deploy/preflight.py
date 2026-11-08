@@ -17,10 +17,16 @@ DATASETS = {"spacev": (10_000_000, 100), "sift10m": (10_000_000, 128),
             "sphere": (10_000_000, 768), "esci": (1_814_924, 384)}
 
 
+# the smoke dataset can be sized too (a dry run on a small machine), but is not part of the default list
+SIZING = {**DATASETS, "tiny": (4000, 16)}
+
 # bytes per value of the downloaded source: spacev int8, sift10m uint8, sphere float64, esci float32
-RAW_ITEMSIZE = {"spacev": 1, "sift10m": 1, "sphere": 8, "esci": 4}
+RAW_ITEMSIZE = {"spacev": 1, "sift10m": 1, "sphere": 8, "esci": 4, "tiny": 4}
 MAX_WAL_BYTES = 64 * GIB      # max_wal_size set by setup_instance.sh
 OTHER_BYTES = 8 * GIB         # answer tables, ground truth, streams, results
+OTHER_BYTES_TINY = GIB // 4
+RAM_BASE_BYTES = 4 * GIB      # headroom on top of the HNSW graph
+RAM_BASE_BYTES_TINY = GIB
 
 
 def need_bytes(dataset: str) -> dict:
@@ -29,12 +35,14 @@ def need_bytes(dataset: str) -> dict:
     The raw source, the float32 file and the pgvector table coexist. WAL is bounded by max_wal_size; wal_level=minimal
     should keep it far lower, but that is not verified at full size.
     """
-    n, d = DATASETS[dataset]
+    n, d = SIZING[dataset]
+    tiny = dataset == "tiny"
     base_f32 = n * d * 4
-    graph = hnsw_graph_bytes(n, d, BUILD_PARAMS[dataset]["m"])
+    graph = hnsw_graph_bytes(n, d, BUILD_PARAMS.get(dataset, {"m": 16})["m"])
     parts = {"raw": n * d * RAW_ITEMSIZE[dataset], "f32": base_f32, "table": n * (d * 4 + 64), "index": graph,
-             "wal": min(MAX_WAL_BYTES, base_f32), "other": OTHER_BYTES}
-    return {**parts, "disk": int(sum(parts.values())), "ram": int(graph * 1.15 + 4 * GIB)}
+             "wal": min(MAX_WAL_BYTES, base_f32), "other": OTHER_BYTES_TINY if tiny else OTHER_BYTES}
+    ram_base = RAM_BASE_BYTES_TINY if tiny else RAM_BASE_BYTES
+    return {**parts, "disk": int(sum(parts.values())), "ram": int(graph * 1.15 + ram_base)}
 
 
 def device_of(path: Path) -> int:
@@ -54,8 +62,13 @@ def check_data_volume(data_dir: Path) -> list[str]:
     return []
 
 
-def check(datasets, data_dir: Path, require_linux: bool = True, repo: Path | None = None) -> list[str]:
-    """Return the list of problems; an empty list means the instance can run."""
+def check(datasets, data_dir: Path, require_linux: bool = True, repo: Path | None = None,
+          shortfalls: list[str] | None = None) -> list[str]:
+    """Return the list of problems; an empty list means the instance can run.
+
+    Disk and RAM shortfalls are problems, unless a `shortfalls` list is passed: they are then appended to it
+    (a dry run on a small machine) and the other problems are still returned.
+    """
     problems = []
     if require_linux and (platform.system() != "Linux" or platform.machine() != "x86_64"):
         problems.append(f"need Linux x86_64, found {platform.system()} {platform.machine()}")
@@ -70,13 +83,14 @@ def check(datasets, data_dir: Path, require_linux: bool = True, repo: Path | Non
     if not needs:
         return problems
     disk_needed = sum(n["disk"] for n in needs)
+    sink = problems if shortfalls is None else shortfalls
     free = shutil.disk_usage(data_dir).free
     if free < disk_needed:
-        problems.append(f"disk: {free / GIB:.0f} GiB free in {data_dir}, need {disk_needed / GIB:.0f} GiB")
+        sink.append(f"disk: {free / GIB:.0f} GiB free in {data_dir}, need {disk_needed / GIB:.0f} GiB")
     ram_needed = max(n["ram"] for n in needs)
     total_ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") if hasattr(os, "sysconf") else 0
     if total_ram < ram_needed:
-        problems.append(f"RAM: {total_ram / GIB:.0f} GiB, need {ram_needed / GIB:.0f} GiB for the HNSW build")
+        sink.append(f"RAM: {total_ram / GIB:.0f} GiB, need {ram_needed / GIB:.0f} GiB for the HNSW build")
     return problems
 
 
@@ -111,21 +125,28 @@ def check_postgres(dsn: str, expected: str = "0.8.0") -> list[str]:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--datasets", nargs="*", default=list(DATASETS), choices=list(DATASETS),
-                    help="datasets to size disk and RAM for; none skips the sizing")
+    ap.add_argument("--datasets", nargs="*", default=list(DATASETS), choices=list(SIZING),
+                    help="datasets to size disk and RAM for (tiny = smoke test); none skips the sizing")
+    ap.add_argument("--allow-shortfall", action="store_true",
+                    help="dry run on a small machine: disk and RAM shortfalls are warnings, other problems still fail")
     ap.add_argument("--data-dir", default="/data")
     ap.add_argument("--allow-non-linux", action="store_true", help="for dry runs on a dev machine")
     ap.add_argument("--require-gpu", action="store_true")
     ap.add_argument("--dsn", default=None, help="also check PostgreSQL 16 and pgvector 0.8.0")
     args = ap.parse_args(argv)
-    problems = check(args.datasets, Path(args.data_dir), not args.allow_non_linux)
+    shortfalls: list[str] = []
+    problems = check(args.datasets, Path(args.data_dir), not args.allow_non_linux,
+                     shortfalls=shortfalls if args.allow_shortfall else None)
     if args.require_gpu:
         problems += check_gpu()
     if args.dsn:
         problems += check_postgres(args.dsn)
+    for s in shortfalls:
+        print(f"PREFLIGHT WARN: {s} (ignored: --allow-shortfall)")
     for p in problems:
         print(f"PREFLIGHT FAIL: {p}", file=sys.stderr)
-    print("preflight ok" if not problems else f"{len(problems)} problem(s)")
+    warned = f" with {len(shortfalls)} shortfall warning(s)" if shortfalls else ""
+    print(f"preflight ok{warned}" if not problems else f"{len(problems)} problem(s)")
     return 1 if problems else 0
 
 

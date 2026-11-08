@@ -29,14 +29,38 @@ if [ -n "${BOOST_ROOT:-}" ]; then
     args+=(-DBOOST_ROOT="$BOOST_ROOT" -DBoost_NO_SYSTEM_PATHS=ON)
 fi
 
+# A static libfaiss.a needs the BLAS and LAPACK it was built with on the link line.
+faiss_static=0
+if [ -n "${FAISS_ROOT:-}" ] && compgen -G "$FAISS_ROOT/lib*/libfaiss.a" > /dev/null; then
+    faiss_static=1
+    if [ "$(uname -s)" = Linux ]; then
+        blas_listed=$("$(command -v ldconfig || echo /sbin/ldconfig)" -p 2>/dev/null | grep -c 'libopenblas\.so' || true)
+        [ "${blas_listed:-0}" -gt 0 ] || die "libfaiss.a needs BLAS and LAPACK but no libopenblas was found: install libopenblas-dev"
+    fi
+    if [ -f "$FAISS_ROOT/BLAS_INFO" ]; then
+        blas_vendor=$(sed -n 's/^BLA_VENDOR=//p' "$FAISS_ROOT/BLAS_INFO" | head -n1)
+        [ -z "$blas_vendor" ] || args+=(-DBLA_VENDOR="$blas_vendor")
+    fi
+fi
+
 "$cmake_bin" -S "$root/harness/cpp" -B "$build" "${args[@]}"
+if [ "$faiss_static" -eq 1 ] && [ -f "$FAISS_ROOT/BLAS_INFO" ]; then
+    check_blas_match "$FAISS_ROOT/BLAS_INFO" "$build/blas_info.txt"
+fi
 "$cmake_bin" --build "$build" -j "$(nproc)"
+if [ "$(uname -s)" = Linux ] && command -v ldd > /dev/null 2>&1; then
+    for exe in ak_replay_standard ak_replay_proximity; do
+        unresolved=$(ldd "$build/$exe" | grep 'not found' || true)
+        [ -z "$unresolved" ] || die "$exe has unresolved libraries: $unresolved"
+    done
+fi
 {
     echo "commit $(git -C "$root" rev-parse HEAD)"
     echo "cmake $cmake_ver"
     echo "gcc $(first_version "$(gcc --version | head -n1)")"
     echo "boost ${BOOST_ROOT:-system}"
     echo "faiss ${FAISS_ROOT:-system}"
+    toolchain_blas_lines "$build"
 } > "$build/TOOLCHAIN.txt"
 git -C "$root" rev-parse HEAD > "$build/BUILT_FROM_COMMIT"
 log "built ak_replay_standard and ak_replay_proximity in $build"

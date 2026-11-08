@@ -9,6 +9,7 @@
 # Each stage is a step. A failed step does not stop the steps that do not depend on it, the GPU check runs
 # last, and a summary lists every step as PASS, FAIL, SKIPPED (a dependency failed), N/A or NOT RUN.
 # Exit code is 1 if any step failed. No GPU is a failure unless Q1_ALLOW_NO_GPU=1 (then a loud warning).
+# Disk and RAM shortfalls in preflight are failures unless Q1_ALLOW_SHORTFALL=1 (dry run on a small machine).
 #
 # Environment overrides:
 #   Q1_DATA                     data volume directory (default /data/q1)
@@ -20,10 +21,13 @@
 #   Q1_SETUP_DATASETS           datasets preflight sizes disk and RAM for (default "spacev sift10m sphere esci";
 #                               "none" skips the sizing, for a CPU dry run)
 #   Q1_ALLOW_NO_GPU=1           a missing or unusable GPU is a warning, not a failure (CPU dry run)
+#   Q1_ALLOW_SHORTFALL=1        preflight disk and RAM shortfalls are warnings with the numbers (small dry-run
+#                               machine; combine with Q1_SETUP_DATASETS=tiny or one dataset name). Other preflight
+#                               problems (dirty tree, root volume, PostgreSQL) still fail.
 #   Q1_APT_WAIT_SECONDS, Q1_CLOUD_INIT_WAIT_SECONDS    limits of the apt lock and cloud-init waits (900, 600)
 #   Q1_DRYRUN                   print state-changing commands only (tests)
 #   Q1_SETUP_ALLOW_NON_LINUX    run the decision logic on a non-Linux machine (tests)
-#   Q1_GPU_CHECK_CMD            replaces the GPU check command (tests)
+#   Q1_GPU_CHECK_CMD, Q1_PREFLIGHT_CMD    replace the GPU check and preflight commands (tests)
 #   Q1_CHECK_CLEAN_TREE=1       run the clean-tree step in a dry run too (tests)
 # shellcheck disable=SC2317,SC2329
 set -euo pipefail
@@ -87,6 +91,9 @@ status_of() {
 # mark_na REASON: called by a step that does not apply here; the step then ends as N/A.
 mark_na() { printf '%s\n' "$*" > "$STATE_DIR/$STEP_NAME.na"; }
 
+# mark_warn NOTE: the step passed with a warning (it counts as passed for its dependents).
+mark_warn() { printf '%s\n' "$*" > "$STATE_DIR/$STEP_NAME.warn"; }
+
 # step NAME [DEPENDENCY...]: run step_NAME in a subshell with errexit on, unless a dependency did not pass.
 step() {
     local name="$1" dep status rc note
@@ -103,7 +110,7 @@ step() {
         esac
     done
     log "step $name: start"
-    rm -f "$STATE_DIR/$name.na" "$STATE_DIR/$name.err"
+    rm -f "$STATE_DIR/$name.na" "$STATE_DIR/$name.warn" "$STATE_DIR/$name.err"
     set +e
     (
         set -euo pipefail
@@ -126,6 +133,9 @@ step() {
     if [ -f "$STATE_DIR/$name.na" ]; then
         set_status "$name" N/A "$(cat "$STATE_DIR/$name.na")"
         log "step $name: N/A ($(cat "$STATE_DIR/$name.na"))"
+    elif [ -f "$STATE_DIR/$name.warn" ]; then
+        set_status "$name" WARN "$(cat "$STATE_DIR/$name.warn")"
+        log "step $name: WARN ($(cat "$STATE_DIR/$name.warn"))"
     else
         set_status "$name" PASS
         log "step $name: PASS"
@@ -144,6 +154,7 @@ finish() {
     SUMMARY_PRINTED=1
     echo
     log "setup summary"
+    [ "${Q1_ALLOW_SHORTFALL:-}" != "1" ] || log "mode: DRY RUN (Q1_ALLOW_SHORTFALL=1): disk and RAM shortfalls are warnings"
     for name in "${STEP_ORDER[@]}"; do
         status=$(status_of "$name")
         note=$(cat "$STATE_DIR/$name.note" 2>/dev/null || true)
@@ -161,10 +172,19 @@ finish() {
             echo "!!! to run on the CPU except for the tiny smoke dataset. Do not generate real datasets here."
         } >&2
     fi
+    if [ "${Q1_ALLOW_SHORTFALL:-}" = "1" ]; then
+        {
+            echo "!!! DRY-RUN MODE (Q1_ALLOW_SHORTFALL=1): disk and RAM shortfalls were reported as warnings, not failures."
+            echo "!!! This machine is not sized for the real datasets. Do not generate them here."
+        } >&2
+    fi
     if [ "$rc" -ne 0 ]; then
         log "setup FAILED:$failed"
-    elif [ "$NO_GPU_WARNING" -eq 1 ]; then
-        log "setup OK with a GPU warning. Next: make q1-smoke"
+    elif [ "$NO_GPU_WARNING" -eq 1 ] || [ "${Q1_ALLOW_SHORTFALL:-}" = "1" ]; then
+        local notes=""
+        [ "$NO_GPU_WARNING" -eq 0 ] || notes=" a GPU warning (Q1_ALLOW_NO_GPU=1)"
+        [ "${Q1_ALLOW_SHORTFALL:-}" != "1" ] || notes="$notes${notes:+ and} dry-run shortfall mode (Q1_ALLOW_SHORTFALL=1)"
+        log "setup OK with$notes. Next: make q1-smoke"
     else
         log "setup done. Next: make q1-smoke"
     fi
@@ -293,10 +313,24 @@ step_pg_start() {
 }
 
 step_preflight() {
-    local -a datasets=()
+    local -a datasets=() extra=() cmd=("$root/.venv/bin/python" -m harness preflight)
     [ "$SETUP_DATASETS" = none ] || read -ra datasets <<< "$SETUP_DATASETS"
-    PYTHONPATH="$root" run "$root/.venv/bin/python" -m harness preflight --datasets ${datasets[@]+"${datasets[@]}"} \
-        --data-dir "$Q1_DATA" --dsn "host=127.0.0.1 port=$Q1_PG_PORT user=postgres"
+    [ "${Q1_ALLOW_SHORTFALL:-}" != "1" ] || extra=(--allow-shortfall)
+    local dsn="host=127.0.0.1 port=$Q1_PG_PORT user=postgres"
+    if [ -n "${Q1_PREFLIGHT_CMD:-}" ]; then
+        read -ra cmd <<< "$Q1_PREFLIGHT_CMD"
+    elif [ -n "${Q1_DRYRUN:-}" ]; then
+        PYTHONPATH="$root" run "${cmd[@]}" --datasets ${datasets[@]+"${datasets[@]}"} --data-dir "$Q1_DATA" \
+            --dsn "$dsn" ${extra[@]+"${extra[@]}"}
+        return 0
+    fi
+    PYTHONPATH="$root" "${cmd[@]}" --datasets ${datasets[@]+"${datasets[@]}"} --data-dir "$Q1_DATA" \
+        --dsn "$dsn" ${extra[@]+"${extra[@]}"} | tee "$STATE_DIR/preflight.out"
+    local warned
+    warned=$(grep -c '^PREFLIGHT WARN' "$STATE_DIR/preflight.out" || true)
+    if [ "${warned:-0}" -gt 0 ]; then
+        mark_warn "$warned shortfall(s): $(grep -m1 '^PREFLIGHT WARN' "$STATE_DIR/preflight.out" | cut -c17-140)"
+    fi
 }
 
 # Setup, the builds and the smoke test must leave no untracked files: every target refuses a dirty tree.

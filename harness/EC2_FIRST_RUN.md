@@ -47,20 +47,31 @@ Expected: `minimal`, a number between 1 and 7, `0.8.0`.
 
 ## 1b. CPU-only dry run (cheap instance or CI, before paying for a GPU)
 
-Verifies the Linux build, PostgreSQL 16, pgvector 0.8.0, both drivers and the smoke test without a GPU:
+Verifies the Linux build, PostgreSQL 16, pgvector 0.8.0, both drivers and the smoke test without a GPU, on a machine too
+small for the real datasets:
 
 ```
-Q1_ALLOW_NO_GPU=1 Q1_MIN_DATA_GB=10 Q1_SETUP_DATASETS=none make q1-setup 2>&1 | tee ~/setup.log
+Q1_ALLOW_NO_GPU=1 Q1_ALLOW_SHORTFALL=1 Q1_MIN_DATA_GB=10 Q1_SETUP_DATASETS=tiny make q1-setup 2>&1 | tee ~/setup.log
 make q1-smoke 2>&1 | tee ~/smoke.log
 git status --short                                   # prints nothing
 ```
 
-Expected: every row of the summary is PASS except `gpu`, which is `WARN` with the message "no NVIDIA driver or GPU found" (a
-driver that is too old for torch gives a different message), and the exit code is 0. Without `Q1_ALLOW_NO_GPU=1` the same run
-exits 1 and the summary shows `gpu FAIL`, with every other step still PASS. The flag only downgrades the setup check: ground truth,
-ESCI/SPHERE encoding and `--device cuda` still refuse to run without a GPU, and nothing real can be generated on that machine.
-`Q1_SETUP_DATASETS=none` skips the disk and RAM sizing for the four real datasets (`make q1-preflight` and the per-stage checks still
-apply to real runs). A GPU instance must still pass `preflight --require-gpu` (step 1) before the first generation.
+Expected: every row of the summary is PASS except `gpu` (`WARN`, "no NVIDIA driver or GPU found"; a driver too old for torch
+gives a different message) and `preflight` (`WARN`, with the disk and RAM numbers), and the exit code is 0. A loud "DRY-RUN MODE"
+banner is printed. Without the two flags the same run exits 1 with `gpu FAIL` and/or `preflight FAIL`, and every other step
+still passes. The flags only downgrade the setup checks: ground truth, ESCI/SPHERE encoding and `--device cuda` still refuse
+to run without a GPU, `make q1-preflight` stays strict, and nothing real can be generated on that machine. Only the exact value
+`1` enables a flag. `Q1_SETUP_DATASETS` takes `tiny`, one dataset name, several names, or `none`.
+
+`build/replay/TOOLCHAIN.txt` must list the BLAS the drivers link, for example `blas_vendor OpenBLAS` and a
+`blas_lib /usr/lib/x86_64-linux-gnu/libopenblasp-r0.3.xx.so libopenblas0-pthread <version>`, plus the OpenMP library. The driver
+build fails (instead of printing 40 undefined-reference lines) if no `libopenblas` is installed or if it links a different BLAS
+than FAISS was built with (`/opt/q1/faiss/BLAS_INFO` records FAISS's). An existing FAISS install is not rebuilt: its BLAS is
+read from its build tree.
+
+Without a machine: Actions tab, "Q1 Linux build", Run workflow on the branch (`workflow_dispatch` only, Ubuntu 22.04 and 24.04
+x86_64). It runs `setup_instance.sh --ci`, the `ldd` check, prints `TOOLCHAIN.txt`, runs `make q1-smoke`, and requires an
+empty `git status --short`.
 
 ## 2. Smoke test (1 min)
 
