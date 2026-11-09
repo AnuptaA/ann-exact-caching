@@ -1722,6 +1722,19 @@ seed, ESCI stationary, 60k queries):
   the lookup cost and QPS improves only at skew 0.99; on pgvector up to
   2-3x QPS; read amplification (pages read per query) and memory against
   the pgvector shared buffer.
+Speedup limit: with hit rate h, end-to-end speedup is at most 1 / (1 - h)
+even if hits were free (2x at 50%, 1.37x at 27%; ESCI 10% got 1.35x).
+Aker's total hit ratios (its Figure 9, read off the plot, +- 0.02; in
+brackets the exact-repeat part): SPACEV pool 1% / 5%: Zipf 0.30 .03 / .07,
+0.60 .06 / .12, 0.99 .31 (.21) / .40 (.27), uniform replay .09 / .71 (all
+repeats); TriviaQA 1% / 5%: 0.30 .25 / .34, 0.60 .29 / .40, 0.99 .58 (.32) /
+.64 (.32), uniform replay >= .8 (all repeats). Above 50% only for TriviaQA
+at skew 0.99 and for replays of unmodified queries; its "up to 2-3x QPS"
+comes from those cases (DiskANN on SPACEV improves only at 0.99). Our
+earlier simulated hit rates on the same traces (1%): Zipf 0.99 50.6% vs
+Aker 35.8%, 0.6 13.0% vs 5.7%; so repeated-request workloads are where an
+end-to-end gap should show. Report per run: overall speedup, hit rate (and
+its 1 / (1 - h) limit), per-hit speedup and per-miss overhead.
 Open: measure end to end directly with the final decision path (HNSW + 10
 balls) and equal memory (DiskANN's node cache also charged the HNSW graph);
 throughput under concurrency (QPS, as Aker reports); workloads with
