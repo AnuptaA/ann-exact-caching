@@ -2127,3 +2127,23 @@ private at 1%); 40 of them at once would not fit in 371 GB.
 
 Not in this campaign (timing-sensitive, need a quiet machine): timing under
 shifts and data changes, concurrency (QPS), NVMe.
+
+First results, real Aker (phase 1 complete, 312 runs;
+`aker_real/summarize_aker_real.py`; hit % / retention vs the backend's
+answer; best grid setting, '!' = no setting reaches .9):
+| workload | stable 1% / 10% | shift 1% / 10% | multishift 1% / 10% | churn gradual 1% / 10% | drift gradual 1% / 10% | sim. recall .9 backend 1% / 10% |
+|---|---|---|---|---|---|---|
+| Zipf 0.3 | 3.3 / .763 ! ; 9.2 / .813 ! | 6.1 / .778 ! ; 9.1 / .811 ! | 5.4 / .771 ! ; 8.7 / .808 ! | (prep) | (prep) | (prep) |
+| Zipf 0.6 | 6.3 / .815 ! ; 13.7 / .866 ! | 9.7 / .829 ! ; 13.3 / .863 ! | 8.2 / .819 ! ; 12.9 / .857 ! | 5.9 / .813 ! ; 9.8 / .838 ! | 5.9 / .799 ! ; 9.9 / .803 ! | 6.3 / .751 ! ; 13.8 / .813 ! |
+| Zipf 0.99 | 34.1 / .917 ; 44.7 / .915 | 38.6 / .916 ; 43.7 / .911 | 37.1 / .915 ; 42.8 / .919 | 31.3 / .907 ; 42.5 / .906 | (prep) | 31.6 / .911 ; 42.5 / .919 |
+| real log | 5.1 / .735 ! ; 8.9 / .778 ! | | | 4.4 / .729 ! ; 8.1 / .786 ! | 4.5 / .729 ! ; 8.3 / .755 ! | 5.1 / .717 ! ; 9.3 / .765 ! |
+- Real Aker reaches .9 only at Zipf 0.99 (exact repeats carry it); on every
+  other workload and setting it stays at .72-.87, so it has no setting that
+  meets our target there.
+- Aker never returned a deleted vector (its delete path works); under data
+  changes it keeps its hit rate, but at 10% the setting meeting .9 at 0.99
+  churn burst costs half the hits (23.2 vs 44.0 for the default at .867).
+- With a .9-recall backend, retention vs exact truth drops further (0.99,
+  10%: .860 vs .919 against the backend); against its own backend it
+  still reaches .91-.92 at 0.99.
+- Multishift full phase (0.99): Aker falls to .875-.883 for that phase.
