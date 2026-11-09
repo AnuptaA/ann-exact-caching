@@ -738,6 +738,14 @@ class Sim:
                      else np.zeros(len(qb), bool))
             y = cache.retention(qb)
             y_exact = y if self.D["truth"] is self.D["answer"] else cache.retention_exact(qb)
+            if self.D["truth"] is self.D["answer"]:
+                b_rec = np.ones(len(qb))
+            else:
+                # the backend's own recall (its top-k answer vs the exact top-k):
+                # what each query would get without the cache
+                ta = topk_present(self.D, qb, self.k, key="truth")
+                aa = topk_present(self.D, qb, self.k, key="answer")
+                b_rec = (ta[:, :, None] == aa[:, None, :]).any(axis=2).mean(axis=1)
             rate = (a.alarm_audit_rate if last_alarm is not None
                     and s - last_alarm < a.alarm_audit_span else a.audit_rate)
             target = getattr(a, "audit_target", 0)
@@ -750,6 +758,8 @@ class Sim:
             self.log.append({"t": t, "n": len(qb), "served": int(serve.sum()),
                              "served_retention_sum": float(y[serve].sum()),
                              "served_retention_exact_sum": float(y_exact[serve].sum()),
+                             "served_backend_recall_sum": float(b_rec[serve].sum()),
+                             "backend_recall_sum": float(b_rec.sum()),
                              "ret_hist": np.bincount(np.rint(y * self.k).astype(int),
                                                      minlength=self.k + 1).tolist(),
                              "audited_served": int(audit.sum()),

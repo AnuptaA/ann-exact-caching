@@ -1604,6 +1604,17 @@ budget, score test + rebuild, one seed, ~12,000 hits each; exact backend:
   neighbors the backend missed for that query (cached from other queries'
   deep lists).
 - One seed; differences of .002-.003 are within about 1-2 standard errors.
+With vs without the cache (recall against the exact top-10; re-run of the
+0.90 cases logging the backend's own recall per query; 30.8% served):
+| backend 0.90 | served queries: backend alone | served: cache | all queries: no cache | all: with cache |
+|---|---|---|---|---|
+| HNSW | .945 | .907 | .908 | .896 |
+| IVF | .958 | .901 | .913 | .896 |
+The cache serves the backend's easy queries, costs 4-6 points of recall on
+them (within the target: hits keep >= 90% of the backend's answer; observed
+.908-.909), and 1.2-1.7 points overall, while ~31% of queries skip the
+backend. Correction to a misreading: .901 vs .908 is the same cached answers
+against exact truth vs against the backend's answer, not cache vs no cache.
 DiskANN (32 bytes per vector in memory, node cache off) still tuning.
 
 ## 6. Radius-estimation findings so far
