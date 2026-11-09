@@ -1805,8 +1805,8 @@ vector; graph degree 64, build list 100, 32-byte in-memory compressed codes;
 built in 10 minutes, 5.7 GB on disk, recall@10 = .943 at search list 128;
 `eval_real_backend.py --build-only --out-name spacev10m`, shared by all
 SPACEV traces). Cache states from `online_sim.py --stream trace --shell-scope
-balls --shell-balls 10` after the 20k-query warm-up; timed on the next 3000
-requests of the trace (some repeat warm-up requests: Zipf 0.99 trace, 34% of
+balls --shell-balls 10` after the 20k-query warm-up; timed on the next 1000
+requests of the trace (requests 20,000-21,000) (some repeat warm-up requests: Zipf 0.99 trace, 34% of
 requests repeat an earlier one). Same harness as 5ac (decision: HNSW 32 over
 cached vectors + intruders over 10 balls; DiskANN on misses; single
 thread). Cached vectors are held as float32 here (400 bytes each) although
@@ -1833,12 +1833,109 @@ node) of our full memory incl. the HNSW graph.
   Smaller M, or storing cached vectors as 8-bit, would change the totals;
   not tried.
 - p99 is about unchanged (misses pay the decision).
-- Hit rates here are those of 3000 post-warm-up requests; they match the
+- Hit rates here are those of the 1000 post-warm-up requests; they match the
   simulator's longer runs (about 50% and 13% at 1%). No updates during the
   timed requests (static cache).
 - Comparison with Aker's paper (different hardware and backend): its up to
   2-3x QPS at skew 0.99 on pgvector and, on DiskANN over SPACEV (3.7 ms per
   search there), improvement only at 0.99.
+
+## 5af. Real Aker (the authors' code) on the SPACEV Zipf traces
+
+What: github.com/sjoon-oh/aker (commit 6bb326a), built in Standard mode (its
+adaptive per-entry threshold), driven through a thin C shim
+(`aker_real/aker_shim.cc`) that follows the authors' pgvector integration:
+look up; on an approximate hit link the query to the representative it
+matched (so a repeat of it is answered from that representative); on a miss
+the backend answers k + delta neighbors (delta = Aker's reserve neighbors)
+and the entry is inserted. Requests are handled one at a time, so the cache
+changes right away. Harness: `aker_real/eval_aker_real.py` (quality mode:
+backend answers = exact top-k; `--timing`: real DiskANN on misses). Build
+steps: `aker_real/build.sh` (deps in `~/third_party`: Boost 1.86, FAISS 1.8.0
+C++, xxHash, YCSB-C). Budget = pool of budget x 10M vector slots. Same
+traces, warm-up (first 20k requests not measured) and k = 10 as ours.
+
+How Aker decides a hit, in plain terms: each cached query gets a radius,
+starting at 1/4 of the squared distance to its nearest neighbor. A new query
+is served from the closest cached query (found with a small HNSW, M = 4, ef
+8) if it is inside that radius. Exact repeats widen the radius (x 1.1, up to
+the nearest-neighbor distance); each approximate hit shrinks it (x
+alpha_tighten). Nothing checks whether an approximate answer was right.
+
+Two fixes before it worked (both outside Aker's caching logic):
+- A memory bug in Aker: `StackFloatBuffer` (inc/utils/ak_stack_alloc.hh)
+  calls alloca() inside its constructor, so the buffer is freed as soon as
+  the constructor returns. The float copies of queries and representatives
+  that feed the HNSW filter were dead stack memory; in our build the filter
+  found nothing, so there were zero approximate hits. Reproduced in a
+  standalone C++ test with no shim; the earlier smoke run's few hits were
+  luck. Fix (`aker_real/aker_stackbuffer_fix.patch`, applied by build.sh):
+  keep the buffer inside the object. After the fix Aker serves 287 of the
+  472 queries its own rule says should hit in the first 3000 requests (the
+  rest are missed by its small HNSW).
+- Aker never sets a log level, so Boost printed several debug lines per
+  request (250 MB per run) on the hot path; the shim keeps warnings only.
+  Also, FAISS's OpenMP threads made 4 parallel runs crawl (load 300);
+  all runs use OMP_NUM_THREADS=1.
+
+Check against the paper: SPACEV Zipf 0.99 at 1% gives 31.1% hits (exact
+16.5% + approximate 9.4% + linked 5.2%) with the authors' defaults (delta 5,
+alpha_tighten 0.9); the paper reports about 31% (about 21% exact, 10%
+approximate). It matches.
+
+Quality (80k measured requests per run). Sweep: alpha_tighten 0.9 (the
+authors' config file) or 0.25 (the paper); delta 0 / 5 / 10. Best hit rate per
+cell (delta 0, alpha_tighten 0.9 everywhere):
+| | Zipf 0.99, 1% | Zipf 0.99, 10% | Zipf 0.6, 1% | Zipf 0.6, 10% |
+|---|---|---|---|---|
+| real Aker: hit rate (exact + approx. + linked) | 34.1% (18.9 + 9.2 + 6.0) | 44.7% (25.5 + 7.1 + 12.1) | 7.1% (1.5 + 5.4 + 0.2) | 15.7% (5.3 + 9.2 + 1.2) |
+| real Aker: share of right answer kept, all hits | .917 | .915 | .804 | .842 |
+| ... on approximate / linked hits | .78 / .87 | .77 / .82 | .75 / .82 | .76 / .80 |
+| real Aker memory (its own estimate) | 52 MB | 189 MB | 51 MB | 251 MB |
+| ours: hit rate, kept (target .9) | 50.6%, .912 | 62.3%, .901 | 13.0%, .924 | 23.3%, .906 |
+- Approximate hits keep only 75-78% of the right answer in every setting;
+  neither alpha_tighten nor delta changes that. Aker clears .9 overall at
+  skew 0.99 only because exact repeats (always right) are most of its hits.
+  At skew 0.6 it misses .9 (.79-.87) in every setting.
+- alpha_tighten 0.25 trades hits for quality (0.99, 1%: 31.7% at .941; 0.6,
+  10%: 13.7% at .866), still below .9 at 0.6. Larger delta costs hits at 1%
+  (reserve neighbors take slots) and nothing at 10%.
+- At 10% Aker's pool never fills on either trace (65k distinct queries x 10-15
+  neighbors < 1M slots): 10% is "cache everything" for Aker.
+- Ours gets 1.4-1.5x Aker's hits at 0.99 and 1.5-1.8x at 0.6, while meeting
+  the .9 target where Aker does not. (Ours at 1%: round-2 simulator runs, r2_trace, 2 seeds;
+  at 10%: the 1000 timed requests of 5ae, no longer run exists.)
+- Our reimplementation of Aker (5z; tau_init 0.25, alpha_t 0.9) gave 30.5%
+  at .968 on 0.99 / 1%: about the same hit rate as the real code, but the
+  real code's answers are worse (.913). Part of this is linked hits, which
+  our reimplementation does not model.
+
+Timing (`--timing`): same 1000 requests as 5ae (20,000-21,000), one at a
+time on one thread: Aker lookup; on a miss DiskANN (8-bit SPACEV index, list
+128, k + delta = 10 neighbors), read their vectors, insert. Equal memory:
+DiskANN node cache = Aker's memory at that point (as in 5ae).
+| | Zipf 0.99, 1% | Zipf 0.99, 10% | Zipf 0.6, 1% | Zipf 0.6, 10% |
+|---|---|---|---|---|
+| real Aker: hit rate on these 1000; kept | 35.6%; .919 | 39.5%; .919 | 5.3%; .828 | 9.6%; .836 |
+| Aker lookup, mean | 0.019 ms | 0.018 ms | 0.024 ms | 0.024 ms |
+| DiskANN alone, mean / p99 | 50.9 / 66.3 ms | 51.3 / 66.2 | 52.0 / 69.0 | 51.6 / 68.0 |
+| Aker + DiskANN, mean / p99 | 33.3 / 65.3 | 31.6 / 65.1 | 49.4 / 66.7 | 46.4 / 66.2 |
+| DiskANN with Aker's memory, mean | 48.1 | 48.7 | 48.6 | 47.9 |
+| speedup (limit 1 / (1 - h)) | 1.53x (1.55x) | 1.62x (1.65x) | 1.05x (1.06x) | 1.11x (1.11x) |
+| vs DiskANN with Aker's memory | 1.45x | 1.54x | 0.98x | 1.03x |
+| ours (5ae): speedup; vs equal memory | 1.99x; 1.86x | 2.55x; 2.16x | 1.13x; 1.03x | 1.27x; 1.06x |
+- Aker's hit check is 15-20x cheaper than ours (0.02 vs 0.3-0.5 ms) but
+  both are under 1% of a 50 ms DiskANN search, so the speedup is set by the
+  hit rate alone (both reach 97-100% of 1 / (1 - h)). Ours is faster
+  end to end in all four cells.
+- Aker's memory at the timing point is 52-75 MB (the 10% runs have only
+  seen 20k requests); ours is 64 MB at 1% and 562-591 MB at 10%. At 1%
+  memory is about equal, and ours wins on time (1.99x vs 1.53x at 0.99;
+  1.13x vs 1.05x at 0.6) and on quality.
+- The timed hit path included about 0.08 ms of retention bookkeeping per hit
+  (fixed in the code afterwards; under 0.2% of the mean, against Aker).
+- Not done: Aker's data-change path (write log, deletes) on our data-change
+  workloads; the shim has `shim_write` / `shim_process` / `shim_delete`.
 
 ## 6. Radius-estimation findings so far
 

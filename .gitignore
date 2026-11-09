@@ -256,3 +256,5 @@ simulations/synthetic/processed/
 **/.DS_Store
 # Aker (Oh et al., PVLDB 2026) workloads and SPACEV1B query files
 datasets/aker/
+# Built shim over the real Aker library (simulations/approximate_hits/aker_real/build.sh)
+simulations/approximate_hits/aker_real/libakershim.so

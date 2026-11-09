@@ -1,0 +1,41 @@
+diff --git a/inc/utils/ak_stack_alloc.hh b/inc/utils/ak_stack_alloc.hh
+index 49b75c8..cd01980 100644
+--- a/inc/utils/ak_stack_alloc.hh
++++ b/inc/utils/ak_stack_alloc.hh
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <cstddef>
++#include <memory>
+ 
+ /* This header provides a small helper to allocate a temporary buffer on the stack.
+  *
+@@ -28,10 +29,17 @@ namespace aker
+     class StackFloatBuffer
+     {
+     public:
++        /* Fix (ann-exact-caching): alloca() inside a constructor is released when the
++         * constructor returns, leaving data_ dangling (undefined behavior; with our
++         * GCC build the approximate filter received garbage vectors). Keep the
++         * storage in the object instead: an inline array (on the caller's stack, as
++         * intended), with a heap fallback for very large dimensions. */
++        static constexpr std::size_t k_inline = 4096;
++
+         explicit StackFloatBuffer(std::size_t length) noexcept
+             : length_(length),
+-              data_(length_ == 0 ? nullptr
+-                                 : static_cast<float*>(AKER_STACK_ALLOCA(sizeof(float) * length_)))
++              heap_(length_ > k_inline ? new float[length_] : nullptr),
++              data_(length_ == 0 ? nullptr : (heap_ ? heap_.get() : inline_))
+         {
+         }
+ 
+@@ -44,6 +52,8 @@ namespace aker
+ 
+     private:
+         std::size_t length_;
++        std::unique_ptr<float[]> heap_;
++        float inline_[k_inline];
+         float* data_;
+     };
+ }
