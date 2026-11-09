@@ -101,7 +101,10 @@ def fit_logistic(X, y):
     lr = LogisticRegression(C=1.0, max_iter=3000)
     Z = (X - mu) / sd
     lr.fit(np.vstack([Z, Z]), np.r_[np.ones(n), np.zeros(n)], sample_weight=np.r_[y, 1 - y] + 1e-12)
-    return lambda A: lr.decision_function((A - mu) / sd)
+    score = lambda A: lr.decision_function((A - mu) / sd)
+    # plain coefficients, so the scorer can be evaluated without sklearn
+    score.params = {"mu": mu, "sd": sd, "coef": lr.coef_[0], "intercept": float(lr.intercept_[0])}
+    return score
 
 
 def choose_lambda(score, fit_X, cal_X, cal_y, target):

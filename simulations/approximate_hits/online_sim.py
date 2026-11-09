@@ -714,9 +714,29 @@ class Sim:
 
     # -- main loop ---------------------------------------------------------
 
+    def save_state(self, path):
+        """Cache state after warm-up for eval_timing.py: cached vector ids,
+        entry centers and radii, the shell sample (ids and the b-bit vectors
+        as used), model coefficients, lambda, k; plus the warm-up length."""
+        c = self.cache
+        c.prepare()
+        mp = self.model.params
+        # the simulator's own scores for the next queries, to validate the
+        # per-query re-implementation in eval_timing.py
+        test_q = self.stream[self.a.warmup:self.a.warmup + 3000]
+        test_scores = self.model(c.features(test_q)[0])
+        np.savez(path, cached_ids=c.cached_ids, centers=c.centers, radius=c.radius,
+                 samp_ids=c.samp_ids, sv=c.sv, mu=mp["mu"], sd=mp["sd"], coef=mp["coef"],
+                 intercept=mp["intercept"], lam=np.nan if self.lam is None else self.lam,
+                 k=self.k, warmup=self.a.warmup, p=c.p, bits=c.bits, budget=self.M,
+                 memory=c.memory(), test_q=test_q, test_scores=test_scores)
+        logger.info(f"saved cache state to {path}")
+
     def run(self, method):
         a, rng, cache = self.a, self.rng, self.cache
         self.warmup()
+        if getattr(a, "save_state", None):
+            self.save_state(a.save_state)
         p_lru = cache.p
         last_alarm = None
         last_check = a.warmup
@@ -981,6 +1001,8 @@ def main():
     ap.add_argument("--alarm-audit-rate", type=float, default=None,
                     help="audit rate for --alarm-audit-span queries after an alarm")
     ap.add_argument("--alarm-audit-span", type=int, default=10000)
+    ap.add_argument("--save-state", type=str, default=None,
+                    help="save the cache state after warm-up (for eval_timing.py)")
     ap.add_argument("--tag", type=str, default="", help="suffix of the output file name")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-queries", type=int, default=None, help="truncate the stream")

@@ -1617,6 +1617,47 @@ backend. Correction to a misreading: .901 vs .908 is the same cached answers
 against exact truth vs against the backend's answer, not cache vs no cache.
 DiskANN (32 bytes per vector in memory, node cache off) still tuning.
 
+## 5ac. Timing study, first round (ESCI 1M, DiskANN on EBS)
+
+Code: `eval_timing.py` (run with `.venv-ann`), cache states from
+`online_sim.py --save-state` after warm-up (stationary stream, exact
+backend for building). One query at a time, single-threaded (BLAS 1
+thread; DiskANN searches issued one at a time); 3000 timed queries per arm
+after 200 untimed. Hit decision re-implemented per query exactly as the
+simulator computes it (scores agree to < 1e-5, decisions 100%). DiskANN:
+32-byte in-memory compressed vectors, search list 128 (recall@10 .96),
+beam width 2. Arms: DiskANN alone (node cache off); our cache + DiskANN on
+misses; DiskANN alone with its node cache given our cache's memory (nodes
+chosen by DiskANN's standard warm-up on its sample queries).
+Pitfalls hit: diskannpy's loader runs its node-cache warm-up (100k sample
+searches) unless cache_mechanism = 0; and it hangs when opened with 1
+thread (2 contexts used; searches still one at a time).
+
+| cache budget | cache memory | hit rate | hit decision (all queries) | DiskANN alone | cache + DiskANN | DiskANN with our memory as node cache |
+|---|---|---|---|---|---|---|
+| 1% | 16.4 MB | 12.3% | 1.17 ms | 49.6 ms | 44.7 ms | 47.6 ms |
+| 10% | 157.6 MB | 30.3% | 24.6 ms | 50.1 ms | 59.6 ms | 41.3 ms |
+(mean per query; p99: 1% 56.2 vs 55.1 ms alone; 10% 79.9 vs 54.8 ms.)
+- At 1% the cache cuts mean latency 10% (49.6 -> 44.7 ms) and beats
+  giving the same memory to DiskANN (47.6 ms); p99 is ~1 ms worse (every
+  miss pays the 1.2 ms decision first).
+- At 10% the cache makes queries SLOWER (59.6 vs 50.1 ms) and giving the
+  memory to DiskANN is better (41.3 ms). The hit decision costs 24.6 ms:
+  10.5 ms for the 10 nearest cached vectors and 13.8 ms for the shell
+  intruder count. Both are brute-force scans over everything cached
+  (85k cached vectors, ~120k shell vectors), so their cost grows with the
+  cache: one query reads ~130 MB of cached vectors plus the shell (held as
+  float32 in the harness), about memory-bandwidth speed. The hit decision
+  must not scan the whole cache.
+- EBS inflates DiskANN (50 ms per query; local NVMe would be several times
+  faster), which makes any cache look better. On fast storage even the 1%
+  decision (1.2 ms) would be a large share of a miss.
+- Hit rates are ESCI's (no repeated queries); traces with repeats hit more.
+Fix candidates: an index over the cached vectors (approximate nearest
+cached vectors, e.g. a small HNSW, as QVCache uses graph mini-indexes),
+counting intruders only among shell vectors of the best-fitting balls,
+computing on compressed vectors, batching queries for throughput.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
