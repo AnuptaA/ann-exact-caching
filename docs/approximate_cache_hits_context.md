@@ -1658,6 +1658,40 @@ cached vectors, e.g. a small HNSW, as QVCache uses graph mini-indexes),
 counting intruders only among shell vectors of the best-fitting balls,
 computing on compressed vectors, batching queries for throughput.
 
+Fixes, round 2 (`eval_timing.py --variants`; same queries, 2000 timed;
+decisions compared with the simulator's for the same cache state and
+intruder scope). Nearest cached vectors: scan, or a FAISS HNSW graph over
+the cached vectors (M 32, efConstruction 200; search list 16 / 32 / 64).
+Intruder count: scan at full precision; scan of the 4-bit codes themselves
+(FAISS 4-bit scalar quantizer, one list, radius search); or only the
+sampled shell vectors of the 3 best-fitting balls (`--shell-scope balls`,
+which the model is then fit and calibrated with).
+Hit decision, mean ms per query (stages: nearest cached vectors / intruder
+count):
+| variant | 1% | 10% |
+|---|---|---|
+| scan + scan (current) | 1.23 (0.53 / 0.64) | 25.5 (10.8 / 14.4) |
+| scan + 4-bit scan | 1.93 (0.53 / 1.33) | 22.1 (9.2 / 12.7) |
+| HNSW 32 + scan | 0.82 (0.11 / 0.65) | 12.7 (0.21 / 12.2) |
+| scan + best balls | 0.61 (0.50 / 0.05) | 8.2 (7.9 / 0.11) |
+| HNSW 32 + best balls | 0.21 (0.10 / 0.05) | 0.51 (0.20 / 0.10) |
+- HNSW finds 89% / 95% / 98% of the exact 10 nearest cached vectors at
+  search list 16 / 32 / 64; hit decisions agree with the exact scan in
+  99.4-100% of queries. Its graph adds 2.2 MB (1%) / 22 MB (10%), about
+  14% of the cache's memory.
+- Scanning the 4-bit codes is not faster (slower at 1%, 12% faster at
+  10%): decoding costs as much as the memory saved; agreement 98%.
+- Accuracy of the best-balls count (simulator, ESCI stationary, 60k
+  queries, one seed): 1% hit 9.9 -> 8.9%, 10% hit 30.1 -> 26.2%;
+  retention .918 -> .922 / .912 -> .909. The restriction loses intruders
+  from other balls' shells, so the model is less sure and serves less.
+- Estimated end to end (decision time + DiskANN's measured 49.6 / 50.1 ms on
+  misses, arithmetic): 1%: 0.21 + 0.911 x 49.6 = 45.4 ms (alone 49.6; equal
+  memory to DiskANN 47.6); 10%: 0.51 + 0.738 x 50.1 = 37.5 ms (alone 50.1;
+  equal memory 41.3, which does not yet charge the 22 MB HNSW graph).
+Open: recover the hit rate lost at 10% (more balls in the count, or an
+index over the shell sample); measure end to end directly.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes

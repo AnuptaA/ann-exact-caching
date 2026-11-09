@@ -327,3 +327,24 @@ def test_backend_answers_vs_truth_retention():
     members = set(c2.members(0).tolist())
     assert members <= set(D["rank"][0].tolist())
     assert not np.array_equal(c2.retention(q), c2.retention_exact(q))
+
+
+def test_shell_scope_balls_matches_all_with_three_entries_and_is_subset():
+    D = _data()
+    c = osim.Cache(D, k=5, R=60, bits=32, budget=1e9)
+    for i in (0, 1, 2):
+        c.add(i, 20)
+    c.p = 1.0
+    qidx = np.arange(3, 12)
+    X_all, _ = c.features(qidx)
+    c.shell_scope = "balls"
+    X_b, _ = c.features(qidx)
+    assert np.allclose(X_all, X_b)                 # 3 entries: the 3 balls are all of them
+    c.add(5, 20)
+    c.add(6, 20)
+    c.shell_scope = "all"
+    X_all, _ = c.features(qidx)
+    c.shell_scope = "balls"
+    X_b, _ = c.features(qidx)
+    assert np.allclose(X_all[:, :6], X_b[:, :6])   # ball features unchanged
+    assert (X_b[:, 6] <= X_all[:, 6] + 1e-12).all()   # restricted count <= full count

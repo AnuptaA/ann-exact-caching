@@ -188,6 +188,7 @@ class Cache:
         self.D = db_view(D)
         self.k, self.R, self.bits, self.budget = k, R, bits, budget
         self.maintain = maintain
+        self.shell_scope = "all"     # intruder count over the whole shell sample, or "balls"
         self.n_db = len(D["db"])
         self.entries = {}          # center query -> K
         self.geo = {}              # center -> (ball prefix end, shell prefix end, radius)
@@ -329,6 +330,16 @@ class Cache:
         sv = quantize(db[self.samp_ids].astype(np.float64), self.bits).astype(np.float32) \
             if len(self.samp_ids) else np.zeros((0, db.shape[1]), np.float32)
         self.sv, self.sv_sq = sv, (sv * sv).sum(axis=1)
+        # each entry's own sampled shell vectors, as positions in samp_ids
+        # (for --shell-scope balls: count intruders only among the shells of
+        # the best-fitting balls)
+        present, draw = self.D["present"], self.D["draw"]
+        self.entry_samp = []
+        for c in self.centers:
+            _, sh = self._ball_shell(int(c))
+            sh = sh[sh >= 0]
+            sh = sh[present[sh] & (self._count[sh] == 0) & (draw[sh] < self.p)]
+            self.entry_samp.append(np.searchsorted(self.samp_ids, sh))
         self._dirty = False
 
     def features(self, qidx):
@@ -362,10 +373,18 @@ class Cache:
                 e = order[:, j]
                 X[s:s + m, 2 * j] = de[rows, e] / self.radius[e]
                 X[s:s + m, 2 * j + 1] = nr / self.radius[e]
-            if len(self.sv):
-                cnt = (sq_dist(q, self.sv, self.sv_sq) < (nr ** 2)[:, None]).sum(axis=1)
-            else:
+            if not len(self.sv):
                 cnt = np.zeros(m)
+            elif self.shell_scope == "balls":
+                # intruders among the sampled shell vectors of the best-fitting balls only
+                cnt = np.zeros(m)
+                for i in range(m):
+                    pos = np.unique(np.concatenate([self.entry_samp[e] for e in order[i, :t]]))
+                    if len(pos):
+                        d2s = self.sv_sq[pos] - 2.0 * (self.sv[pos] @ q[i]) + (q[i] @ q[i])
+                        cnt[i] = (d2s < nr[i] ** 2).sum()
+            else:
+                cnt = (sq_dist(q, self.sv, self.sv_sq) < (nr ** 2)[:, None]).sum(axis=1)
             X[s:s + m, -1] = np.log1p(cnt)
         return X, near
 
@@ -459,6 +478,7 @@ class Sim:
         self.M = args.budget * len(D["db"])
         self.cache = Cache(D, args.k, args.R, args.bits, self.M,
                            maintain=not getattr(args, "no_maintain", False))
+        self.cache.shell_scope = getattr(args, "shell_scope", "all")
         self.log = []
         self.cost = {"topk": 0, "topR": 0, "center_checks": 0, "label_updates": 0}
         self.maintained = getattr(args, "cal_labels", "serve") == "maintained"
@@ -729,7 +749,10 @@ class Sim:
                  samp_ids=c.samp_ids, sv=c.sv, mu=mp["mu"], sd=mp["sd"], coef=mp["coef"],
                  intercept=mp["intercept"], lam=np.nan if self.lam is None else self.lam,
                  k=self.k, warmup=self.a.warmup, p=c.p, bits=c.bits, budget=self.M,
-                 memory=c.memory(), test_q=test_q, test_scores=test_scores)
+                 memory=c.memory(), test_q=test_q, test_scores=test_scores,
+                 entry_samp=np.concatenate(c.entry_samp) if c.entry_samp else np.empty(0, int),
+                 entry_samp_off=np.cumsum([0] + [len(x) for x in c.entry_samp]),
+                 shell_scope=c.shell_scope)
         logger.info(f"saved cache state to {path}")
 
     def run(self, method):
@@ -1001,6 +1024,9 @@ def main():
     ap.add_argument("--alarm-audit-rate", type=float, default=None,
                     help="audit rate for --alarm-audit-span queries after an alarm")
     ap.add_argument("--alarm-audit-span", type=int, default=10000)
+    ap.add_argument("--shell-scope", choices=["all", "balls"], default="all",
+                    help="intruder count over the whole shell sample, or only the shells "
+                         "of the 3 best-fitting balls")
     ap.add_argument("--save-state", type=str, default=None,
                     help="save the cache state after warm-up (for eval_timing.py)")
     ap.add_argument("--tag", type=str, default="", help="suffix of the output file name")
