@@ -1735,11 +1735,68 @@ earlier simulated hit rates on the same traces (1%): Zipf 0.99 50.6% vs
 Aker 35.8%, 0.6 13.0% vs 5.7%; so repeated-request workloads are where an
 end-to-end gap should show. Report per run: overall speedup, hit rate (and
 its 1 / (1 - h) limit), per-hit speedup and per-miss overhead.
-Open: measure end to end directly with the final decision path (HNSW + 10
+End to end, measured directly (`eval_timing.py --decision hnsw32+balls10`;
+state from a `--shell-scope balls --shell-balls 10` simulator run; each
+query: hit decision, then DiskANN on a miss, timed together; 3000 queries
+single-threaded; equal memory = DiskANN's node cache given our full memory
+incl. the HNSW graph; ESCI 1M, EBS, DiskANN search list 128):
+| | 1% cache | 10% cache |
+|---|---|---|
+| our memory (HNSW graph) | 18.6 MB (2.2) | 179.8 MB (22.1) |
+| hit rate (decisions agree with simulator) | 11.8% (99.9%) | 27.9% |
+| hit decision | 0.35 ms | 0.62 ms |
+| DiskANN alone, mean / p99 | 48.8 / 53.8 ms | 49.2 / 54.4 ms |
+| cache + DiskANN, mean / p99 | 43.5 / 54.5 ms | 36.1 / 54.9 ms |
+| on hits / on misses | 0.32 / 49.3 ms | 0.58 / 49.8 ms |
+| DiskANN with our memory, mean / p99 | 46.0 / 51.6 ms | 40.7 / 50.0 ms |
+| overall speedup (limit 1 / (1 - h)) | 1.12x (1.13x) | 1.36x (1.39x) |
+| per-hit speedup; miss overhead | 151x; +0.52 ms | 84x; +0.68 ms |
+| vs DiskANN with our memory | 1.06x | 1.13x |
+- Overall speedup is within 2% of the 1 / (1 - h) limit: the decision is now
+  cheap enough that the hit rate alone decides the gain.
+- The cache beats giving DiskANN the same memory, by 6% / 13% on the mean;
+  but p99 is worse (every miss pays the decision; DiskANN's node cache
+  speeds up every search).
+- ESCI is a hard case (no repeated queries, hit rate <= 28%).
+Open: throughput under concurrency (QPS, as Aker reports); workloads with
+repeated requests (SPACEV Zipf), where the hit rate is far higher (needs a
+DiskANN index over 10M vectors); fast local storage.
+Old open list (kept for reference): measure end to end directly with the final decision path (HNSW + 10
 balls) and equal memory (DiskANN's node cache also charged the HNSW graph);
 throughput under concurrency (QPS, as Aker reports); workloads with
 repeated requests (SPACEV Zipf), where the hit rate is far higher (needs a
 DiskANN index over 10M vectors).
+
+## 5ad. SPACEV data changes with baselines (round 2, gradual schedules)
+
+Hit % / mean served retention (target .90); ours and LRU mean of seeds 0, 1;
+Aker / QVCache best setting on seed 0 (highest hit rate with retention >= .9,
+else highest retention); 1% budget; `online_data_summary.py --prep <prep>`:
+| | Zipf 0.6 churn | Zipf 0.6 drift | real log churn | real log drift |
+|---|---|---|---|---|
+| static (no recalibration) | 13.6 / .911 | 15.1 / .867 | 4.1 / .947 | 4.9 / .917 (6 of 20 windows < T) |
+| ours: recalibrate on recent labels | 12.9 / .922 | 12.7 / .916 | 4.1 / .946 | 4.3 / .948 |
+| ours + score test | 12.9 / .922 | 11.3 / .922 (7.5 alarms) | 4.1 / .946 | 4.0 / .946 (7.5 alarms) |
+| LRU (best K) | 11.8 / .918 | 11.6 / .919 | 3.4 / .935 | 3.5 / .935 |
+| Aker | 5.7 / .907 | 5.7 / .901 (6 of 15 windows < T) | 2.6 / .896 (none meets T) | 2.6 / .892 (none meets T) |
+| QVCache, deletes kept / removed | 2.7 / .925, 2.9 / .937 | 2.6 / .908, 2.9 / .906 | 2.7 / .927, 2.5 / .948 | 2.7 / .916, 2.5 / .923 |
+| no cache upkeep | 9.7 / .907 | 6.3 / .898 | 1.7 / .921 | 1.9 / .915 |
+- Ours leads at every workload: LRU by 0.7-1.1 points, Aker by 1.5-7 points,
+  QVCache by 1.6-10 points. Aker meets the target only on Zipf 0.6 (and
+  then with 6 of 15 windows below it under drift); on the real log no Aker
+  setting meets it.
+- Drift without recalibration breaks the promise on Zipf 0.6 (.867), as on
+  ESCI; recalibrating on recent labels alone holds it.
+- NEW: on SPACEV drift the score test fires repeatedly (7.5 alarms per run;
+  0 on ESCI) and costs 0.3-1.4 points of hit rate without improving
+  retention: ~12 database changes per query (vs ~0.9 on ESCI) change the
+  cache's contents (upkeep) fast enough to move the score distribution, so
+  the test sees cache changes, not workload changes. Possible fix: compare
+  scores against the current cache (recompute the reference) or do not count
+  score shifts caused by upkeep.
+- Without upkeep, queries whose answers include new vectors keep only
+  .71-.81 (drift).
+Bursts and fresh-seed baseline re-runs: finished, not yet summarized.
 
 ## 6. Radius-estimation findings so far
 

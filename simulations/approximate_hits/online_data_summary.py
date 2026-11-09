@@ -13,7 +13,8 @@ import json
 import argparse
 from pathlib import Path
 
-RES = Path("simulations/approximate_hits/results/online/esci1m")
+ONLINE = Path("simulations/approximate_hits/results/online")
+RES = ONLINE / "esci1m"
 T = 0.9
 ORDER = ["static", "slide_none", "slide_score", "slide_ret", "slide_both", "slide_ret_loose",
          "slide_both_loose", "maint_none", "maint_ret", "maint_both", "noupkeep_both",
@@ -56,6 +57,7 @@ def row(d):
     r["rebuilds"] = sum(e["event"] == "rebuild" for e in ev)
     c = d["cost"]
     r["topk"] = c["topk"]
+    r["n_q"] = sum(x["n"] for x in d["log"])
     r["checks"] = c.get("center_checks", c.get("refresh_dist", 0))
     r["labels"] = c.get("label_updates", 0)
     r["deleted_returned"] = c.get("deleted_returned", 0)
@@ -98,7 +100,10 @@ def main():
     ap.add_argument("--kinds", nargs="+", default=["churn", "drift"])
     ap.add_argument("--schedules", nargs="+", default=["gradual", "burst"])
     ap.add_argument("--seeds", nargs="+", type=int, default=[0, 1])
+    ap.add_argument("--prep", type=str, default="esci1m")
     args = ap.parse_args()
+    global RES
+    RES = ONLINE / args.prep
     f = lambda v: "  -- " if v is None else f"{v:.3f}"
     for kind in args.kinds:
         for sched in args.schedules:
@@ -126,7 +131,7 @@ def main():
                              f"{f(g('post_hit'))} {f(g('post_ret'))} {g('post_below'):3.1f}")
                 kinds = "/".join(sorted({r["alarm_kinds"] for r in rows if r["alarm_kinds"]}))
                 line += (f" | {g('alarms'):5.1f} {kinds:15s} {g('rebuilds'):4.1f} "
-                         f"{g('topk') / 110000:6.3f}")
+                         f"{g('topk') / max(g('n_q'), 1):6.3f}")
                 print(line)
             d = RES / f"data_{kind}_{sched}"
             for label, pat, seeds in (("lru (no tests)", "lru_k*_none.json", args.seeds),

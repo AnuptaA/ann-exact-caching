@@ -266,6 +266,8 @@ def main():
     ap.add_argument("--L", type=int, default=128, help="DiskANN search list (128: recall@10 .96)")
     ap.add_argument("--n", type=int, default=3000, help="queries timed (after warm-up)")
     ap.add_argument("--warm", type=int, default=200, help="untimed queries first, per arm")
+    ap.add_argument("--decision", type=str, default="hnsw32+balls10",
+                    help="hit decision for the end-to-end arms (knn+shell, see FastHitPath)")
     ap.add_argument("--variants", type=str, nargs="*", default=None,
                     help="only time hit-decision variants knn+shell, e.g. brute+fp32 "
                          "brute+sq4 brute+balls hnsw32+balls (no backend arms)")
@@ -282,51 +284,70 @@ def main():
         out.write_text(json.dumps(res, indent=1))
         logger.info(f"wrote {out}")
         return
-    hp = HitPath(db, q, st)
-    cache_bytes = int(sum(hp.bytes.values()))
+    # the hit decision: exact scans ("brute+fp32", the simulator's default)
+    # or a faster variant (e.g. "hnsw32+balls10"; the state must come from a
+    # simulator run with the matching --shell-scope / --shell-balls)
+    knn, shell = args.decision.split("+")
+    hp = FastHitPath(db, q, st, knn, shell)
+    cache_bytes = int(sum(hp.bytes.values())) + hp.extra_bytes
     node_bytes = db.shape[1] * 4 + 4 + 64 * 4
-    logger.info(f"cache memory {cache_bytes / 1e6:.1f} MB ({hp.bytes}); "
-                f"equal-memory DiskANN node cache: {cache_bytes // node_bytes} nodes")
-    res = {"state": args.state, "L": args.L, "n": len(xs), "cache_bytes": hp.bytes,
+    n_nodes = cache_bytes // node_bytes
+    logger.info(f"decision {args.decision}; cache memory {cache_bytes / 1e6:.1f} MB "
+                f"({hp.bytes}, index {hp.extra_bytes}); equal-memory DiskANN node cache: "
+                f"{n_nodes} nodes")
+    res = {"state": args.state, "decision": args.decision, "L": args.L, "n": len(xs),
+           "cache_bytes": dict(hp.bytes, index=hp.extra_bytes),
            "cache_bytes_total": cache_bytes, "hit_threshold": hp.lam}
+    ref_hit = st["test_scores"][:len(xs)] >= hp.lam
 
-    # hit decisions (and validation against the simulator's scores)
-    t = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0}
+    def zero():
+        return {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0}
+
+    # end to end, measured directly: each query runs the hit decision and,
+    # on a miss, the DiskANN search, timed together in one loop
+    ix = open_diskann(args.diskann, 0)
     for x in xs[:args.warm]:
-        hp.decide(x, dict(t))
-    t = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0}
-    dec = np.empty(len(xs), dtype=np.float64)
+        if not hp.decide(x, zero())[0]:
+            ix.search(x, k_neighbors=k, complexity=args.L, beam_width=2)
+    t = zero()
     hits = np.zeros(len(xs), dtype=bool)
-    per_q = np.empty(len(xs))
+    dec_t = np.empty(len(xs))
+    total = np.empty(len(xs))
     for i, x in enumerate(xs):
         a = time.perf_counter()
-        hits[i], dec[i], _ = hp.decide(x, t)
-        per_q[i] = time.perf_counter() - a
-    diff = np.abs(dec - st["test_scores"][:len(xs)])
-    res["validation"] = {"max_score_diff": float(diff.max()),
-                         "decisions_agree": float(np.mean(
-                             hits == (st["test_scores"][:len(xs)] >= hp.lam)))}
+        hits[i] = hp.decide(x, t)[0]
+        b = time.perf_counter()
+        if not hits[i]:
+            ix.search(x, k_neighbors=k, complexity=args.L, beam_width=2)
+        total[i] = time.perf_counter() - a
+        dec_t[i] = b - a
     res["hit_rate"] = float(hits.mean())
-    res["hit_path"] = dict(summary(per_q), stages_ms={s: v / len(xs) * 1e3 for s, v in t.items()})
-    logger.info(f"hit rate {hits.mean():.3f}; hit decision {res['hit_path']}; "
-                f"validation {res['validation']}")
-
-    # arms
-    for arm, nodes in (("backend", 0), ("backend_mem", cache_bytes // node_bytes)):
-        ix = open_diskann(args.diskann, nodes)
+    res["decisions_agree_with_simulator"] = float(np.mean(hits == ref_hit))
+    res["decision_ms"] = dict(summary(dec_t), stages_ms={s_: v / len(xs) * 1e3
+                                                         for s_, v in t.items()})
+    res["cache"] = dict(summary(total), hits_ms=summary(total[hits]) if hits.any() else None,
+                        misses_ms=summary(total[~hits]) if (~hits).any() else None)
+    logger.info(f"hit rate {hits.mean():.3f} (agree {res['decisions_agree_with_simulator']:.4f}); "
+                f"decision {res['decision_ms']}; cache + DiskANN {res['cache']}")
+    # the same queries against DiskANN alone, without and with our memory
+    for arm, nodes in (("backend", 0), ("backend_mem", n_nodes)):
+        if arm == "backend_mem":
+            del ix
+            ix = open_diskann(args.diskann, nodes)
         time_backend(ix, xs[:args.warm], k, args.L)
         lat = time_backend(ix, xs, k, args.L)
         res[arm] = dict(summary(lat), nodes_cached=int(nodes))
         logger.info(f"{arm}: {res[arm]}")
-        if arm == "backend":
-            # cache arm: hit decision for every query + backend on misses
-            # (same backend latencies, measured on the same queries)
-            total = per_q + np.where(hits, 0.0, lat)
-            res["cache"] = dict(summary(total), hits_ms=summary(per_q[hits]) if hits.any() else None,
-                                misses_ms=summary(total[~hits]) if (~hits).any() else None)
-            logger.info(f"cache: {res['cache']}")
-        del ix
-    out = Path(args.state).with_name(f"timing_{Path(args.state).stem}_L{args.L}.json")
+    m = res["backend"]["mean_ms"]
+    res["speedup"] = {"overall": m / res["cache"]["mean_ms"],
+                      "limit_1_over_1_minus_h": 1 / max(1 - res["hit_rate"], 1e-9),
+                      "per_hit": m / res["cache"]["hits_ms"]["mean_ms"] if hits.any() else None,
+                      "miss_overhead_ms": (res["cache"]["misses_ms"]["mean_ms"] - m)
+                      if (~hits).any() else None,
+                      "vs_equal_memory": res["backend_mem"]["mean_ms"] / res["cache"]["mean_ms"]}
+    logger.info(f"speedup {res['speedup']}")
+    out = Path(args.state).with_name(
+        f"e2e_{Path(args.state).stem}_{args.decision.replace('+', '_')}_L{args.L}.json")
     out.write_text(json.dumps(res, indent=1))
     logger.info(f"wrote {out}")
 
