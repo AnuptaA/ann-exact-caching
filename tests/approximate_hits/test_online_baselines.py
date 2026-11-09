@@ -40,7 +40,7 @@ def test_aker_insert_tau_and_equality_hit():
     e = ak.reps[0]
     assert np.isclose(e["tau"], e["d"][0] / 4) and ak.n_cached() == 5
     tau = e["tau"]
-    served, ret = ak.batch(np.array([0]), 0, _truth(D, [0]))     # exact repeat
+    served, ret, _x = ak.batch(np.array([0]), 0, _truth(D, [0]))     # exact repeat
     assert served[0] and ret[0] == 1.0 and np.isclose(ak.reps[0]["tau"], tau * 1.1)
 
 
@@ -50,9 +50,9 @@ def test_aker_approximate_hit_shrinks_tau_and_aliases():
     ak = ob.Aker(D, np.arange(40), _args())
     ak._insert(0)
     tau = ak.reps[0]["tau"]
-    served, _ = ak.batch(np.array([1]), 0, _truth(D, [1]))
+    served, _, _x = ak.batch(np.array([1]), 0, _truth(D, [1]))
     assert served[0] and np.isclose(ak.reps[0]["tau"], tau * 0.25) and ak.alias[1] == 0
-    served, _ = ak.batch(np.array([1]), 1, _truth(D, [1]))      # alias hit
+    served, _, _x = ak.batch(np.array([1]), 1, _truth(D, [1]))      # alias hit
     assert served[0] and np.isclose(ak.reps[0]["tau"], tau * 0.25 ** 2)
 
 
@@ -113,12 +113,12 @@ def test_aker_slow_path_reaches_other_entries():
 def test_qvcache_threshold_learning_and_mini_eviction():
     D = _data()
     qv = ob.QVCache(D, np.arange(40), _args(budget=20 / 300))  # 2 mini-indexes of 10
-    served, _ = qv.batch(np.array([0]), 0, _truth(D, [0]))     # empty cache: miss
+    served, _, _x = qv.batch(np.array([0]), 0, _truth(D, [0]))     # empty cache: miss
     assert not served[0]
     key = qv.region(0)
     dk = np.linalg.norm(D["q"][0] - D["db"][D["top"][0, 4]])
     assert np.isclose(qv.theta[key], dk)
-    served, ret = qv.batch(np.array([0]), 1, _truth(D, [0]))    # d_cache[k] = theta
+    served, ret, _x = qv.batch(np.array([0]), 1, _truth(D, [0]))    # d_cache[k] = theta
     assert served[0] and ret[0] == 1.0
     for q in range(1, 8):                                 # fill and force evictions
         qv._insert(q, 10 + q)
@@ -135,6 +135,6 @@ def test_qvcache_deletes_kept_or_removed():
         D["present"][gone] = False
         qv.on_delete(np.array([gone]))
         assert qv.n_cached() == cached_after == int((qv.ref > 0).sum())
-        served, ret = qv.batch(np.array([0]), 1, _truth(D, [0]))
+        served, ret, _x = qv.batch(np.array([0]), 1, _truth(D, [0]))
         if mode == "keep" and served[0]:
             assert qv.cost["deleted_returned"] == 1 and ret[0] < 1

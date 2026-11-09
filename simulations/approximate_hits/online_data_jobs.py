@@ -71,8 +71,8 @@ def lru():
             " score retention" if d == "both" else "")
 
 
-def job(prep, budget, kind, sched, seed, name, flags):
-    out = f"{RES}/{prep}/data_{kind}_{sched}_s{seed}"
+def job(prep, budget, kind, sched, seed, name, flags, suffix=""):
+    out = f"{RES}/{prep}/data_{kind}_{sched}{suffix}_s{seed}"
     method = name.split("_")[0] if name.split("_")[0] in ("aker", "qvcache", "lru") \
         else flags.split()[1]
     tag = name[len(method) + 1:] if name.startswith(method + "_") else name
@@ -84,11 +84,30 @@ def job(prep, budget, kind, sched, seed, name, flags):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--round", type=int, choices=[1, 2], default=2)
+    ap.add_argument("--round", type=int, choices=[1, 2, 3], default=2)
+    ap.add_argument("--preps", nargs="*", default=None,
+                    help="round 3: workloads (our SPACEV configurations, LRU, both grids)")
+    ap.add_argument("--budget", type=float, default=0.01,
+                    help="round 3: cache budget; folders data_<kind>_<sched>_b<B>_s<seed> "
+                         "unless it is the round-2 default for the prep (ESCI 0.1, SPACEV 0.01)")
     args = ap.parse_args()
     jobs = []
     work = itertools.product(("churn", "drift"), ("gradual", "burst"))
     for kind, sched in work:
+        if args.round == 3:
+            for prep in args.preps:
+                default = 0.1 if prep.startswith("esci") else 0.01
+                suf = "" if args.budget == default else f"_b{args.budget:g}"
+                b = args.budget
+                for seed, name in itertools.product((0, 1), OURS_SPACEV):
+                    if name == "known_reset" and sched != "burst":
+                        continue
+                    jobs.append((0, job(prep, b, kind, sched, seed, name, OURS[name], suf)))
+                for seed, (name, flags) in itertools.product((0, 1), lru()):
+                    jobs.append((1, job(prep, b, kind, sched, seed, name, flags, suf)))
+                for name, flags in baselines():
+                    jobs.append((1, job(prep, b, kind, sched, 0, name, flags, suf)))
+            continue
         if args.round == 1:
             for seed, (name, flags) in itertools.product((0, 1), OURS.items()):
                 if name == "known_reset" and sched != "burst":

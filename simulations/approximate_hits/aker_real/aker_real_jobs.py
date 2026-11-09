@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Job lists (one shell command per line) for the real Aker (eval_aker_real.py,
+quality mode) over the coverage matrix (context doc 9): stable traces,
+workload shifts (shift, multishift), data changes (churn / drift x gradual /
+burst; random stream, as the simulator's data runs) and a simulated inexact
+backend; budgets 1% and 10%; grid alpha_tighten {0.9 (authors' config), 0.25
+(paper)} x reserve delta {0, 5, 10}. One run per cell (Aker is deterministic
+for a given stream). Results: results/aker_real/<prep>/<setting>_b<B>/at<a>_d<d>.json.
+
+  python aker_real_jobs.py --preps spacev-aker-0.6 ... [--only stable shift data backend]
+"""
+
+import argparse
+import itertools
+from pathlib import Path
+
+RES = "simulations/approximate_hits/results"
+PY = ".venv-ann/bin/python -u simulations/approximate_hits/aker_real/eval_aker_real.py"
+GRID = list(itertools.product([0.9, 0.25], [0, 5, 10]))
+
+
+def settings(prep, only):
+    online = Path(RES) / "online" / prep
+    streams = None
+    if (online / "streams.npz").exists():
+        import numpy as np
+        streams = np.load(online / "streams.npz").files
+    if "stable" in only:
+        yield "trace", "--stream trace"
+    if "shift" in only and streams is not None:
+        if "phase_shift" in streams and not prep.startswith("spacev-real"):
+            yield "shift", "--stream shift"
+        if "multishift" in streams:
+            yield "multishift", "--stream multishift"
+    if "data" in only:
+        for kind, sched in itertools.product(["churn", "drift"], ["gradual", "burst"]):
+            if (online / f"data_{kind}.npz").exists():
+                yield (f"data_{kind}_{sched}",
+                       f"--stream random --data-change {kind} --schedule {sched}")
+    if "backend" in only and (online / "topU1000.npy").exists():
+        for r in (0.95, 0.9):
+            yield f"bk_trace_r{r:g}", f"--stream trace --backend-recall {r}"
+    bfile = Path(RES) / "backends" / prep / "diskann.npz"
+    if "backend" in only and bfile.exists():
+        for t in (0.95, 0.9):
+            yield (f"bk_trace_diskann{t:g}",
+                   f"--stream trace --backend-file {bfile} --backend-target {t:g}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--preps", nargs="+", required=True)
+    ap.add_argument("--budgets", type=float, nargs="+", default=[0.01, 0.1])
+    ap.add_argument("--only", nargs="+", default=["stable", "shift", "data", "backend"])
+    ap.add_argument("--only-diskann", action="store_true", help="only the DiskANN-answer runs")
+    args = ap.parse_args()
+    for prep in args.preps:
+        for (name, flags), b, (at, d) in itertools.product(list(settings(prep, args.only)),
+                                                           args.budgets, GRID):
+            if args.only_diskann and "diskann" not in name:
+                continue
+            out = f"{RES}/aker_real/{prep}/{name}_b{b:g}"
+            tag = f"at{at:g}_d{d}"
+            print(f"mkdir -p {out}/logs && [ -f {out}/{tag}.json ] || {PY} "
+                  f"--prep {RES}/online/{prep} --budget {b} --alpha-tighten {at} --delta {d} "
+                  f"{flags} --out {out}/{tag}.json > {out}/logs/{tag}.txt 2>&1")
+
+
+if __name__ == "__main__":
+    main()

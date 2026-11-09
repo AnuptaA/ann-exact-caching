@@ -118,16 +118,22 @@ class Base:
         for s in range(0, len(self.stream), a.batch):
             n_ev = self.apply_events(s)
             qb = self.stream[s:s + a.batch]
-            truth = topk_present(self.D, qb, self.k)
-            # oracle reference: share of each query's exact top-k cached
+            # labels = the backend's answer; with an approximate backend the
+            # exact top-k is also passed, to log retention against exact truth
+            truth = topk_present(self.D, qb, self.k, key="answer")
+            truth_x = None if self.D["truth"] is self.D["answer"] else \
+                topk_present(self.D, qb, self.k, key="truth")
+            # oracle reference: share of each query's top-k cached
             counts = (self.ref[truth] > 0).sum(axis=1)
-            served, ret = self.batch(qb, s, truth)
+            served, ret, ret_x = self.batch(qb, s, truth, truth_x)
             self.cost["topk"] += int((~served).sum())
             if s + len(qb) > a.warmup:
                 keep = np.arange(len(qb)) + s >= a.warmup
                 self.log.append({"t": s + len(qb), "n": int(keep.sum()),
                                  "served": int(served[keep].sum()),
                                  "served_retention_sum": float(ret[served & keep].sum()),
+                                 "served_retention_exact_sum":
+                                     float(ret_x[served & keep].sum()),
                                  "ret_hist": np.bincount(counts[keep],
                                                          minlength=self.k + 1).tolist(),
                                  "audited_served": 0, "lambda": None,
@@ -294,11 +300,12 @@ class Aker(Base):
 
     # -- lookups -------------------------------------------------------------
 
-    def batch(self, qb, s, truth):
+    def batch(self, qb, s, truth, truth_x=None):
         k, Q = self.k, self.D["q"]
         n = len(qb)
         served = np.zeros(n, dtype=bool)
         ret = np.zeros(n)
+        ret_x = ret if truth_x is None else np.zeros(n)
         centers = np.array(list(self.reps), dtype=np.int64)
         if len(centers):
             cq = Q[centers]
@@ -326,12 +333,14 @@ class Aker(Base):
             else:
                 served[i] = True
                 ret[i] = np.isin(truth[i], self.reps[e]["ids"][:k]).mean()
+                if truth_x is not None:
+                    ret_x[i] = np.isin(truth_x[i], self.reps[e]["ids"][:k]).mean()
             if self.ilog and self.risk() >= self.a.aker_risk:
                 self.slow_step()
         for q in misses:
             if q not in self.reps:
                 self._insert(q)
-        return served, ret
+        return served, ret, ret_x
 
 
 class QVCache(Base):
@@ -394,11 +403,12 @@ class QVCache(Base):
         self.size[self.fill] += len(new)
         self.last_used[self.fill] = t
 
-    def batch(self, qb, s, truth):
+    def batch(self, qb, s, truth, truth_x=None):
         k, Q, a = self.k, self.D["q"], self.a
         n = len(qb)
         served = np.zeros(n, dtype=bool)
         ret = np.zeros(n)
+        ret_x = ret if truth_x is None else np.zeros(n)
         ids = np.flatnonzero(self.ref > 0)
         if len(ids) >= k:
             cv = self.D["db"][ids]
@@ -427,6 +437,9 @@ class QVCache(Base):
                 # cached deleted vectors that are closer push true ones out)
                 dt = self._dist(q, truth[i])
                 ret[i] = (cached_now[truth[i]] & (dt <= near_dk[i] + 1e-6)).mean()
+                if truth_x is not None:
+                    dx = self._dist(q, truth_x[i])
+                    ret_x[i] = (cached_now[truth_x[i]] & (dx <= near_dk[i] + 1e-6)).mean()
                 self.cost["deleted_returned"] += int((~present[near[i]]).sum())
                 for m in set(self.owner[near[i]].tolist()):
                     if m >= 0:
@@ -437,4 +450,4 @@ class QVCache(Base):
                 misses.append(q)
         for q in misses:
             self._insert(q, s + len(qb))
-        return served, ret
+        return served, ret, ret_x

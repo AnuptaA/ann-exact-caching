@@ -73,14 +73,32 @@ def _load_vectors(path: Path) -> np.ndarray:
 
 
 def load_base(name: str) -> np.ndarray:
-    """Database vectors: int8 kept as is; floating data as float32."""
-    arr = np.load(AKER / WORKLOADS[name]["base"], mmap_mode="r")
+    """Database vectors: int8 kept as is; floating data as float32. For
+    floating data a float32 copy next to the file (<stem>-f32.npy, e.g.
+    SPHERE: float64 on disk) is memory-mapped instead, so parallel processes
+    share one copy."""
+    path = AKER / WORKLOADS[name]["base"]
+    f32 = path.with_name(path.stem + "-f32.npy")
+    arr = np.load(path, mmap_mode="r")
+    if not np.issubdtype(arr.dtype, np.integer) and f32.exists():
+        return np.load(f32, mmap_mode="r")
     if np.issubdtype(arr.dtype, np.integer):
         return np.ascontiguousarray(arr)
     out = np.empty(arr.shape, dtype=np.float32)
     for b in range(0, len(arr), 500_000):
         out[b:b + 500_000] = arr[b:b + 500_000]
     return out
+
+
+def load_base_f32(name: str) -> np.ndarray:
+    """Database vectors as float32 for the simulators: the shared memory-mapped
+    copy <stem>-f32.npy if it exists (also for int8 data, e.g. SPACEV: 4 GB
+    instead of a private copy per process), else converted in memory."""
+    path = AKER / WORKLOADS[name]["base"]
+    f32 = path.with_name(path.stem + "-f32.npy")
+    if f32.exists():
+        return np.load(f32, mmap_mode="r")
+    return np.asarray(load_base(name), dtype=np.float32)
 
 
 def split_boundaries(name: str, parts) -> dict:

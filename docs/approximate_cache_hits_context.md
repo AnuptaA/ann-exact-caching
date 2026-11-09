@@ -2045,3 +2045,85 @@ data-volume-triggered shadow rebuild, and the items below.
   `requirements.txt` does not pin numpy.
 - All SIFT radius results above use k = 10 and Euclidean distance on raw
   vectors.
+
+## 9. Experiment coverage matrix (as of 5af)
+
+Methods: O = ours, L = LRU (our hit rule, LRU population), A = Aker
+reimplementation, A* = real Aker code, Q = QVCache reimplementation (no
+public code). Number types: S = simulator with an exact backend; Si =
+simulator with an inexact backend (controlled recall, or real HNSW / IVF
+answers); T = real code, timed against real DiskANN. Budget in brackets.
+Online runs use k = 10, T = 0.9; ours / LRU 2 seeds; baselines tuned on seed 0.
+
+Stable data and workload:
+| workload | S | Si | T |
+|---|---|---|---|
+| ESCI 1M random | O L A Q (10%) | O (10%) | O (1%, 10%) |
+| SPACEV Zipf 0.3 | O L A Q (1%) | - | - |
+| SPACEV Zipf 0.6 | O L A Q (1%); A* (1%, 10%) | - | O A* (1%, 10%) |
+| SPACEV Zipf 0.99 | O L A Q (1%); A* (1%, 10%) | - | O A* (1%, 10%) |
+| SPACEV real log -> official | O L A Q (1%) | - | - |
+| TriviaQA Zipf 0.3 / 0.6 / 0.99 | offline only (5i, 5j) | - | - |
+
+Workload shift (single shift; multishift = start, mild, full, return):
+| workload | S | Si | T |
+|---|---|---|---|
+| ESCI 1M shift, multishift | O L A Q (10%) | - | - |
+| SPACEV Zipf 0.6 shift | O L A Q (1%) | - | - |
+| SPACEV Zipf 0.3 / 0.6 / 0.99 multishift | O L A Q (1%) | - | - |
+
+Data changes (churn / drift; 10% of the database changed; gradual / burst):
+| workload | S | Si | T |
+|---|---|---|---|
+| ESCI 1M | O all configs, both schedules; L A Q gradual (10%) | - | - |
+| SPACEV Zipf 0.6, real log | O L A Q, both schedules (1%; bursts and baseline fresh-seed re-runs not yet summarized) | - | - |
+| SPACEV Zipf 0.3 / 0.99, TriviaQA | not prepared | - | - |
+
+Not covered anywhere: workload + data change together; SPACEV online at 10%
+or ESCI online at 1%; budgets other than 1% / 10% online; k != 10 or T != 0.9
+online; baselines with an inexact backend (the simulator refuses A / Q);
+change rates other than 10%; concurrency (QPS); local NVMe; QVCache timing.
+
+### 9a. Campaign to fill the matrix (launched; results pending)
+
+Code changes:
+- Real Aker harness (`aker_real/eval_aker_real.py`): `--stream` (trace,
+  shift, multishift, random), `--data-change churn|drift --schedule
+  gradual|burst` (inserts reach Aker through its write log, deletes
+  through markVectorDeleted, applied at the request where they are
+  scheduled; the write-log slow path is called after every request as in
+  the authors' integration; truth = first k present ids of the union
+  ranking; returned deleted vectors counted), `--backend-recall`
+  (the simulator's approximate_rows model) and `--backend-file` (real
+  index answers). Fixed-data result reproduced exactly (31.12%).
+- Simulator: Aker / QVCache reimplementations now run with an inexact
+  backend (labels, cache contents and theta from the backend's answers;
+  retention also logged against exact truth). Tests pass (29).
+- Shared float32 copies of the bases (`datasets/aker/<stem>-f32.npy`,
+  memory-mapped by `load_base_f32`; SPACEV 4 GB, SPHERE 31 GB): each
+  SPACEV simulator process no longer holds a private 4 GB copy. `load_base`
+  still returns int8 for SPACEV (DiskANN).
+- Job generators: `online_round2_jobs.py --budget B --preps ...` (folders
+  r2_<stream>_b<B>_s<seed>), `online_data_jobs.py --round 3 --preps ...
+  --budget B` (data_<kind>_<sched>[_b<B>]_s<seed>), new
+  `online_backend_jobs.py` (bk_<stream>_<backend>_s<seed>; simulated recall
+  .95 / .9; real HNSW / IVF on ESCI, DiskANN on SPACEV),
+  `aker_real/aker_real_jobs.py` (results/aker_real/<prep>/<setting>_b<B>/
+  at<a>_d<d>.json; grid alpha_tighten .9 / .25 x delta 0 / 5 / 10, budgets
+  1% / 10%). TriviaQA traces added to the round-2 and backend workloads.
+- Driver: `run_matrix.sh` (copy of /tmp/mx/driver.sh): three pools (heavy:
+  ours / LRU at a 10% SPACEV budget and on TriviaQA, ~17-20 GB each; light:
+  the rest; real Aker), phases gated by the data preps; phase 4 re-runs the
+  best seed-0 baseline settings on seeds 1, 2.
+
+Prep running: SPACEV Zipf 0.99 / 0.3 data-change rankings (top-1000 over
+10M); TriviaQA online prep (top-500 over SPHERE 10M, 768-d), multishift,
+data-change rankings, serialized after the first two top-500 jobs (each
+step ~65 GB; the 0.6 one was killed for memory when started alongside
+everything else, so it now runs alone); real DiskANN answers for the four
+SPACEV traces (recall@10 tuned to .95 / .9).
+Pitfall: SPACEV simulator runs at a 10% budget peak ~20 GB (vs ~2 GB
+private at 1%); 40 of them at once would not fit in 371 GB.
+
+Not in this campaign (timing-sensitive, need a quiet machine): timing under
+shifts and data changes, concurrency (QPS), NVMe.

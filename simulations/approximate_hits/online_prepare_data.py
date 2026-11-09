@@ -103,8 +103,8 @@ def main():
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {"kind": "esci"}
     if meta["kind"] == "trace":
         # SPACEV / SPHERE traces (online_prepare.py --dataset trace)
-        from simulations.approximate_hits.run_e2e_oracle_trace import load_base
-        db = np.asarray(load_base(meta["trace"]), dtype=np.float32)
+        from simulations.approximate_hits.run_e2e_oracle_trace import load_base_f32
+        db = load_base_f32(meta["trace"])
         q = np.load(prep / "q.npy").astype(np.float32)
     else:
         db = np.load(ESCI / f"esci_db{args.n_db}_s42.npy").astype(np.float32)

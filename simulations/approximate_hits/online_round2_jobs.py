@@ -16,10 +16,12 @@ SIM = ".venv/bin/python -u simulations/approximate_hits/online_sim.py"
 WORKLOADS = [("esci1m", "shift", 0.1), ("esci1m", "random", 0.1),
              ("spacev-aker-0.6", "trace", 0.01), ("spacev-aker-0.6", "shift", 0.01),
              ("spacev-aker-0.3", "trace", 0.01), ("spacev-aker-0.99", "trace", 0.01),
-             ("spacev-real", "trace", 0.01)]
+             ("spacev-real", "trace", 0.01)] + \
+    [(f"triviaqa-aker-{z}", "trace", 0.01) for z in ("0.3", "0.6", "0.99")]
 # start mix -> mild shift -> full shift -> return (online_prepare --add-multishift)
 MULTISHIFT = [("esci1m", "multishift", 0.1), ("spacev-aker-0.3", "multishift", 0.01),
-              ("spacev-aker-0.6", "multishift", 0.01), ("spacev-aker-0.99", "multishift", 0.01)]
+              ("spacev-aker-0.6", "multishift", 0.01), ("spacev-aker-0.99", "multishift", 0.01)] + \
+    [(f"triviaqa-aker-{z}", "multishift", 0.01) for z in ("0.3", "0.6", "0.99")]
 DETECT = {"none": "", "score": "score", "retention": "retention", "hitrate": "hitrate",
           "all": "score retention hitrate"}
 
@@ -45,7 +47,17 @@ def baselines():
                f"--method qvcache --qv-D {D} --qv-mini {m} --qv-dims {dims} --qv-buckets {bk}")
 
 
-def best_baseline_jobs(seeds):
+def sub(stream, budget_override):
+    """Results folder name: r2_<stream> (default budgets) or r2_<stream>_b<B>."""
+    return f"r2_{stream}" if budget_override is None else f"r2_{stream}_b{budget_override:g}"
+
+
+def pick(workloads, budget_override, preps):
+    return [(p, s, b if budget_override is None else budget_override)
+            for p, s, b in workloads if preps is None or p in preps]
+
+
+def best_baseline_jobs(seeds, budget_override=None, preps=None):
     """Best Aker / QVCache setting per workload on seed 0 (highest hit rate
     among settings whose mean served retention >= T, else the highest
     retention), re-run on fresh seeds so the reported numbers are not selected on
@@ -57,8 +69,8 @@ def best_baseline_jobs(seeds):
     from online_summary import summarize
     grids = dict(baselines())
     out = []
-    for prep, stream, budget in WORKLOADS + MULTISHIFT:
-        d0 = Path(f"{RES}/{prep}/r2_{stream}_s0")
+    for prep, stream, budget in pick(WORKLOADS + MULTISHIFT, budget_override, preps):
+        d0 = Path(f"{RES}/{prep}/{sub(stream, budget_override)}_s0")
         for fam in ("aker", "qvcache"):
             rows = []
             for name in grids:
@@ -73,7 +85,7 @@ def best_baseline_jobs(seeds):
                     max(rows, key=lambda x: x[1]["ret"] or 0.0))[0]
             tag = name.split("_", 1)[1]
             for seed in seeds:
-                o = f"{RES}/{prep}/r2_{stream}_s{seed}"
+                o = f"{RES}/{prep}/{sub(stream, budget_override)}_s{seed}"
                 out.append(f"mkdir -p {o}/logs && [ -f {o}/{name}.json ] || "
                            f"{SIM} --prep {RES}/{prep} --stream {stream} --budget {budget} "
                            f"--seed {seed} {grids[name]} --tag _{tag} --out {o} "
@@ -88,15 +100,19 @@ def main():
     ap.add_argument("--multishift", action="store_true", help="the multishift workloads")
     ap.add_argument("--best-baselines", type=int, nargs="*", default=None,
                     help="only re-run the best seed-0 Aker / QVCache settings on these seeds")
+    ap.add_argument("--budget", type=float, default=None,
+                    help="override every workload's budget (results in r2_<stream>_b<B>_s<seed>)")
+    ap.add_argument("--preps", nargs="*", default=None, help="only these preps")
     args = ap.parse_args()
     if args.best_baselines:
-        for cmd in best_baseline_jobs(args.best_baselines):
+        for cmd in best_baseline_jobs(args.best_baselines, args.budget, args.preps):
             print(cmd)
         return
     jobs = []
-    for prep, stream, budget in (MULTISHIFT if args.multishift else WORKLOADS):
+    for prep, stream, budget in pick(MULTISHIFT if args.multishift else WORKLOADS,
+                                     args.budget, args.preps):
         for seed in sorted(set(args.seeds) | set(args.baseline_seeds)):
-            out = f"{RES}/{prep}/r2_{stream}_s{seed}"
+            out = f"{RES}/{prep}/{sub(stream, args.budget)}_s{seed}"
             confs = (list(ours()) if seed in args.seeds else []) + \
                 (list(baselines()) if seed in args.baseline_seeds else [])
             for name, flags in confs:

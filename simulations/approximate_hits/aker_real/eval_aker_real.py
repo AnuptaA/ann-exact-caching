@@ -112,28 +112,119 @@ class Aker:
         self.lib.shim_destroy(self.h)
 
 
-def load(prep):
+def load(prep, stream_name="trace", native=False):
+    """native: the database in its stored type (int8 for SPACEV, as the DiskANN
+    index takes it); else float32 (a shared memory map when available)."""
     meta = json.loads((prep / "meta.json").read_text())
-    from simulations.approximate_hits.run_e2e_oracle_trace import AKER as AK, WORKLOADS
-    db = np.load(AK / WORKLOADS[meta["trace"]]["base"], mmap_mode="r")
+    from simulations.approximate_hits.run_e2e_oracle_trace import load_base, load_base_f32
+    db = load_base(meta["trace"]) if native else load_base_f32(meta["trace"])
     q = np.ascontiguousarray(np.load(prep / "q.npy"), dtype=np.float32)
     top = np.load(prep / "top500.npy", mmap_mode="r")
-    stream = np.load(prep / "streams.npz")["trace"]
+    stream = np.load(prep / "streams.npz")[stream_name]
     return db, q, top, stream
 
 
-def run_quality(args, db, q, top, stream, answers=None):
-    """Replay the stream; backend answers from `answers` (n_queries x >= k + delta ids)
-    or the exact top-500."""
+class World:
+    """The database and the backend, as in online_sim.py's load():
+    truth(qi, n) = first n present ids of the exact ranking; answer(qi, n) =
+    the backend's (exact, or with --backend-recall < 1 the simulator's
+    approximate_rows model: each vector missed independently per query);
+    with --data-change the database starts at the initial presence mask and
+    events(i) returns the inserts / deletes scheduled at or before request i
+    (applied before it, one request at a time)."""
+
+    def __init__(self, args, prep, top):
+        from simulations.approximate_hits.online_sim import approximate_rows, measured_recall
+        self.present, self.ev = None, None
+        kind = args.data_change
+        if kind != "none":
+            topU = np.load(prep / "topU1000.npy")
+            extra = np.load(prep / f"rank_extra_{kind}.npz")
+            width = extra["rows"].shape[1] if len(extra["flagged"]) else topU.shape[1]
+            rank = np.full((len(topU), width), -1, dtype=np.int32)
+            rank[:, :topU.shape[1]] = topU
+            if len(extra["flagged"]):
+                rank[extra["flagged"]] = extra["rows"]
+            dc = np.load(prep / f"data_{kind}.npz")
+            n = len(dc["ins_ids"])
+            if args.schedule == "burst":
+                t_ins = t_del = np.full(n, int(dc["burst_at"]))
+            else:
+                t_ins, t_del = dc["ins_t"], dc["del_t"]
+            t = np.r_[t_ins, t_del]
+            order = np.argsort(t, kind="stable")
+            self.ev = {"t": t[order], "id": np.r_[dc["ins_ids"], dc["del_ids"]][order],
+                       "insert": np.r_[np.ones(n, bool), np.zeros(n, bool)][order]}
+            self.ev_i = 0
+            self.present = dc["initial"].copy()
+            self.truth_rows = rank
+        elif args.backend_recall < 1.0:
+            self.truth_rows = np.load(prep / "topU1000.npy")
+        else:
+            self.truth_rows = top
+        if args.backend_file:
+            # a real index (eval_real_backend.py): its top-20 answers at the
+            # search effort tuned to --backend-target recall@10
+            if kind != "none":
+                raise SystemExit("real-index backends support a fixed database only")
+            z = np.load(args.backend_file)
+            self.answer_rows = z[f"answer_{args.backend_target}"]
+            if self.answer_rows.shape[1] < args.k + args.delta:
+                raise SystemExit("answer rows shallower than k + delta")
+            self.recall_measured = measured_recall(np.asarray(self.truth_rows),
+                                                   self.answer_rows, args.k)
+        elif args.backend_recall < 1.0:
+            self.answer_rows = approximate_rows(np.asarray(self.truth_rows), args.backend_recall,
+                                                args.backend_seed)
+            self.recall_measured = measured_recall(np.asarray(self.truth_rows),
+                                                   self.answer_rows, args.k)
+        else:
+            self.answer_rows = self.truth_rows
+            self.recall_measured = 1.0
+
+    def _first(self, rows, qi, n):
+        r = rows[qi]
+        m = r >= 0
+        if self.present is not None:
+            m &= self.present[np.maximum(r, 0)]
+        ids = r[m][:n]
+        if len(ids) < n:            # pad (rare: fewer than n present / returned)
+            ids = np.r_[ids, np.full(n - len(ids), ids[-1] if len(ids) else r[0])]
+        return np.asarray(ids, dtype=np.int64)
+
+    def truth(self, qi, n):
+        return self._first(self.truth_rows, qi, n)
+
+    def answer(self, qi, n):
+        return self._first(self.answer_rows, qi, n)
+
+    def events(self, i):
+        """(inserted ids, deleted ids) scheduled at or before request i, not yet applied."""
+        if self.ev is None:
+            return None, None
+        j = int(np.searchsorted(self.ev["t"], i, side="right"))
+        if j <= self.ev_i:
+            return None, None
+        sl = slice(self.ev_i, j)
+        ins, ids = self.ev["insert"][sl], self.ev["id"][sl]
+        self.ev_i = j
+        self.present[ids[ins]] = True
+        self.present[ids[~ins]] = False
+        return ids[ins], ids[~ins]
+
+
+def run_quality(args, db, q, world, stream):
+    """Replay the stream against World (truth, backend answers, data changes)."""
     k, delta = args.k, args.delta
     n_neigh = k + delta
     pool = int(args.budget * len(db))
     ak = Aker(q.shape[1], pool, k, delta, args.risk, args.alpha_tighten, args.alpha_loosen)
-    src = top if answers is None else answers
+    changing = world.ev is not None
     KIND = {1: "exact", 2: "approx", 4: "linked"}
 
     def fresh():
-        c = {"n": 0, "served": 0, "ret": 0.0, "ret_b": 0.0}
+        c = {"n": 0, "served": 0, "ret": 0.0, "ret_b": 0.0, "deleted_returned": 0,
+             "events": 0}
         for name in KIND.values():
             c[name], c["ret_" + name] = 0, 0.0
         return c
@@ -142,11 +233,13 @@ def run_quality(args, db, q, top, stream, answers=None):
         log.append({"t": t, "n": cur["n"], "served": cur["served"],
                     "served_retention_sum": cur["ret"],
                     "served_retention_backend_sum": cur["ret_b"],
+                    "deleted_returned": cur["deleted_returned"], "events": cur["events"],
                     **{f"hits_{nm}": cur[nm] for nm in KIND.values()},
                     **{f"retention_sum_{nm}": cur["ret_" + nm] for nm in KIND.values()}})
 
     log, cur = [], fresh()
-    lat = {"lookup_hit": [], "lookup_miss": [], "link": [], "insert": []}
+    lat = {"lookup_hit": [], "lookup_miss": [], "link": [], "insert": [], "write": [],
+           "delete": [], "process": []}
     stats = {"miss": 0, "hit_exact": 0, "hit_approx": 0, "hit_linked": 0, "invalid": 0,
              "insert_failed": 0}
     n_req = len(stream) if args.max_requests is None else min(args.max_requests, len(stream))
@@ -156,15 +249,31 @@ def run_quality(args, db, q, top, stream, answers=None):
             logger.info(f"{i} requests, {time.time() - t_start:.0f} s, {stats}")
         qi = int(stream[i])
         qv = q[qi]
-        kind, ids, t_look, t_link = ak.lookup(qi + 1, qv)
         measure = i >= args.warmup
+        ins, dels = world.events(i)
+        if ins is not None:
+            # database changes reach Aker as they happen: inserts through its
+            # write log (fast path), deletes through markVectorDeleted
+            for vid in ins:
+                tw = ak.write(int(vid) + 1, np.ascontiguousarray(db[vid], dtype=np.float32))
+                if measure:
+                    lat["write"].append(tw)
+            for vid in dels:
+                td = ak.delete(int(vid) + 1)
+                if measure:
+                    lat["delete"].append(td)
+            if measure:
+                cur["events"] += len(ins) + len(dels)
+        kind, ids, t_look, t_link = ak.lookup(qi + 1, qv)
         if kind in KIND:
             if measure:
                 got = ids - 1
-                r = np.isin(got, top[qi, :k]).mean()
+                r = np.isin(got, world.truth(qi, k)).mean()
                 cur["served"] += 1
                 cur["ret"] += r
-                cur["ret_b"] += np.isin(got, src[qi, :k]).mean()
+                cur["ret_b"] += np.isin(got, world.answer(qi, k)).mean()
+                if changing:
+                    cur["deleted_returned"] += int((~world.present[got]).sum())
                 cur[KIND[kind]] += 1
                 cur["ret_" + KIND[kind]] += r
                 lat["lookup_hit"].append(t_look)
@@ -173,13 +282,18 @@ def run_quality(args, db, q, top, stream, answers=None):
             stats["hit_" + KIND[kind]] += 1
         else:
             stats["miss" if kind == 0 else "invalid"] += 1
-            nid = np.ascontiguousarray(src[qi, :n_neigh], dtype=np.int64)
+            nid = world.answer(qi, n_neigh)
             nvec = np.ascontiguousarray(db[nid], dtype=np.float32)
             ok, t_ins = ak.insert(qi + 1, qv, nid + 1, nvec)
             stats["insert_failed"] += 0 if ok else 1
             if measure:
                 lat["lookup_miss"].append(t_look)
                 lat["insert"].append(t_ins)
+        if changing:
+            # write-log slow path, called after each request as in the authors' integration
+            tp = ak.process()
+            if measure:
+                lat["process"].append(tp)
         if measure:
             cur["n"] += 1
             if cur["n"] == args.batch:
@@ -200,6 +314,8 @@ def run_quality(args, db, q, top, stream, answers=None):
             "retention_by_kind": {nm: sum(b[f"retention_sum_{nm}"] for b in log)
                                   / max(sum(b[f"hits_{nm}"] for b in log), 1)
                                   for nm in KIND.values()},
+            "deleted_returned": sum(b["deleted_returned"] for b in log),
+            "backend_recall_measured": world.recall_measured,
             "queries": n, "seconds": time.time() - t_start,
             "mean_ms": {k_: float(np.mean(v) * 1e3) if v else None for k_, v in lat.items()},
             "stats": stats}
@@ -290,6 +406,17 @@ def main():
     ap.add_argument("--max-requests", type=int, default=None)
     ap.add_argument("--progress", type=int, default=5000, help="log every this many requests")
     ap.add_argument("--out", type=str, default=None)
+    ap.add_argument("--stream", choices=["trace", "random", "shift", "multishift"],
+                    default="trace", help="request stream of the prep (streams.npz)")
+    ap.add_argument("--data-change", choices=["none", "churn", "drift"], default="none",
+                    help="database inserts / deletes (online_prepare_data.py)")
+    ap.add_argument("--schedule", choices=["gradual", "burst"], default="gradual")
+    ap.add_argument("--backend-recall", type=float, default=1.0,
+                    help="simulated approximate backend (online_sim.approximate_rows)")
+    ap.add_argument("--backend-seed", type=int, default=123)
+    ap.add_argument("--backend-file", type=str, default=None,
+                    help="real-index answers (results/backends/<prep>/<index>.npz)")
+    ap.add_argument("--backend-target", type=str, default="0.95")
     ap.add_argument("--timing", action="store_true",
                     help="end-to-end timing with real DiskANN on misses (run_timing)")
     ap.add_argument("--n", type=int, default=1000, help="timing: requests timed after warm-up")
@@ -299,14 +426,21 @@ def main():
     args = ap.parse_args()
     sys.path.append(str(HERE.parent.parent.parent))
     prep = Path(args.prep)
-    db, q, top, stream = load(prep)
+    db, q, top, stream = load(prep, args.stream, native=args.timing)
     if args.timing:
         res = run_timing(args, db, q, top, stream)
         if args.out:
             Path(args.out).parent.mkdir(parents=True, exist_ok=True)
             Path(args.out).write_text(json.dumps(res, indent=1))
         return
-    res = run_quality(args, db, q, top, stream)
+    res = run_quality(args, db, q, World(args, prep, top), stream)
+    phase_key = f"phase_{args.stream}" if args.stream != "trace" else None
+    streams = np.load(prep / "streams.npz")
+    if phase_key in streams.files or (args.stream == "shift" and "phase" in streams.files):
+        ph = streams[phase_key if phase_key in streams.files else "phase"][:len(stream)]
+        res["phase_start"] = int(np.argmax(ph == 1))
+        res["phase_starts"] = [0] + (np.flatnonzero(np.diff(ph)) + 1).tolist()
+
     s = res["summary"]
     logger.info(f"hit rate {s['hit_rate']:.4f} (exact {s['exact_hit_share']:.4f}, approx "
                 f"{s['approx_hit_share']:.4f}, linked {s['linked_hit_share']:.4f}), retention "

@@ -867,8 +867,8 @@ def load(prep, args):
     meta_path = Path(prep) / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {"kind": "esci"}
     if meta["kind"] == "trace":
-        from simulations.approximate_hits.run_e2e_oracle_trace import load_base
-        db = np.asarray(load_base(meta["trace"]), dtype=np.float32)
+        from simulations.approximate_hits.run_e2e_oracle_trace import load_base_f32
+        db = load_base_f32(meta["trace"])
         q = np.load(Path(prep) / "q.npy").astype(np.float32)
     else:
         db = np.load(ESCI / f"esci_db{meta.get('n_db', args.n_db)}_s42.npy").astype(np.float32)
@@ -1050,8 +1050,6 @@ def main():
         args.alarm_audit_rate = args.audit_rate
     if args.method == "lru":
         args.response = "recal"
-    if args.method in ("aker", "qvcache") and (args.backend_recall < 1.0 or args.backend_file):
-        raise SystemExit("baselines are not yet supported with an approximate backend")
     if args.method in ("aker", "qvcache"):
         from simulations.approximate_hits import online_baselines as ob
         cls = ob.Aker if args.method == "aker" else ob.QVCache
