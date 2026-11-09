@@ -28,11 +28,14 @@ IVF-Flat, nlist 4096; the algorithm of pgvector's IVFFlat), diskann
 (answer / deep rows per target, measured recall, tuned setting) and .json.
 """
 
+import sys
 import json
 import time
 import argparse
 import logging
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
@@ -55,8 +58,14 @@ GRIDS = {"hnsw": [10, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, 128, 160, 200, 256
 def load(prep):
     meta = json.loads((prep / "meta.json").read_text()) if (prep / "meta.json").exists() \
         else {"kind": "esci", "n_db": 1000000}
-    if meta["kind"] != "esci":
-        raise SystemExit("only ESCI so far")
+    if meta["kind"] == "trace":
+        # SPACEV: 8-bit integer vectors kept as they are (DiskANN builds an
+        # 8-bit index; queries are integer-valued); truth = exact top-500
+        from simulations.approximate_hits.run_e2e_oracle_trace import load_base
+        db = load_base(meta["trace"])
+        q = np.ascontiguousarray(np.load(prep / "q.npy"), dtype=np.float32)
+        truth = np.load(prep / "top500.npy")
+        return db, q, truth
     db = np.ascontiguousarray(np.load(ESCI / f"esci_db{meta['n_db']}_s42.npy"), dtype=np.float32)
     q = np.ascontiguousarray(np.load(ESCI / "esci_queries.npy"), dtype=np.float32)
     truth = np.load(prep / "topU1000.npy")
@@ -71,6 +80,7 @@ def recall(truth, ids, k):
 class Index:
     def __init__(self, kind, db, args, work):
         self.kind, self.threads = kind, args.threads
+        self.qdtype = db.dtype if db.dtype in (np.int8, np.uint8) else np.float32
         t0 = time.time()
         if kind == "hnsw":
             import faiss
@@ -92,7 +102,7 @@ class Index:
                 gb = args.diskann_pq_bytes * len(db) / 1e9
                 diskannpy.build_disk_index(
                     data=db, distance_metric="l2", index_directory=str(d), complexity=100,
-                    graph_degree=64, search_memory_maximum=gb, build_memory_maximum=64.0,
+                    graph_degree=64, search_memory_maximum=gb, build_memory_maximum=args.build_gb,
                     num_threads=args.threads, pq_disk_bytes=0, index_prefix="ann")
             self.ix = diskannpy.StaticDiskIndex(
                 index_directory=str(d), num_threads=args.threads, num_nodes_to_cache=0,
@@ -107,6 +117,7 @@ class Index:
         if self.kind == "ivf":
             self.ix.nprobe = effort
             return self.ix.search(q, k)[1]
+        q = q.astype(self.qdtype)
         ids, _ = self.ix.batch_search(q, k_neighbors=k, complexity=max(effort, k),
                                       beam_width=2, num_threads=self.threads)
         return ids.astype(np.int64)
@@ -145,14 +156,28 @@ def main():
     ap.add_argument("--tune-queries", type=int, default=5000)
     ap.add_argument("--diskann-pq-bytes", type=int, default=32)
     ap.add_argument("--threads", type=int, default=32)
+    ap.add_argument("--build-gb", type=float, default=64.0, help="DiskANN build memory cap")
+    ap.add_argument("--out-name", type=str, default=None,
+                    help="results/backends/<name> (default: the --prep folder's name; "
+                         "SPACEV traces share one database: spacev10m)")
+    ap.add_argument("--build-only", action="store_true",
+                    help="build the index and report recall at --build-effort, no tuning")
+    ap.add_argument("--build-effort", type=int, default=128)
     args = ap.parse_args()
     prep = Path(args.prep)
-    out = RES / "backends" / prep.name
+    out = RES / "backends" / (args.out_name or prep.name)
     out.mkdir(parents=True, exist_ok=True)
     db, q, truth = load(prep)
     ix = Index(args.index, db, args, out)
     rng = np.random.default_rng(1)
     tune = rng.choice(len(q), args.tune_queries, replace=False)
+    if args.build_only:
+        r = recall(truth[tune], ix.search(q[tune], args.k, args.build_effort), args.k)
+        info = {"index": args.index, "build_s": ix.build_s, "pq_bytes": args.diskann_pq_bytes,
+                "effort": args.build_effort, "recall_at_k": r, "n_db": len(db)}
+        (out / f"{args.index}_build.json").write_text(json.dumps(info, indent=1))
+        logger.info(f"built: {info}")
+        return
     curve = {}
     for e in GRIDS[args.index]:
         t0 = time.time()

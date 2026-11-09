@@ -32,11 +32,14 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 
+import sys
 import json
 import time
 import argparse
 import logging
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
@@ -59,7 +62,7 @@ class HitPath:
 
     def __init__(self, db, q, st):
         self.k = int(st["k"])
-        self.cv = np.ascontiguousarray(db[st["cached_ids"]], dtype=np.float32)
+        self.cv = np.ascontiguousarray(db[np.sort(st["cached_ids"])], dtype=np.float32)
         self.cv_sq = (self.cv * self.cv).sum(axis=1)
         self.ids = st["cached_ids"]
         self.cq = np.ascontiguousarray(q[st["centers"]], dtype=np.float32)
@@ -127,7 +130,7 @@ class FastHitPath(HitPath):
     def __init__(self, db, q, st, knn, shell):
         super().__init__(db, q, st)
         import faiss
-        faiss.omp_set_num_threads(1)
+        faiss.omp_set_num_threads(32)       # building only; searches below use 1
         self.knn_mode, self.shell_mode = knn, shell
         self.extra_bytes = 0
         if knn.startswith("hnsw"):
@@ -137,6 +140,7 @@ class FastHitPath(HitPath):
             self.hnsw.hnsw.efSearch = int(knn[4:])
             # graph links (FAISS stores M neighbors per level, 2 M at level 0)
             self.extra_bytes += int(self.hnsw.hnsw.neighbors.size() * 4)
+        faiss.omp_set_num_threads(1)
         if shell == "sq4":
             quant = faiss.IndexFlatL2(self.sv.shape[1])
             self.sq = faiss.IndexIVFScalarQuantizer(quant, self.sv.shape[1], 1,
@@ -245,6 +249,7 @@ def open_diskann(path, nodes, init_threads=32):
 
 
 def time_backend(ix, xs, k, L):
+    """Latency of one DiskANN search per query (xs already in the index's dtype)."""
     lat = np.empty(len(xs))
     for i, x in enumerate(xs):
         a = time.perf_counter()
@@ -273,11 +278,24 @@ def main():
                          "brute+sq4 brute+balls hnsw32+balls (no backend arms)")
     args = ap.parse_args()
     st = dict(np.load(args.state))
-    db = np.load(ESCI / "esci_db1000000_s42.npy").astype(np.float32)
-    q = np.load(ESCI / "esci_queries.npy").astype(np.float32)
+    prep = Path(args.prep)
+    meta = json.loads((prep / "meta.json").read_text()) if (prep / "meta.json").exists() \
+        else {"kind": "esci"}
+    if meta["kind"] == "trace":
+        # SPACEV: 8-bit integer vectors, memory-mapped (only cached rows are read);
+        # DiskANN is an 8-bit index, so its queries are cast to 8 bits (exact:
+        # the queries are integer-valued)
+        from simulations.approximate_hits.run_e2e_oracle_trace import AKER, WORKLOADS
+        db = np.load(AKER / WORKLOADS[meta["trace"]]["base"], mmap_mode="r")
+        q = np.load(prep / "q.npy").astype(np.float32)
+    else:
+        db = np.load(ESCI / "esci_db1000000_s42.npy").astype(np.float32)
+        q = np.load(ESCI / "esci_queries.npy").astype(np.float32)
     test_q = st["test_q"][:args.n]
     xs = np.ascontiguousarray(q[test_q])
     k = int(st["k"])
+    idx_dtype = db.dtype if db.dtype in (np.int8, np.uint8) else np.float32
+    xd = np.ascontiguousarray(xs.astype(idx_dtype))     # queries as the DiskANN index takes them
     if args.variants:
         res = {"state": args.state, "n": len(xs), "variants": run_variants(args, db, q, st, xs)}
         out = Path(args.state).with_name(f"variants_{Path(args.state).stem}.json")
@@ -290,7 +308,7 @@ def main():
     knn, shell = args.decision.split("+")
     hp = FastHitPath(db, q, st, knn, shell)
     cache_bytes = int(sum(hp.bytes.values())) + hp.extra_bytes
-    node_bytes = db.shape[1] * 4 + 4 + 64 * 4
+    node_bytes = db.shape[1] * np.dtype(idx_dtype).itemsize + 4 + 64 * 4   # vector + 64 neighbor ids
     n_nodes = cache_bytes // node_bytes
     logger.info(f"decision {args.decision}; cache memory {cache_bytes / 1e6:.1f} MB "
                 f"({hp.bytes}, index {hp.extra_bytes}); equal-memory DiskANN node cache: "
@@ -306,9 +324,9 @@ def main():
     # end to end, measured directly: each query runs the hit decision and,
     # on a miss, the DiskANN search, timed together in one loop
     ix = open_diskann(args.diskann, 0)
-    for x in xs[:args.warm]:
+    for x, xq in zip(xs[:args.warm], xd[:args.warm]):
         if not hp.decide(x, zero())[0]:
-            ix.search(x, k_neighbors=k, complexity=args.L, beam_width=2)
+            ix.search(xq, k_neighbors=k, complexity=args.L, beam_width=2)
     t = zero()
     hits = np.zeros(len(xs), dtype=bool)
     dec_t = np.empty(len(xs))
@@ -318,7 +336,7 @@ def main():
         hits[i] = hp.decide(x, t)[0]
         b = time.perf_counter()
         if not hits[i]:
-            ix.search(x, k_neighbors=k, complexity=args.L, beam_width=2)
+            ix.search(xd[i], k_neighbors=k, complexity=args.L, beam_width=2)
         total[i] = time.perf_counter() - a
         dec_t[i] = b - a
     res["hit_rate"] = float(hits.mean())
@@ -334,8 +352,8 @@ def main():
         if arm == "backend_mem":
             del ix
             ix = open_diskann(args.diskann, nodes)
-        time_backend(ix, xs[:args.warm], k, args.L)
-        lat = time_backend(ix, xs, k, args.L)
+        time_backend(ix, xd[:args.warm], k, args.L)
+        lat = time_backend(ix, xd, k, args.L)
         res[arm] = dict(summary(lat), nodes_cached=int(nodes))
         logger.info(f"{arm}: {res[arm]}")
     m = res["backend"]["mean_ms"]

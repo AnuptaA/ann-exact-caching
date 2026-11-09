@@ -1798,6 +1798,48 @@ else highest retention); 1% budget; `online_data_summary.py --prep <prep>`:
   .71-.81 (drift).
 Bursts and fresh-seed baseline re-runs: finished, not yet summarized.
 
+## 5ae. Timing on SPACEV Zipf traces (repeated requests; DiskANN on EBS)
+
+Setup: DiskANN 8-bit index over the SPACEV 10M base (100 dims, 100 bytes per
+vector; graph degree 64, build list 100, 32-byte in-memory compressed codes;
+built in 10 minutes, 5.7 GB on disk, recall@10 = .943 at search list 128;
+`eval_real_backend.py --build-only --out-name spacev10m`, shared by all
+SPACEV traces). Cache states from `online_sim.py --stream trace --shell-scope
+balls --shell-balls 10` after the 20k-query warm-up; timed on the next 3000
+requests of the trace (some repeat warm-up requests: Zipf 0.99 trace, 34% of
+requests repeat an earlier one). Same harness as 5ac (decision: HNSW 32 over
+cached vectors + intruders over 10 balls; DiskANN on misses; single
+thread). Cached vectors are held as float32 here (400 bytes each) although
+the data is 8-bit; "equal memory" gives DiskANN a node cache (360 bytes per
+node) of our full memory incl. the HNSW graph.
+| | Zipf 0.99, 1% | Zipf 0.99, 10% | Zipf 0.6, 1% | Zipf 0.6, 10% |
+|---|---|---|---|---|
+| our memory (vectors / shell / HNSW graph), MB | 64 (35 / 6 / 22) | 562 (336 / 7 / 214) | 64 (35 / 6 / 22) | 591 (347 / 17 / 221) |
+| hit rate (decisions agree with simulator) | 50.9% (100%) | 61.8% (99.5%) | 13.5% (99.8%) | 23.0% (99.7%) |
+| hit decision | 0.30 ms | 0.43 ms | 0.39 ms | 0.51 ms |
+| DiskANN alone, mean / p99 | 51.4 / 65.8 ms | 51.7 / 67.6 | 52.7 / 71.5 | 51.0 / 65.9 |
+| cache + DiskANN, mean / p99 | 25.8 / 62.7 | 20.3 / 60.5 | 46.7 / 71.9 | 40.1 / 65.7 |
+| DiskANN with our memory, mean / p99 | 48.0 / 63.2 | 43.8 / 59.3 | 48.0 / 66.2 | 42.6 / 59.7 |
+| overall speedup (limit 1 / (1 - h)) | 1.99x (2.04x) | 2.55x (2.62x) | 1.13x (1.16x) | 1.27x (1.30x) |
+| per-hit speedup; extra cost per miss | 176x; +0.78 ms | 124x; +0.62 ms | 137x; +1.21 ms | 102x; +0.92 ms |
+| vs DiskANN with our memory | 1.86x | 2.16x | 1.03x | 1.06x |
+- The overall speedup is again within 2-4% of the 1 / (1 - h) limit; the gain
+  is decided by the hit rate: 2.0-2.6x at skew 0.99, 1.1-1.3x at 0.6.
+- The hit decision stays under 0.6 ms even with 850k cached vectors.
+- Versus DiskANN given the same memory the gain is 1.9-2.2x at 0.99 and only
+  1.03-1.06x at 0.6.
+- The HNSW graph is 38-39% of our memory at 100 dimensions (22 of 64 MB at
+  1%; 214 of 562 MB at 10%; M = 32), more than at 384 dimensions (12%).
+  Smaller M, or storing cached vectors as 8-bit, would change the totals;
+  not tried.
+- p99 is about unchanged (misses pay the decision).
+- Hit rates here are those of 3000 post-warm-up requests; they match the
+  simulator's longer runs (about 50% and 13% at 1%). No updates during the
+  timed requests (static cache).
+- Comparison with Aker's paper (different hardware and backend): its up to
+  2-3x QPS at skew 0.99 on pgvector and, on DiskANN over SPACEV (3.7 ms per
+  search there), improvement only at 0.99.
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes
