@@ -348,3 +348,21 @@ def test_shell_scope_balls_matches_all_with_three_entries_and_is_subset():
     X_b, _ = c.features(qidx)
     assert np.allclose(X_all[:, :6], X_b[:, :6])   # ball features unchanged
     assert (X_b[:, 6] <= X_all[:, 6] + 1e-12).all()   # restricted count <= full count
+
+
+def test_shell_balls_count_grows_with_balls_and_reaches_full_count():
+    D = _data()
+    c = osim.Cache(D, k=5, R=60, bits=32, budget=1e9)
+    for i in range(8):
+        c.add(i, 20)
+    c.p = 1.0
+    qidx = np.arange(10, 20)
+    c.shell_scope = "all"
+    full = c.features(qidx)[0][:, 6]
+    counts = {}
+    for nb in (3, 5, 8):
+        c.shell_scope, c.shell_balls = "balls", nb
+        X, _ = c.features(qidx)
+        counts[nb] = X[:, 6]
+    assert (counts[3] <= counts[5] + 1e-12).all() and (counts[5] <= counts[8] + 1e-12).all()
+    assert np.allclose(counts[8], full)            # all 8 balls: the whole shell sample

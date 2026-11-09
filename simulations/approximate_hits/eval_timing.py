@@ -120,8 +120,8 @@ class FastHitPath(HitPath):
              cached vectors, so the neighborhood radius can be a bit larger
       shell  "fp32" (scan every shell vector at full precision, as above),
              "sq4" (scan the 4-bit codes themselves: FAISS 4-bit scalar
-             quantizer, one list, radius search), or "balls" (scan only the
-             sampled shell vectors of the 3 best-fitting balls)
+             quantizer, one list, radius search), or "balls<n>" (scan only
+             the sampled shell vectors of the n best-fitting balls; "balls" = 3)
     """
 
     def __init__(self, db, q, st, knn, shell):
@@ -146,8 +146,9 @@ class FastHitPath(HitPath):
             self.sq.train(raw)
             self.sq.add(raw)
             self.sq.nprobe = 1
-        if shell == "balls":
+        if shell.startswith("balls"):
             self.es, self.eo = st["entry_samp"], st["entry_samp_off"]
+            self.nb = int(shell[5:] or 3)
 
     def decide(self, x, t):
         k = self.k
@@ -180,7 +181,10 @@ class FastHitPath(HitPath):
             lims, _, _ = self.sq.range_search(x[None], nr * nr)
             cnt = int(lims[1])
         else:
-            pos = np.unique(np.concatenate([self.es[self.eo[e]:self.eo[e + 1]] for e in best]))
+            sel = best if self.nb <= m else (
+                np.argpartition(fit, self.nb - 1)[:self.nb] if self.nb < len(fit)
+                else np.arange(len(fit)))
+            pos = np.unique(np.concatenate([self.es[self.eo[e]:self.eo[e + 1]] for e in sel]))
             cnt = int(((self.sv_sq[pos] - 2.0 * (self.sv[pos] @ x) + x_sq) < nr * nr).sum()) \
                 if len(pos) else 0
         f[-1] = np.log1p(cnt)

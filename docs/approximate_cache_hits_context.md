@@ -1692,6 +1692,42 @@ count):
 Open: recover the hit rate lost at 10% (more balls in the count, or an
 index over the shell sample); measure end to end directly.
 
+Intruder count over more balls (`--shell-balls n`; the model is refit and
+recalibrated for each; HNSW 32 for the nearest cached vectors; hit rate
+and retention from the simulator, decision time from the timing harness;
+overall = decision + (1 - hit rate) x DiskANN time, 49.6 / 50.1 ms; one
+seed, ESCI stationary, 60k queries):
+| budget | intruders over | hit % | retention | decision ms | overall ms | per-hit ms | per-miss ms |
+|---|---|---|---|---|---|---|---|
+| 1% | whole shell | 9.9 | .918 | 0.82 | | | |
+| 1% | 3 / 5 / 10 / 20 balls | 8.9 / 9.1 / 9.1 / 9.2 | .922 / .917 / .918 / .920 | .21 / .20 / .24 / .30 | 45.4 / 45.3 / 45.3 / 45.3 | .2-.3 | 49.8-49.9 |
+| 10% | whole shell | 30.1 | .912 | 12.7 | | | |
+| 10% | 3 / 5 / 10 / 20 balls | 26.2 / 26.8 / 27.3 / 27.9 | .909 / .908 / .908 / .908 | .51 / .54 / .65 / .86 | 37.5 / 37.2 / 37.1 / 37.0 | .5-.9 | 50.6-51.0 |
+- More balls recover only part of the lost hit rate (10%: +0.5-0.6 points
+  per doubling of balls; 20 balls still 2.2 below the whole shell) and cost
+  more time; overall latency is flat (37.5 -> 37.0 ms). The whole-shell
+  count's extra 2.2 hits-points are worth about 1.1 ms but cost 12 ms.
+  Default for now: 10 balls.
+- Overall saving per query = hit rate x backend time - decision time
+  (a hit saves the backend call; every query pays the decision), so the
+  break-even hit rate is decision / backend time: 0.4-0.6% at 1%, 1.0-1.7%
+  at 10% now, vs 49% at 10% before the fixes (24.6 / 50.1).
+- Speedup on the queries that hit only: backend 49.6-50.1 ms vs 0.2-0.9 ms,
+  about 60-250x; misses pay 0.2-0.9 ms extra (0.4-1.7%). Overall mean:
+  9% faster at 1%, 26% faster at 10%.
+- Aker's evaluation (section 5.3): overall QPS across workload skew (hit
+  ratio rises with skew); overhead reported separately (lookup < 0.1 ms,
+  a miss adds < 1 ms incl. entry insert); on DiskANN over SPACEV (3.7 ms per
+  search) it says at low skew the hit rate "is not high enough to amortize"
+  the lookup cost and QPS improves only at skew 0.99; on pgvector up to
+  2-3x QPS; read amplification (pages read per query) and memory against
+  the pgvector shared buffer.
+Open: measure end to end directly with the final decision path (HNSW + 10
+balls) and equal memory (DiskANN's node cache also charged the HNSW graph);
+throughput under concurrency (QPS, as Aker reports); workloads with
+repeated requests (SPACEV Zipf), where the hit rate is far higher (needs a
+DiskANN index over 10M vectors).
+
 ## 6. Radius-estimation findings so far
 
 End-to-end comparison (`eval_radius_baselines.py`, writes

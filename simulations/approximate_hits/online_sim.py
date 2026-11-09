@@ -189,6 +189,7 @@ class Cache:
         self.k, self.R, self.bits, self.budget = k, R, bits, budget
         self.maintain = maintain
         self.shell_scope = "all"     # intruder count over the whole shell sample, or "balls"
+        self.shell_balls = 3         # how many best-fitting balls (scope "balls")
         self.n_db = len(D["db"])
         self.entries = {}          # center query -> K
         self.geo = {}              # center -> (ball prefix end, shell prefix end, radius)
@@ -378,8 +379,11 @@ class Cache:
             elif self.shell_scope == "balls":
                 # intruders among the sampled shell vectors of the best-fitting balls only
                 cnt = np.zeros(m)
+                ns = min(self.shell_balls, fit.shape[1])
+                sel = (order[:, :min(ns, t)] if ns <= t
+                       else np.argpartition(fit, ns - 1, axis=1)[:, :ns])
                 for i in range(m):
-                    pos = np.unique(np.concatenate([self.entry_samp[e] for e in order[i, :t]]))
+                    pos = np.unique(np.concatenate([self.entry_samp[e] for e in sel[i]]))
                     if len(pos):
                         d2s = self.sv_sq[pos] - 2.0 * (self.sv[pos] @ q[i]) + (q[i] @ q[i])
                         cnt[i] = (d2s < nr[i] ** 2).sum()
@@ -479,6 +483,7 @@ class Sim:
         self.cache = Cache(D, args.k, args.R, args.bits, self.M,
                            maintain=not getattr(args, "no_maintain", False))
         self.cache.shell_scope = getattr(args, "shell_scope", "all")
+        self.cache.shell_balls = getattr(args, "shell_balls", 3)
         self.log = []
         self.cost = {"topk": 0, "topR": 0, "center_checks": 0, "label_updates": 0}
         self.maintained = getattr(args, "cal_labels", "serve") == "maintained"
@@ -1027,6 +1032,9 @@ def main():
     ap.add_argument("--shell-scope", choices=["all", "balls"], default="all",
                     help="intruder count over the whole shell sample, or only the shells "
                          "of the 3 best-fitting balls")
+    ap.add_argument("--shell-balls", type=int, default=3,
+                    help="with --shell-scope balls: how many best-fitting balls' shells "
+                         "the intruder count covers")
     ap.add_argument("--save-state", type=str, default=None,
                     help="save the cache state after warm-up (for eval_timing.py)")
     ap.add_argument("--tag", type=str, default="", help="suffix of the output file name")
