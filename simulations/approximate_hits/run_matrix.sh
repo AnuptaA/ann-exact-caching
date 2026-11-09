@@ -15,16 +15,24 @@ TQA="triviaqa-aker-0.3 triviaqa-aker-0.6 triviaqa-aker-0.99"
 waitfor() { for f in "$@"; do while [ ! -f "$f" ]; do sleep 120; done; done; }
 
 # split a job list into heavy (H) / light (L): heavy = ours / LRU on TriviaQA, or at a 10% SPACEV budget
+# heavy runs kept (the detector x response factorial stays at the 1% SPACEV / 10% ESCI ablations)
+KEEP="/(static_default|greedy_none|greedy_score_rebuild|greedy_all_rebuild_oraclecal|lru_k10_none|lru_k20_none|lru_k20_all|static_static|greedy_slide_none|greedy_slide_score|greedy_noupkeep_both|greedy_oracle|greedy_known_reset|lru_k20_both)\.json"
 HEAVY="(triviaqa[^ ]* --stream [a-z]+ --budget [0-9.]+ .*--method (static|greedy|lru))|(spacev[^ ]* --stream [a-z]+ --budget 0\.1 .*--method (static|greedy|lru))"
 split() {   # $1 = list, $2 = phase name
-  grep -E "$HEAVY" "$1" > $M/H_$2.txt
+  grep -E "$HEAVY" "$1" | grep -E "$KEEP" > $M/H_$2.txt
   grep -vE "$HEAVY" "$1" > $M/L_$2.txt
 }
 
-run() {     # $1 = pool, $2 = phase, $3 = parallel
-  [ -s $M/$1_$2.txt ] && xargs -P $3 -I{} sh -c '{}' < $M/$1_$2.txt
+run() {     # $1 = pool, $2 = phase, $3 = default parallel (overridden by $M/P_<pool>)
+  n=$(cat $M/P_$1 2>/dev/null || echo $3)
+  [ -s $M/$1_$2.txt ] && xargs -P $n -I{} sh -c '{}' < $M/$1_$2.txt
   touch $M/$1_$2.DONE
 }
+
+# let runs left over from the first driver finish (no duplicates)
+while ps -eo args | grep -v "sh -c" | grep -qE "[o]nline_sim.py|[e]val_aker_real.py --prep [^ ]* --budget"; do
+  sleep 30
+done
 
 # ---- phase 1 lists
 {
@@ -104,8 +112,8 @@ lists() {
 }
 
 lists &
-pool_sim H 6 &
-pool_sim L 24 &
+pool_sim H 5 &
+pool_sim L 20 &
 pool_aker &
 wait
 touch $M/ALL_DONE
