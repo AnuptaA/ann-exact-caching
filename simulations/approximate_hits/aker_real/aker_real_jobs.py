@@ -53,7 +53,24 @@ def main():
     ap.add_argument("--budgets", type=float, nargs="+", default=[0.01, 0.1])
     ap.add_argument("--only", nargs="+", default=["stable", "shift", "data", "backend"])
     ap.add_argument("--only-diskann", action="store_true", help="only the DiskANN-answer runs")
+    ap.add_argument("--tuned", action="store_true",
+                    help="settings tuned to reach the recall target (doc 9j) on stable traces only: "
+                         "Standard mode alpha_T 0.1 / 0.01 x alpha_L 1.0 / 1.1; Proximity mode with the "
+                         "global threshold at 0.01-0.3 x the median squared NN distance; reserve 5")
     args = ap.parse_args()
+    if args.tuned:
+        prox_lib = ("LD_LIBRARY_PATH=$HOME/third_party/aker_prox/build/lib:$HOME/third_party/boost-install/lib:"
+                    "$HOME/third_party/faiss-install/lib64")
+        for prep, b in itertools.product(args.preps, args.budgets):
+            out = f"{RES}/aker_real/{prep}/trace_b{b:g}"
+            confs = [(f"at{at:g}_al{al:g}_d5", f"--alpha-tighten {at} --alpha-loosen {al} --delta 5", "")
+                     for at, al in itertools.product([0.1, 0.01], [1.0, 1.1])]
+            confs += [(f"prox{f:g}_d5", f"--prox-frac {f} --delta 5", prox_lib + " ")
+                      for f in (0.01, 0.03, 0.05, 0.1, 0.2, 0.3)]
+            for tag, flags, env in confs:
+                print(f"mkdir -p {out}/logs && [ -f {out}/{tag}.json ] || {env}{PY} --prep {RES}/online/{prep} "
+                      f"--budget {b} {flags} --stream trace --out {out}/{tag}.json > {out}/logs/{tag}.txt 2>&1")
+        return
     for prep in args.preps:
         for (name, flags), b, (at, d) in itertools.product(list(settings(prep, args.only)),
                                                            args.budgets, GRID):

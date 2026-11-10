@@ -57,7 +57,15 @@ class Aker:
     """ctypes wrapper of aker_shim.cc."""
 
     def __init__(self, dim, pool, topk, delta, risk, a_tighten, a_loosen):
-        lib = ctypes.CDLL(str(HERE / "libakershim.so"))
+        import os
+        # Proximity mode: a separate build (libakershim_prox.so, see build.sh); its library dir must
+        # come first in LD_LIBRARY_PATH, checked here because the other one would load silently
+        name = "libakershim_prox.so" if os.environ.get("AKER_GLOBAL_THRESH") else "libakershim.so"
+        if name == "libakershim_prox.so":
+            first = os.environ.get("LD_LIBRARY_PATH", "").split(":")[0]
+            if not first.endswith("aker_prox/build/lib"):
+                raise SystemExit("Proximity mode: put ~/third_party/aker_prox/build/lib first in LD_LIBRARY_PATH")
+        lib = ctypes.CDLL(str(HERE / name))
         P = ctypes.c_void_p
         lib.shim_create.restype = P
         lib.shim_create.argtypes = [ctypes.c_uint32, ctypes.c_uint64, ctypes.c_uint32,
@@ -430,6 +438,9 @@ def main():
     ap.add_argument("--backend-recall", type=float, default=1.0,
                     help="simulated approximate backend (online_sim.approximate_rows)")
     ap.add_argument("--backend-seed", type=int, default=123)
+    ap.add_argument("--prox-frac", type=float, default=None,
+                    help="Proximity mode (one fixed global threshold): threshold = this fraction of the "
+                         "median squared distance from a trace query to its nearest neighbor")
     ap.add_argument("--backend-file", type=str, default=None,
                     help="real-index answers (results/backends/<prep>/<index>.npz)")
     ap.add_argument("--backend-target", type=str, default="0.95")
@@ -445,6 +456,16 @@ def main():
     sys.path.append(str(HERE.parent.parent.parent))
     prep = Path(args.prep)
     db, q, top, stream = load(prep, args.stream, native=args.timing)
+    if args.prox_frac is not None:
+        import os
+        rows = np.random.default_rng(0).choice(len(q), min(5000, len(q)), replace=False)
+        nn = np.asarray(db[np.asarray(top[rows, 0], dtype=np.int64)], dtype=np.float32)
+        med = float(np.median(((q[rows] - nn) ** 2).sum(axis=1)))
+        args.global_thresh = args.prox_frac * med
+        args.median_sq_nn_distance = med
+        os.environ["AKER_GLOBAL_THRESH"] = repr(args.global_thresh)
+        logger.info(f"Proximity mode: global threshold {args.global_thresh:.4g} "
+                    f"({args.prox_frac} x median squared NN distance {med:.4g})")
     if args.timing:
         res = run_timing(args, db, q, top, stream)
         if args.out:

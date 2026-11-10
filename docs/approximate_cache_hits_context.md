@@ -2388,3 +2388,67 @@ one global threshold) swept down until recall 0.9.
 Queue state 11-10 22:30: 8,676 distinct jobs in all lists; 6,482 done; 2,194 unfinished (357
 started without a result, 1,837 never started because pools were cut short) now in one sweep
 queue (/tmp/mx/sweep.sh, 60 slots, global admission).
+
+### 9j. Scope cut to the two paper plots; Aker tuned to reach 0.9 (11-10 night)
+
+Decision (Jialin): only the headline hit-rate plot (exact backend) and the timing plot (real
+DiskANN at recall@10 0.95) are run now. Everything else is dropped from the queue:
+`/tmp/mx/skip.txt` lists 2,142 jobs (448 of the detector factorial on TriviaQA, 1,694 for other
+figures: data changes, inexact simulated backends, shifts). `mx_run_job.sh` exits for a listed
+job, at start and before every admission attempt / retry (the in-loop re-check added 23:15, after
+58 listed jobs admitted earlier were still running or waiting; they were stopped).
+TriviaQA: headline-only launcher `run_triviaqa_headline.sh <variant>`.
+
+Aker tuned to reach mean retention of hits 0.9 (`aker_real_jobs.py --tuned`, 140 jobs):
+- Standard mode with alpha_T 0.1 / 0.01 x alpha_L 1.0 / 1.1 (top_delta 5);
+- Proximity mode (the authors' compile option: one fixed global threshold instead of
+  per-entry adaptive ones; separate build `~/third_party/aker_prox`, `libakershim_prox.so`,
+  threshold via env AKER_GLOBAL_THRESH), `eval_aker_real.py --prox-frac f`: threshold = f x the
+  median squared distance from a trace query to its exact nearest neighbor, f in .01-.3.
+First results (23:00, about a quarter done): Proximity mode reaches 0.9 where Standard mode
+cannot, at low hit rates (SPACEV 1%: Zipf 0.3 0.8% at prox .05, Zipf 0.6 3.8% at prox .1).
+
+### 9k. Timing harness: every technique in front of the same DiskANN (eval_timing_online.py)
+
+Design (agreed with Jialin): DiskANN on SPACEV 10M, search list 160 (recall@10 .954, tuned to
+0.95), the same index and settings for all techniques; one request at a time, one thread,
+quiet-machine guard. Per request, timed together: the cache lookup; on a hit the cached answer
+(ours / LRU: with probability 0.1 DiskANN is also asked, to label the hit for calibration); on a
+miss DiskANN's answer and the cache's update. Then the same 2,000 requests on DiskANN alone and on
+DiskANN with its node cache given the technique's memory. Reported: mean / p50 / p99 over all
+requests, hits and misses apart, speedup vs DiskANN, the 1 / (1 - h + audited share) limit,
+stage times, recall vs exact (all requests and hits) and the simulator's retention (share of
+DiskANN's answer that is cached) over hits.
+Techniques:
+- ours: the greedy cache built in warm-up from DiskANN's answers (online_sim --save-state with
+  --backend-file ...diskann.npz --backend-target 0.95, shell scope = 10 best-fitting balls),
+  static afterwards; hit path = FAISS HNSW (M 32, ef 32) over the cached vectors + intruder count
+  over the 10 best-fitting balls; recalibration every 1,000 requests on the last 20,000.
+- LRU: the same warm-up state, then every miss becomes an entry (K 20, shell from DiskANN's
+  top-500 sampled at the state's rate p), least recently used entries evicted; the same hit path,
+  maintained incrementally (vectors added to the HNSW graph, efConstruction 40 for inserts, 2x
+  cheaper than 200; evicted vectors masked; graph rebuilt with 32 threads when > 30% are dead,
+  counted as background work). Distinct shell samples are counted once (memory matches the
+  simulator: 805,552 vs 805,526 vector units at 10%, Zipf 0.99).
+  LRU needs DiskANN's top-500 on every miss (k 500, search list 500: ~3x a top-10 search). Two
+  modes, `--maintenance sync` (the miss is answered by the top-500 search, the insert on the
+  request's path) and `background` (answered by the normal top-10 search; the top-500 search,
+  insert and evictions are background work, their time reported apart). Both are run.
+- Aker: the real library (Standard or Proximity build), warmed up on 20,000 requests with
+  DiskANN's answers (untimed).
+- QVCache: as its paper describes it (C++ with Python bindings, FreshVamana mini-indexes):
+  mini-indexes = diskannpy DynamicMemoryIndex (FreshVamana, C++), region thresholds over a PCA
+  projection as in online_baselines.QVCache, warmed up like Aker. The simulator's QVCache
+  searches its mini-indexes exactly; here they are graph searches.
+Aker / QVCache run the setting with the best hit rate among those reaching retention >= 0.89 in
+the headline results (`timing_jobs.py`, via plot_headline.collect).
+Smoke tests (busy machine, 300 requests, numbers not usable): all four run; ours at 10% Zipf .99
+hit rate .563, retention over hits .905 (simulator definition); LRU .567 / .905; under load the
+LRU insert costs 15-70 ms per miss (HNSW inserts, single thread), so its sync miss latency is
+DiskANN's top-500 search plus the insert.
+Batch: `run_timing_batch.sh` (detached, log /tmp/mx/timing.log) waits for the tuned-Aker runs
+and the warm-up states, writes /tmp/mx/timing.txt (SPACEV Zipf .99 / .6 / .3 x 1% / 10% x ours,
+LRU sync, LRU background, Aker, QVCache = 30 jobs, ~8-10 min each), takes the prep lock, holds
+the queue (HOLD), waits until no simulator / Aker / prep / index-build process is left, runs the
+jobs one at a time under the guard, then releases. Results:
+`results/timing_v2/spacev-aker-<z>/<technique>_b<b>.json`.

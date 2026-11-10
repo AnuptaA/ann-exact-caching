@@ -2,7 +2,8 @@
 # Memory-guarded runner for one job line of the matrix drivers (run_matrix*.sh, probes).
 # Usage: mx_run_job.sh <ignored> '<job command line>'
 # The job line has the form "mkdir -p ... && [ -f <out>.json ] || <command> > <log> 2>&1".
-#  - skips the job if its JSON exists, or waits while an identical job (same JSON
+#  - skips the job if its JSON exists or is listed in /tmp/mx/skip.txt (dropped from the plan),
+#    or waits while an identical job (same JSON
 #    target) is already running (e.g. an orphan of an earlier driver);
 #  - GLOBAL admission (v3, 11-10): a job starts only if (memory committed by running jobs +
 #    its own peak estimate) <= CAP (320 GB of 371) and MemAvailable >= its estimate + 30 GB, checked
@@ -61,6 +62,8 @@ same_running() {   # another process writing the same JSON target is alive
 }
 
 [ -n "$JSON" ] && [ -f "$JSON" ] && exit 0
+# jobs dropped from the plan (e.g. the detector factorial on TriviaQA, see doc 9j)
+[ -n "$JSON" ] && [ -f /tmp/mx/skip.txt ] && grep -qxF "$JSON" /tmp/mx/skip.txt && exit 0
 while [ -n "$JSON" ] && same_running; do sleep 60; done
 [ -n "$JSON" ] && [ -f "$JSON" ] && exit 0
 NEED=$(est_of "$LINE")
@@ -69,6 +72,8 @@ while :; do
   # admission: under the lock, check the global budget, start the job, wait until its
   # process is visible (so the next admission counts it), release the lock
   admitted=0
+  # re-check the plan on every attempt (a job can be dropped while it waits or between retries)
+  [ -n "$JSON" ] && [ -f /tmp/mx/skip.txt ] && grep -qxF "$JSON" /tmp/mx/skip.txt && exit 0
   exec 9> $LOCK
   if flock -w 30 9; then
     if [ ! -f /tmp/mx/HOLD ] && [ $(( $(committed) + NEED )) -le $CAP ] && [ "$(free_gb)" -ge $(( NEED + HEADROOM )) ]; then

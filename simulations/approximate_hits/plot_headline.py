@@ -109,7 +109,9 @@ def collect(prep, stream, budget, real_aker):
     out["qvcache"] = pick(cands)
     cands = []
     if real_aker:
-        for f in sorted((RES / "aker_real" / prep / f"trace_b{budget:g}").glob("at*_d*.json")):
+        # every real-Aker setting: the original grid (at*_d*), the tuned Standard settings
+        # (at*_al*_d5) and Proximity mode (prox*_d5), doc 9j
+        for f in sorted((RES / "aker_real" / prep / f"trace_b{budget:g}").glob("*.json")):
             s = json.loads(f.read_text())["summary"]
             cands.append(candidate(f.stem, [(100 * s["hit_rate"], s["retention_vs_backend"])]))
     else:

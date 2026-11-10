@@ -83,6 +83,11 @@ extern "C"
         p.tuning.risk_thresh = risk;
         p.tuning.alpha_tighten = alpha_tighten;
         p.tuning.alpha_loosen = alpha_loosen;
+        /* Proximity-mode builds (AKER_ENABLE_PROXIMITY_MODE=ON) use one fixed global threshold
+         * (squared L2, like every Aker distance); read from AKER_GLOBAL_THRESH if set. Standard
+         * mode ignores it. */
+        if (const char* g = std::getenv("AKER_GLOBAL_THRESH"))
+            p.tuning.global_thresh = static_cast<float>(std::atof(g));
         p.distance_metric = 0;
         s->dim = dim;
         s->bytes = p.vector_format.vector_in_bytes;
