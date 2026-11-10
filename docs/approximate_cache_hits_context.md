@@ -2376,3 +2376,15 @@ step at max(90, private). A cap of 350 GB caused two dips to 6-10 GB (kernel OOM
 were stopped; `mx_requeue.sh` now re-queues every job that started (log exists) but has no
 result and no traceback, from every queue list (cap 2 per job); the watchdog's emergency
 threshold is 15 GB.
+
+Decisions (11-10, Jialin): DiskANN for the real-backend (timing) plot is tuned to recall@10
+0.95 per dataset, the same index and search list for every technique (SPACEV: answers at 0.95
+exist; the real query log reaches only .886, so .95 is unreachable there; TriviaQA indexes queued:
+`run_diskann_triviaqa.sh`, one index per database variant, built under the prep lock). The
+small-ball probe (--max-ball-k) is a diagnostic only, never a method: K <= 20 / 50 gave 11.3 /
+16.0% vs 24.5% default on SPACEV 0.6 at 10%. Planned Aker tuning to reach the target: Standard
+mode with alpha_T down to 0.01 and alpha_L 1.0, and Proximity mode (the authors' compile option,
+one global threshold) swept down until recall 0.9.
+Queue state 11-10 22:30: 8,676 distinct jobs in all lists; 6,482 done; 2,194 unfinished (357
+started without a result, 1,837 never started because pools were cut short) now in one sweep
+queue (/tmp/mx/sweep.sh, 60 slots, global admission).

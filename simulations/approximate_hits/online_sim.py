@@ -550,7 +550,13 @@ class Sim:
         w = self.stream[:a.warmup]
         self.cost["topR"] += len(w)
         perm = rng.permutation(w)
-        if getattr(a, "warm_split", None) is None:
+        if getattr(a, "oracle_score", None) is not None:
+            # ORACLE probe: greedy scores on stream[START:END] (requests that come later, i.e. it
+            # sees the future); candidates = 60% of the warm-up, 20% fit the model, 20% calibrate
+            n = len(w) // 5
+            cand, fit, cal = perm[:3 * n], perm[3 * n:4 * n], perm[4 * n:]
+            score = self.stream[a.oracle_score[0]:a.oracle_score[1]]
+        elif getattr(a, "warm_split", None) is None:
             n = len(w) // 5
             cand, score, fit, cal = perm[:n], perm[n:3 * n], perm[3 * n:4 * n], perm[4 * n:]
         else:       # --warm-split: shares of the warm-up for candidates / scoring / model fit / calibration
@@ -1015,6 +1021,9 @@ def main():
     ap.add_argument("--warm-split", type=float, nargs=4, default=None, metavar=("CAND", "SCORE", "FIT", "CAL"),
                     help="shares of the warm-up used for candidate queries / scoring queries / model "
                          "fit / calibration (default: .2 .4 .2 .2)")
+    ap.add_argument("--oracle-score", type=int, nargs=2, default=None, metavar=("START", "END"),
+                    help="ORACLE probe: the warm-up cache is chosen by greedy on the requests "
+                         "stream[START:END] (later than the warm-up); candidates are 60%% of the warm-up")
     ap.add_argument("--max-ball-k", type=int, default=None,
                     help="largest ball size K greedy may choose (default: 500; sizes are 10 20 50 100 200 500)")
     ap.add_argument("--c-max", type=int, default=3000)
