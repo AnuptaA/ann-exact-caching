@@ -23,7 +23,7 @@ from online_round2_jobs import RES, SIM, baselines
 WORKLOADS = {"esci1m": ("random", 0.1), "spacev-aker-0.6": ("trace", 0.01),
              "spacev-aker-0.99": ("trace", 0.01), "spacev-aker-0.3": ("trace", 0.01),
              "spacev-real": ("trace", 0.01),
-             **{f"triviaqa-aker-{z}": ("trace", 0.01) for z in ("0.3", "0.6", "0.99")}}
+             **{f"triviaqa-dpr-{z}": ("trace", 0.01) for z in ("0.3", "0.6", "0.99")}}
 OURS = {"static_default": "--method static",
         "greedy_score_rebuild": "--method greedy --detect score --response rebuild",
         "lru_k10_none": "--method lru --k-lru 10 --detect",

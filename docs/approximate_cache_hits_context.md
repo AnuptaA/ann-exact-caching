@@ -2147,3 +2147,59 @@ answer; best grid setting, '!' = no setting reaches .9):
   10%: .860 vs .919 against the backend); against its own backend it
   still reaches .91-.92 at 0.99.
 - Multishift full phase (0.99): Aker falls to .875-.883 for that phase.
+
+### 9b. TriviaQA embeddings (Aker's queries are in the wrong space) and campaign repairs
+
+TriviaQA / SPHERE embeddings (checked 2026-11-10; raised by Anupta):
+- Aker's released request vectors (triviaqa-sim-100k-<z>.npy) are
+  BAAI/bge-base-en-v1.5 raw CLS outputs: re-encoding lines of triviaqa.txt
+  reproduces them (L2 ~0.02). The paper says BGE-large, which is 1024-d;
+  its own table lists 768-d. Aker's repo has no embedding code.
+- The SPHERE base is not in that space. Its first 100K rows are exactly
+  Hermes' SPHERE_100K (huggingface mohdumar/SPHERE_100K, which has the text;
+  downloaded to datasets/aker/sphere100k/). Re-encoding that text with the
+  passage side of Sphere's DPR_web bi-encoder (facebookresearch/Sphere,
+  dpr_web_biencoder.cp; bert-base-uncased, CLS, 256 tokens; input =
+  (title, text without the title) as a sentence pair) gives cosine .998 to the
+  stored vectors (min .991; text only .992; bge-base ~.5). So the base is
+  DPR_web passages and the queries should be DPR_web questions.
+- With the released queries every query sees a flat neighbor profile (top-1
+  and 1000th neighbors almost equally far): near-arbitrary ground truth.
+- Fix (decided with Jialin): keep Aker's database vectors and request
+  sequences, re-embed each request's question with the DPR_web question
+  encoder (`datasets/reembed_triviaqa_queries.py`: identifies each released
+  vector's line by its bge-base embedding, writes
+  triviaqa-dpr-sim-100k-<z>.npy + match statistics). New workloads
+  triviaqa-dpr-<z> (run_e2e_oracle_trace.WORKLOADS); triviaqa-aker-<z> is kept
+  for the earlier offline runs (5i, 5j), which used the mismatched queries.
+  Encoders in HF format: ~/third_party/sphere/dpr_web_{question,ctx}_encoder.
+- Metric: DPR is an inner-product model; under Euclidean distance (Aker's
+  choice, kept here) neighbors are still poorly separated (median d10 /
+  d1000 = .967 for DPR_web questions) because passage norms enter the
+  distance. With inner product the top passages are on topic even within
+  100K random web passages (e.g. a Robert Redford question -> Hollywood
+  screenwriter / actor biographies). Open option: the standard
+  inner-product -> Euclidean transform (append sqrt(M^2 - |x|^2) to every
+  database vector and 0 to every query; Euclidean neighbors then equal
+  inner-product neighbors), which would keep all distance-based machinery.
+  Not run yet (each 768-d exact-neighbor prep costs hours).
+- The first TriviaQA preps (mismatched queries) were set aside as
+  results/online/triviaqa-aker-<z>-bgequeries; no runs used them.
+
+Campaign repairs (night of 11-09):
+- Out-of-memory kills: with 20 light + 8 heavy slots, 37 runs died
+  silently (kernel OOM killer, no traceback; logs stop mid-run), mostly LRU
+  at a 10% budget (grows past 22 GB) and QVCache / Aker at 10% on the data
+  workloads (12-18 GB each, not ~5 GB as assumed). Now every job goes
+  through `mx_run_job.sh` (start only when enough memory is free: heavy 70 GB,
+  10%-budget 45 GB, others 20 GB; retry jobs that die without output, at
+  most 2 retries; never duplicate a running job) and `mx_watchdog.sh`
+  (below 20 GB free, kill the most recently started job, which the runner
+  retries later; status line every 10 min in /tmp/mx/status.log; restarts
+  the driver if it dies). Pool caps lowered to heavy 5, 10%-budget 10,
+  1%-budget 12.
+- SPACEV real log + DiskANN: recall@10 reaches only .886 at search list
+  1000 (real queries far from the 10M base), so the .95 / .9 targets give
+  an empty answer file; re-tuned to .85 / .8 (`/tmp/mx/diskann_real.sh`).
+- Driver v3: `run_matrix.sh`; TriviaQA: `run_matrix_triviaqa.sh` (prep
+  serialized, one ~65 GB step at a time; runs queued as inputs land).

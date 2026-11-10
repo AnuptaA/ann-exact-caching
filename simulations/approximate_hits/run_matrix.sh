@@ -1,119 +1,46 @@
 #!/bin/sh
-# Coverage-matrix runs (context doc 9). Three pools: heavy simulator runs (ours / LRU at a
-# 10% SPACEV budget, all TriviaQA runs; ~17 GB each), light simulator runs, real Aker.
-# Phases: 1 now; 2 after the SPACEV Zipf 0.99 / 0.3 data prep; 3a after the TriviaQA
-# online prep; 3b after the TriviaQA data prep; 4 fresh-seed re-runs of the best baselines.
+# Coverage-matrix runs (context doc 9, 9a), version 3: every job goes through
+# mx_run_job.sh, which starts it only when enough memory is free, retries jobs
+# killed without output (out-of-memory kills leave no traceback), and never
+# duplicates a job that is still running (orphans of an earlier driver).
+# Pools (max parallel; admission by free memory decides how many actually run):
+#   H  ours / LRU at a 10% SPACEV budget (20-60 GB each)      8 slots, needs 70 GB free
+#   L  everything else in the simulator: 1% / ESCI jobs 16 slots (20 GB free), jobs at
+#      a 10% budget 16 slots (45 GB free; QVCache / Aker at 10%: 12-18 GB each)
+#   A  real Aker                                               8 slots, needs 10 GB free
+# Phase 1-2 lists (/tmp/mx/{H,L,A}_{1,2}.txt, D_jobs.txt, AD_jobs.txt) were written by
+# the earlier driver; TriviaQA waits for its re-embedded queries (separate launcher).
+# At the end: fresh-seed re-runs of the best seed-0 baseline settings (new grids).
 cd /local/home/jialind/ann-exact-caching || exit 1
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 export LD_LIBRARY_PATH=/home/jialind/third_party/aker/build/lib:/home/jialind/third_party/boost-install/lib:/home/jialind/third_party/faiss-install/lib64:$LD_LIBRARY_PATH PYTHONPATH=.
 M=/tmp/mx
 S=simulations/approximate_hits
-P=$S/results/online
+W=$S/mx_run_job.sh
 PY=.venv/bin/python
-TQA="triviaqa-aker-0.3 triviaqa-aker-0.6 triviaqa-aker-0.99"
+SPACEV="spacev-aker-0.6 spacev-aker-0.3 spacev-aker-0.99 spacev-real"
 
-waitfor() { for f in "$@"; do while [ ! -f "$f" ]; do sleep 120; done; done; }
+$PY $S/online_backend_jobs.py --only-index diskann --preps $SPACEV > $M/D_jobs.txt
+$PY $S/aker_real/aker_real_jobs.py --preps $SPACEV --only backend --only-diskann > $M/AD_jobs.txt
+cat $M/H_1.txt $M/H_2.txt > $M/H_3.txt
+cat $M/L_1.txt $M/L_2.txt $M/D_jobs.txt > $M/L_3.txt
+cat $M/A_1.txt $M/A_2.txt $M/AD_jobs.txt > $M/A_3.txt
 
-# split a job list into heavy (H) / light (L): heavy = ours / LRU on TriviaQA, or at a 10% SPACEV budget
-# heavy runs kept (the detector x response factorial stays at the 1% SPACEV / 10% ESCI ablations)
-KEEP="/(static_default|greedy_none|greedy_score_rebuild|greedy_all_rebuild_oraclecal|lru_k10_none|lru_k20_none|lru_k20_all|static_static|greedy_slide_none|greedy_slide_score|greedy_noupkeep_both|greedy_oracle|greedy_known_reset|lru_k20_both)\.json"
-HEAVY="(triviaqa[^ ]* --stream [a-z]+ --budget [0-9.]+ .*--method (static|greedy|lru))|(spacev[^ ]* --stream [a-z]+ --budget 0\.1 .*--method (static|greedy|lru))"
-split() {   # $1 = list, $2 = phase name
-  grep -E "$HEAVY" "$1" | grep -E "$KEEP" > $M/H_$2.txt
-  grep -vE "$HEAVY" "$1" > $M/L_$2.txt
+# light jobs at a 10% budget need more headroom: split L by budget
+grep -E -- "--budget 0\.1 " $M/L_3.txt > $M/L10_3.txt
+grep -vE -- "--budget 0\.1 " $M/L_3.txt > $M/L1_3.txt
+
+pool() {   # $1 = list, $2 = parallel, $3 = min free GB
+  xargs -P $2 -I{} sh $W $3 {} < $1
 }
-
-run() {     # $1 = pool, $2 = phase, $3 = default parallel (overridden by $M/P_<pool>)
-  n=$(cat $M/P_$1 2>/dev/null || echo $3)
-  [ -s $M/$1_$2.txt ] && xargs -P $n -I{} sh -c '{}' < $M/$1_$2.txt
-  touch $M/$1_$2.DONE
-}
-
-# let runs left over from the first driver finish (no duplicates)
-while ps -eo args | grep -v "sh -c" | grep -qE "[o]nline_sim.py|[e]val_aker_real.py --prep [^ ]* --budget"; do
-  sleep 30
-done
-
-# ---- phase 1 lists
-{
-  $PY $S/online_backend_jobs.py --preps esci1m spacev-aker-0.6 spacev-real
-  $PY $S/online_round2_jobs.py --budget 0.1 --preps spacev-aker-0.6 spacev-aker-0.3 spacev-aker-0.99 spacev-real
-  $PY $S/online_round2_jobs.py --multishift --budget 0.1 --preps spacev-aker-0.6 spacev-aker-0.3 spacev-aker-0.99
-  $PY $S/online_data_jobs.py --round 3 --preps spacev-aker-0.6 spacev-real --budget 0.1
-  $PY $S/online_round2_jobs.py --budget 0.01 --preps esci1m
-  $PY $S/online_round2_jobs.py --multishift --budget 0.01 --preps esci1m
-  $PY $S/online_data_jobs.py --round 3 --preps esci1m --budget 0.01
-} > $M/all_1.txt
-split $M/all_1.txt 1
-$PY $S/aker_real/aker_real_jobs.py --preps spacev-aker-0.3 spacev-aker-0.6 spacev-aker-0.99 spacev-real > $M/A_1.txt
-
-pool_sim() {   # $1 = H or L, $2 = parallel
-  run $1 1 $2
-  waitfor $P/spacev-aker-0.99/DATA_PREP_DONE $P/spacev-aker-0.3/DATA_PREP_DONE
-  waitfor $M/lists_2.ready
-  run $1 2 $2
-  waitfor $M/lists_3a.ready
-  run $1 3a $2
-  waitfor $M/lists_3b.ready
-  run $1 3b $2
-  waitfor $M/lists_4.ready
-  run $1 4 $2
-}
-
-pool_aker() {
-  run A 1 10
-  waitfor $M/lists_2.ready
-  run A 2 10
-  waitfor $M/lists_3a.ready
-  run A 3a 6
-  waitfor $M/lists_3b.ready
-  run A 3b 6
-}
-
-lists() {
-  waitfor $P/spacev-aker-0.99/DATA_PREP_DONE $P/spacev-aker-0.3/DATA_PREP_DONE
-  {
-    $PY $S/online_data_jobs.py --round 3 --preps spacev-aker-0.99 spacev-aker-0.3 --budget 0.01
-    $PY $S/online_data_jobs.py --round 3 --preps spacev-aker-0.99 spacev-aker-0.3 --budget 0.1
-    $PY $S/online_backend_jobs.py --preps spacev-aker-0.99 spacev-aker-0.3
-  } > $M/all_2.txt
-  split $M/all_2.txt 2
-  $PY $S/aker_real/aker_real_jobs.py --preps spacev-aker-0.99 spacev-aker-0.3 --only data backend > $M/A_2.txt
-  touch $M/lists_2.ready
-  waitfor $P/triviaqa-aker-0.3/PREP_DONE $P/triviaqa-aker-0.6/PREP_DONE $P/triviaqa-aker-0.99/PREP_DONE
-  {
-    $PY $S/online_round2_jobs.py --preps $TQA
-    $PY $S/online_round2_jobs.py --multishift --preps $TQA
-    $PY $S/online_round2_jobs.py --budget 0.1 --preps $TQA
-    $PY $S/online_round2_jobs.py --multishift --budget 0.1 --preps $TQA
-  } > $M/all_3a.txt
-  split $M/all_3a.txt 3a
-  $PY $S/aker_real/aker_real_jobs.py --preps $TQA --only stable shift > $M/A_3a.txt
-  touch $M/lists_3a.ready
-  waitfor $P/triviaqa-aker-0.3/DATA_PREP_DONE $P/triviaqa-aker-0.6/DATA_PREP_DONE $P/triviaqa-aker-0.99/DATA_PREP_DONE
-  {
-    $PY $S/online_data_jobs.py --round 3 --preps $TQA --budget 0.01
-    $PY $S/online_data_jobs.py --round 3 --preps $TQA --budget 0.1
-    $PY $S/online_backend_jobs.py --preps $TQA
-  } > $M/all_3b.txt
-  split $M/all_3b.txt 3b
-  $PY $S/aker_real/aker_real_jobs.py --preps $TQA --only data backend > $M/A_3b.txt
-  touch $M/lists_3b.ready
-  # phase 4: once every simulator phase is through, re-run the best seed-0 baseline
-  # settings of the new workload-shift / stable grids on seeds 1 and 2
-  waitfor $M/H_3b.DONE $M/L_3b.DONE
-  {
-    $PY $S/online_round2_jobs.py --best-baselines 1 2 --budget 0.1 --preps spacev-aker-0.6 spacev-aker-0.3 spacev-aker-0.99 spacev-real $TQA
-    $PY $S/online_round2_jobs.py --best-baselines 1 2 --budget 0.01 --preps esci1m
-    $PY $S/online_round2_jobs.py --best-baselines 1 2 --preps $TQA
-  } > $M/all_4.txt
-  split $M/all_4.txt 4
-  touch $M/lists_4.ready
-}
-
-lists &
-pool_sim H 5 &
-pool_sim L 20 &
-pool_aker &
+( pool $M/H_3.txt 8 70; touch $M/H_3.DONE ) &
+( pool $M/L1_3.txt 16 20; touch $M/L1_3.DONE ) &
+( pool $M/L10_3.txt 16 45; touch $M/L10_3.DONE ) &
+( pool $M/A_3.txt 8 10; touch $M/A_3.DONE ) &
 wait
-touch $M/ALL_DONE
+{
+  $PY $S/online_round2_jobs.py --best-baselines 1 2 --budget 0.1 --preps $SPACEV
+  $PY $S/online_round2_jobs.py --best-baselines 1 2 --budget 0.01 --preps esci1m
+} > $M/all_4.txt
+pool $M/all_4.txt 16 45
+touch $M/ALL_3.DONE

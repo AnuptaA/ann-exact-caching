@@ -52,8 +52,15 @@ WORKLOADS = {
     **{f"spacev-aker-{s}": {"base": "spacev-10m.npy",
                             "trace": [f"spacev-sim-100k-{s}.npy"]}
        for s in ("0.3", "0.6", "0.99")},
+    # Aker's released TriviaQA request vectors: bge-base-en-v1.5, NOT the encoder of the
+    # SPHERE base (queries and data in different spaces; kept for the earlier offline runs)
     **{f"triviaqa-aker-{s}": {"base": "sphere-10m.npy",
                               "trace": [f"triviaqa-sim-100k-{s}.npy"]}
+       for s in ("0.3", "0.6", "0.99")},
+    # the same request sequences re-embedded with SPHERE's DPR_web question encoder
+    # (datasets/reembed_triviaqa_queries.py)
+    **{f"triviaqa-dpr-{s}": {"base": "sphere-10m.npy",
+                             "trace": [f"triviaqa-dpr-sim-100k-{s}.npy"]}
        for s in ("0.3", "0.6", "0.99")},
     "spacev-real": {"base": "spacev-10m.npy",
                     "trace": ["spacev1b/query_log.bin", "spacev1b/query.bin"]},
