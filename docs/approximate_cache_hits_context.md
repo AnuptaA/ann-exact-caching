@@ -2273,3 +2273,20 @@ bandwidth or the disk. `simulations/approximate_hits/timing_env.py`:
   by file timestamps nothing else wrote results during their windows). The
   headline timing numbers will be re-run under the guard once the campaign
   has drained; timing under shifts / data changes only runs under it.
+
+### 9e. Headline figure, draft (simulations/approximate_hits/plot_headline.py)
+
+Design: one panel per workload; x = cache size (log), y = hit rate; one line per
+technique, each point = the best hit rate among that technique's settings that
+reach recall 0.9 (within .01). Techniques with no such setting are drawn faded
+with a dotted line and their best recall printed. A strip under each panel shows
+recall - 0.9; the right axis converts hit rate to the speedup bound 1/(1-h).
+Ours / LRU: mean of 2 seeds; Aker (real code) / QVCache: best of the tuned grid on
+seed 0. Drafts: results/summary/headline_draft_v1.png, _v2.png (not committed).
+Finding from the draft (checked in the logs): our cache is frozen after warm-up
+(e.g. SPACEV Zipf 0.99, 10%: 2,811 entries before and after; 82-85% of the budget
+used) while LRU (our hit rule + LRU population) keeps admitting every miss (2,811 ->
+9,356-10,183 entries). With a full budget at 1% ours wins or ties; at 10% LRU beats
+ours by 5-30 points (SPACEV Zipf 0.3/0.6/0.99: 27.5/36.9/67.1 vs 14.6/24.5/60.0;
+TriviaQA dpr Zipf 0.6: 88.7 vs 57.7). Open design question: online admission for
+ours, or treat LRU population + calibrated hit rule as part of our method.
