@@ -2291,37 +2291,47 @@ ours by 5-30 points (SPACEV Zipf 0.3/0.6/0.99: 27.5/36.9/67.1 vs 14.6/24.5/60.0;
 TriviaQA dpr Zipf 0.6: 88.7 vs 57.7). Open design question: online admission for
 ours, or treat LRU population + calibrated hit rule as part of our method.
 
-### 9f. Why LRU beats ours at 10% (analysis of existing runs, 11-10)
+### 9f. Why LRU beats ours at 10% (analysis of existing runs, 11-10; CORRECTED 11-10)
 
 "LRU" = our calibrated hit rule + LRU population (admit every miss, evict the least
 recently used entry). Ours = greedy selection from the 20k warm-up requests, then frozen
 (stable streams never alarm, so no rebuild).
-- Unused budget: ours picks entries only from warm-up candidates (cand_share .2 of 20k,
-  c_max 3000); at 10% the candidates run out at 2,800-3,600 entries, 53-90% of the budget
-  (TriviaQA dpr Zipf 0.99: 53%). At 1% the budget fills.
-- Eviction: LRU fills its budget at 10% on SPACEV from the first window (memory 1.00)
-  and evicts throughout, yet still wins; on TriviaQA dpr Zipf 0.6 it never fills it
-  (.84 -> .96), i.e. never evicts. At 1% LRU evicts all the time and loses to ours in
-  every 10k-request window (SPACEV 0.6: 10-12% vs 12-14%).
-- Online admission: LRU's hit rate climbs over the stream while ours is flat
-  (hit % per 10k requests, SPACEV 0.6 10%: LRU 27 -> 39, ours 23-26; TriviaQA dpr 0.6
-  10%: LRU 66 -> 98, ours 54-60).
-- Not mostly exact repeats: after warm-up, the share of requests that exactly repeat a
-  post-warm-up request is 1.6 / 3.8 / 7.3% (SPACEV Zipf 0.3 / 0.6 / 0.99) and 8.4 /
-  11.5 / 9.9% (TriviaQA dpr), vs repeats of warm-up requests 0.8 / 2.8 / 30.3% and
-  4.7 / 10.5 / 46.6%; 62-98% of later requests were never seen before. LRU's gain
-  (+12-15 points on SPACEV 0.6) exceeds the exact-repeat pool, so it comes mostly from
-  approximate hits near entries admitted after warm-up (regions the warm-up never
-  covered). TriviaQA: Aker's simZipf draws from ~10K question groups x 50 paraphrases,
-  so ~10-13K entries (one per group) can cover nearly everything: LRU reaches 98%.
-- Stationary traces have no "different windows": the popularity distribution does not
-  change; the windows differ only in which new queries appear. Under real workload
-  shifts (multishift, 5u) LRU K = 20 was already competitive in the full-shift phase.
-Candidate experiments (not run; to agree first): (1) ours with a full budget (candidate
-pool from all warm-up requests, no c_max); (2) ours with continued learning (greedy
-re-run every N requests on all labeled history, shadow check); (3) LRU frozen after
-warm-up and LRU admission-only (no eviction) to isolate admission vs eviction;
-(4) hybrid: our greedy core + LRU admission into the remaining budget.
+What limits the warm-up cache (code: online_sim.warmup / greedy_entries):
+- The warm-up splits the 20k requests into 4k candidate queries, 8k scoring queries, 4k
+  to fit the model, 4k to calibrate (--warm-split), and greedy fills at most f = 85% of
+  the budget (the rest is for the shell sample); it also stops when no candidate helps
+  any scoring query. `--c-max 3000` / `--s-max 25000` apply ONLY to shadow rebuilds
+  (after an alarm: at most 3000 new candidate queries, each needing a top-500 backend
+  lookup and evaluation at up to six ball sizes, and 25000 scoring queries); they were
+  written into the first simulator as cost bounds, with no recorded experiment behind
+  the values. An earlier version of this section wrongly blamed c_max for the warm-up
+  cache.
+- Budget use at 10% (greedy allowance 850k vectors): SPACEV Zipf 0.3 / 0.6 / 0.99 use
+  100 / 100 / 97%, TriviaQA dpr Zipf 0.6 / 0.99 87 / 61%. So unused budget is real only
+  on TriviaQA; on SPACEV ours fills its allowance and LRU still wins with FEWER cached
+  vectors (573k / 622k / 725k).
+- Ball size: ours spends the budget on about 3,000 large balls (280 vectors per entry on
+  SPACEV, 185-204 on TriviaQA); LRU holds 13-16k small balls (K = 20: 37-78 vectors per
+  entry). Greedy maximizes hits on an 8,000-query scoring sample, which favours large balls
+  around the sample's popular queries; when 62-98% of later requests are queries never seen
+  before, covering the tail needs many small balls near many different past queries.
+- Eviction: at 1% LRU evicts constantly and loses to ours in every 10k-request window; at
+  10% on SPACEV it fills its budget and evicts yet still wins; on TriviaQA Zipf 0.6 it
+  never fills (.84 -> .96), so it never evicts and still wins by 30 points.
+- Learning after warm-up: popularity is stationary, so little is left to learn about the
+  distribution, but LRU's hit rate still climbs over the stream (SPACEV 0.6, 10%: 27 ->
+  39% per 10k requests; ours flat at 23-26%). TriviaQA groups (a question and its 50
+  paraphrases): 84% of post-warm-up traffic goes to groups present in the warm-up
+  (92-97% to groups seen at any earlier time), so one entry per warm-up group could reach
+  about 84%; ours holds 3,645 entries for 7,729 warm-up groups. The remaining 4-5 points of
+  LRU's lead come from groups first seen after warm-up.
+- Exact repeats are not the explanation: only 1.6-11.5% of post-warm-up requests exactly
+  repeat a post-warm-up request.
+- Stationary traces have no "different windows": popularity does not change; the windows
+  differ only in which new queries appear.
+Probes (probe_jobs.py, probe_summary.py; 10% budget, seed 0; compared on requests
+60,000-100,000): more candidates (--warm-split), small balls only (--max-ball-k), a
+longer warm-up, and LRU with the same warm-ups. Results: see 9h.
 
 ### 9g. Does real Aker reproduce the paper? (11-10)
 

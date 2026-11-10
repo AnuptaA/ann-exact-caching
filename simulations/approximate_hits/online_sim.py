@@ -86,6 +86,7 @@ logger = logging.getLogger(__name__)
 
 ESCI = Path("datasets/esci/data_vectors")
 K_VALUES = (10, 20, 50, 100, 200, 500)
+K_LIMIT = [None]        # --max-ball-k: largest ball size greedy may choose (None = all of K_VALUES)
 N_BALLS = 3
 POOR_FIT = 10.0
 EPS = 1e-12
@@ -423,10 +424,11 @@ def greedy_entries(D, cand, score, score_w, budget, k, target):
     expands to the K_VALUES up to that K. Uses the current database.
     """
     D = db_view(D)
+    kvals = tuple(K for K in K_VALUES if K <= (K_LIMIT[0] or max(K_VALUES)))
     centers = np.array([c for c, _ in cand], dtype=np.int64)
     kmax = max([km for _, km in cand] + [1])
-    tops = topk_present(D, centers, min(kmax, max(K_VALUES))) if len(centers) else None
-    pairs = [(i, c, K) for i, (c, km) in enumerate(cand) for K in K_VALUES if K <= km]
+    tops = topk_present(D, centers, min(kmax, max(kvals))) if len(centers) else None
+    pairs = [(i, c, K) for i, (c, km) in enumerate(cand) for K in kvals if K <= km]
     pop = GreedyPopulator([tops[i, :K] for i, _, K in pairs],
                           topk_present(D, score, k, key="answer"),
                           len(D["db"]), k, target,
@@ -548,8 +550,13 @@ class Sim:
         w = self.stream[:a.warmup]
         self.cost["topR"] += len(w)
         perm = rng.permutation(w)
-        n = len(w) // 5
-        cand, score, fit, cal = perm[:n], perm[n:3 * n], perm[3 * n:4 * n], perm[4 * n:]
+        if getattr(a, "warm_split", None) is None:
+            n = len(w) // 5
+            cand, score, fit, cal = perm[:n], perm[n:3 * n], perm[3 * n:4 * n], perm[4 * n:]
+        else:       # --warm-split: shares of the warm-up for candidates / scoring / model fit / calibration
+            cut = [0] + [int(round(x * len(w))) for x in np.cumsum(a.warm_split)]
+            cut[-1] = len(w)
+            cand, score, fit, cal = (perm[cut[i]:cut[i + 1]] for i in range(4))
         entries, _ = greedy_entries(self.D, [(int(c), a.R) for c in cand], score,
                                     np.ones(len(score)), a.f * self.M, self.k, self.T)
         self.cache.replace(entries)
@@ -1005,6 +1012,11 @@ def main():
                     help="also a shadow rebuild check every this many queries (0 = never)")
     ap.add_argument("--gain", type=float, default=0.1)
     ap.add_argument("--delta-alarm", type=float, default=0.05)
+    ap.add_argument("--warm-split", type=float, nargs=4, default=None, metavar=("CAND", "SCORE", "FIT", "CAL"),
+                    help="shares of the warm-up used for candidate queries / scoring queries / model "
+                         "fit / calibration (default: .2 .4 .2 .2)")
+    ap.add_argument("--max-ball-k", type=int, default=None,
+                    help="largest ball size K greedy may choose (default: 500; sizes are 10 20 50 100 200 500)")
     ap.add_argument("--c-max", type=int, default=3000)
     ap.add_argument("--s-max", type=int, default=25000)
     ap.add_argument("--k-lru", type=int, default=50)
@@ -1042,6 +1054,7 @@ def main():
     ap.add_argument("--max-queries", type=int, default=None, help="truncate the stream")
     ap.add_argument("--out", type=str, default=None)
     args = ap.parse_args()
+    K_LIMIT[0] = args.max_ball_k
     D, streams = load(args.prep, args)
     stream = streams[args.stream][:args.max_queries]
     out = Path(args.out or Path(args.prep) / f"sim_{args.stream}_b{args.budget:g}")
