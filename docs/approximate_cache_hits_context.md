@@ -2322,3 +2322,27 @@ pool from all warm-up requests, no c_max); (2) ours with continued learning (gre
 re-run every N requests on all labeled history, shadow check); (3) LRU frozen after
 warm-up and LRU admission-only (no eviction) to isolate admission vs eviction;
 (4) hybrid: our greedy core + LRU admission into the remaining budget.
+
+### 9g. Does real Aker reproduce the paper? (11-10)
+
+Real Aker on the RELEASED traces and Aker's own ground truth (gt_ids from the .pkl;
+`aker_real/prep_aker_released.py`, results/aker_paper_check/), the paper's pools 1% / 5%,
+reserve 5. Hit %: after our 20k warm-up / Aker's own count over all requests; recall:
+over hits / over all requests (misses answered exactly here; the paper's pgvector
+backend had ~.9 on misses). Paper values read off its Figure 9 (+- .02):
+| workload | pool | paper | alpha_T .25 (paper) | alpha_T .9 (config file) |
+|---|---|---|---|---|
+| SPACEV 0.3 / 0.6 / 0.99 | 1% | 3 / 6 / 31 | 2.3 / 4.8 / 27.9 (recall all .99 / .99 / .98) | 2.4 / 5.4 / 30.6 |
+| SPACEV 0.3 / 0.6 / 0.99 | 5% | 7 / 12 / 40 | 7.2 / 10.9 / 39.2 (.98 / .98 / .98) | 7.8 / 12.5 / 41.8 |
+| TriviaQA 0.3 / 0.6 / 0.99 | 1% | 25 / 29 / 58 | 20.8 / 25.6 / 54.5 (.90 / .89 / .89) | 24.6 / 31.6 / 60.9 (.88 / .86 / .81) |
+| TriviaQA 0.3 / 0.6 / 0.99 | 5% | 34 / 40 / 64 | 34.3 / 39.6 / 64.3 (.87 / .87 / .86) | 46.3 / 51.6 / 70.3 (.79 / .78 / .75) |
+- The hit ratios reproduce the paper (SPACEV both settings; TriviaQA at the paper's
+  alpha_T .25 within 1-4 points at 1% and exactly at 5%), and so does its recall claim
+  (>= .8 over all requests).
+- The gap to our numbers is the metric: the paper averages recall over ALL requests
+  (misses get the backend's recall) with target .8; we average over HITS with target .9.
+  Over hits alone, real Aker keeps .76-.95 on SPACEV and .53-.81 on TriviaQA.
+- The config file's alpha_T .9 gives more hits but fails the paper's own .8 bar on
+  TriviaQA at 5% (.75-.79); our earlier grid includes both settings.
+- TriviaQA here = the released (mismatched-encoder) queries, i.e. the paper's setup;
+  our triviaqa-dpr / -ip workloads re-embed the queries and are not comparable to it.
