@@ -1,26 +1,39 @@
 #!/bin/sh
 # Watchdog for the matrix driver (run_matrix.sh, copied to /tmp/mx/driver3.sh).
-# Every 20 s: if MemAvailable < 20 GB, kill the most recently started simulator /
+# Every 10 s: if MemAvailable < 30 GB, kill the most recently started simulator /
 # real-Aker job (it has lost the least work; mx_run_job.sh retries it later)
 # instead of letting the kernel's out-of-memory killer pick a long-running one.
+# Light jobs get oom_score_adj 800, heavy 500, so the kernel kills them before a prep step.
 # Every 10 min: append a status line to /tmp/mx/status.log and restart the driver
 # if it is gone before /tmp/mx/ALL_3.DONE exists (safe: finished and running jobs
-# are skipped by mx_run_job.sh).
+# are skipped by mx_run_job.sh). Every hour: mx_requeue.sh for given-up jobs.
 cd /local/home/jialind/ann-exact-caching || exit 1
 M=/tmp/mx
 i=0
 while [ ! -f $M/ALL_3.DONE ]; do
+  # make the kernel's out-of-memory killer prefer light jobs (ESCI, 1% budget, real Aker;
+  # cheap to retry) over the long heavy ones (ours / LRU at a 10% budget)
+  # heavy jobs 500, light jobs 800; prep steps (one at a time, hours each) keep 0
+  ps -eo pid,args | grep -E "^ *[0-9]+ [^ ]*python[^ ]* -u [^ ]*(online_sim.py|eval_aker_real.py)" > $M/.jobs
+  for pid in $(grep -vE -- "--budget 0\.1 .*--method (static|greedy|lru)" $M/.jobs | awk '{print $1}'); do
+    [ "$(cat /proc/$pid/oom_score_adj 2>/dev/null)" = "800" ] || echo 800 > /proc/$pid/oom_score_adj 2>/dev/null
+  done
+  for pid in $(grep -E -- "--budget 0\.1 .*--method (static|greedy|lru)" $M/.jobs | awk '{print $1}'); do
+    [ "$(cat /proc/$pid/oom_score_adj 2>/dev/null)" = "500" ] || echo 500 > /proc/$pid/oom_score_adj 2>/dev/null
+  done
   avail=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
-  if [ "$avail" -lt 20 ]; then
+  if [ "$avail" -lt 30 ]; then
     # youngest job = smallest elapsed seconds
-    pid=$(ps -eo pid,etimes,args | grep -v "sh -c" | grep -v mx_run_job | grep -E "^ *[0-9]+ +[0-9]+ [^ ]*python[^ ]* -u [^ ]*(online_sim.py|eval_aker_real.py)" \
-          | sort -k2 -n | head -1 | awk '{print $1}')
+    # youngest light job first; the youngest heavy job only if no light job runs
+    jobs=$(ps -eo pid,etimes,args | grep -E "^ *[0-9]+ +[0-9]+ [^ ]*python[^ ]* -u [^ ]*(online_sim.py|eval_aker_real.py)")
+    pid=$(printf '%s\n' "$jobs" | grep -vE -- "--budget 0\.1 .*--method (static|greedy|lru)" | sort -k2 -n | head -1 | awk '{print $1}')
+    [ -n "$pid" ] || pid=$(printf '%s\n' "$jobs" | sort -k2 -n | head -1 | awk '{print $1}')
     if [ -n "$pid" ]; then
       echo "$(date +%T) low memory (${avail} GB): killed youngest job $pid: $(ps -o args= -p $pid | cut -c1-200)" >> $M/watchdog.log
       kill -9 $pid
     fi
   fi
-  if [ $((i % 30)) -eq 0 ]; then
+  if [ $((i % 60)) -eq 0 ]; then
     sims=$(ps -eo args | grep -cE "^[^ ]*python[^ ]* -u [^ ]*online_sim.py")
     akers=$(ps -eo args | grep -cE "^[^ ]*python[^ ]* -u [^ ]*eval_aker_real.py")
     fails=$(grep -c "" $M/failures.log 2>/dev/null); fails=${fails:-0}
@@ -32,7 +45,15 @@ while [ ! -f $M/ALL_3.DONE ]; do
       nohup /tmp/mx/driver3.sh >> $M/driver3.log 2>&1 &
     fi
   fi
+  # Aker's telemetry dumps (/tmp is RAM-backed): remove any older than 10 min
+  if [ $((i % 30)) -eq 0 ]; then
+    find /tmp -maxdepth 1 -name "aker_trace_*" -type d -mmin +10 -exec rm -rf {} + 2>/dev/null
+  fi
+  # every hour: re-queue given-up jobs (in the background)
+  if [ $((i % 360)) -eq 180 ]; then
+    nohup sh simulations/approximate_hits/mx_requeue.sh > /dev/null 2>&1 &
+  fi
   i=$((i + 1))
-  sleep 20
+  sleep 10
 done
 echo "$(date +%T) all done" >> $M/watchdog.log

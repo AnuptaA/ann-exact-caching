@@ -4,7 +4,7 @@
 # The job line has the form "mkdir -p ... && [ -f <out>.json ] || <command> > <log> 2>&1".
 #  - skips the job if its JSON exists, or waits while an identical job (same JSON
 #    target) is already running (e.g. an orphan of an earlier driver);
-#  - starts it only when MemAvailable >= <min_free_gb> (re-checked after a random
+#  - starts it only when MemAvailable >= <min_free_gb> and no /tmp/mx/HOLD exists (re-checked after a random
 #    pause, so many slots do not start at once on the same reading);
 #  - if it ends without its JSON (e.g. killed by the out-of-memory killer, which
 #    leaves no traceback), waits for memory and retries, at most 2 retries; a
@@ -24,9 +24,10 @@ while [ -n "$JSON" ] && same_running; do sleep 60; done
 [ -n "$JSON" ] && [ -f "$JSON" ] && exit 0
 try=0
 while :; do
-  while [ "$(free_gb)" -lt "$MIN" ]; do sleep $((30 + $(od -An -N1 -tu1 /dev/urandom) % 30)); done
+  # /tmp/mx/HOLD: a memory-heavy prep step is ramping up; start nothing new meanwhile
+  while [ -f /tmp/mx/HOLD ] || [ "$(free_gb)" -lt "$MIN" ]; do sleep $((30 + $(od -An -N1 -tu1 /dev/urandom) % 30)); done
   sleep $(( $(od -An -N1 -tu1 /dev/urandom) % 20 ))
-  [ "$(free_gb)" -lt "$MIN" ] && continue
+  { [ -f /tmp/mx/HOLD ] || [ "$(free_gb)" -lt "$MIN" ]; } && continue
   sh -c "$LINE"
   [ -z "$JSON" ] || [ -f "$JSON" ] && exit 0
   if [ -n "$LOG" ] && grep -q "Traceback" "$LOG" 2>/dev/null; then

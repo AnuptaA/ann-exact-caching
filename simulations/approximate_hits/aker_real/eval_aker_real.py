@@ -109,7 +109,15 @@ class Aker:
         return self.lib.shim_status(self.h).decode(errors="replace")
 
     def close(self):
+        """Destroy the cache. Aker then exports telemetry to /tmp/aker_trace_<time>_pid<PID>_gen<G>/
+        (~300 MB per run, and /tmp is RAM-backed here); remove it, as the harness keeps
+        its own summary and Aker's status text."""
+        import os
+        import glob
+        import shutil
         self.lib.shim_destroy(self.h)
+        for d in glob.glob(f"/tmp/aker_trace_*_pid{os.getpid()}_*"):
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def load(prep, stream_name="trace", native=False):
