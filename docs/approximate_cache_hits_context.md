@@ -2225,3 +2225,26 @@ Campaign repairs, continued (11-10 morning):
 State 11-10 09:18: heavy 92 / 384, light 1% 1594 / 2852, light 10% 1706 /
 2208, real Aker (SPACEV) done; TriviaQA Zipf 0.6 prep in its last stage,
 then 0.99 and 0.3, then their runs.
+
+### 9c. TriviaQA with the inner-product transform (second variant; decided with Jialin)
+
+DPR_web is an inner-product model, Aker searches by Euclidean distance. On a
+2M-vector sample: the top-10 by plain Euclidean and by inner product share only
+20% of their members, and Euclidean favors low-norm passages (median norm of
+its top-10 14.13 vs 14.62 for inner product, database median 14.39). The
+ratio d10 / d1000 is not a fair contrast measure after the transform (a
+constant offset in the squared distance compresses it: .975), what matters is
+the ranking.
+Transform (`datasets/make_sphere_ip_transform.py`): append sqrt(M^2 - |x|^2)
+to every database vector (M = 16.746, the largest norm; norms 13.4-16.7,
+median 14.39) and 0 to every query; Euclidean neighbors then equal
+inner-product neighbors (checked: identical top-10 for 50 of 50 queries over
+300k rows). Written as datasets/aker/sphere-ip-10m.npy (769-d float32, 31 GB,
+memory-mapped via a -f32 symlink) and triviaqa-ip-sim-100k-<z>.npy; workloads
+triviaqa-ip-<z>. TriviaQA now has two variants through the whole pipeline:
+dpr (Euclidean on the DPR_web vectors, as Aker) and ip (transformed).
+`run_matrix_triviaqa.sh [dpr|ip]`: both launchers share one prep lock
+(/tmp/mx/prep.lock), the "already done" check is made after taking the lock,
+job lists are named by variant; watchdog supervises both. Each variant costs
+3 top-500 preps (~2 h each) and 6 data-change preps (~2-2.5 h each), strictly
+one at a time.

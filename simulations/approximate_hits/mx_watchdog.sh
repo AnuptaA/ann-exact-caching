@@ -10,7 +10,7 @@
 cd /local/home/jialind/ann-exact-caching || exit 1
 M=/tmp/mx
 i=0
-while [ ! -f $M/ALL_3.DONE ] || [ ! -f $M/H_4.DONE ] || [ ! -f $M/TQA.DONE ]; do
+while [ ! -f $M/ALL_3.DONE ] || [ ! -f $M/H_4.DONE ] || [ ! -f $M/TQA.DONE ] || [ ! -f $M/TQA_ip.DONE ]; do
   # make the kernel's out-of-memory killer prefer light jobs (ESCI, 1% budget, real Aker;
   # cheap to retry) over the long heavy ones (ours / LRU at a 10% budget)
   # heavy jobs 500, light jobs 800; prep steps (one at a time, hours each) keep 0
@@ -41,7 +41,7 @@ while [ ! -f $M/ALL_3.DONE ] || [ ! -f $M/H_4.DONE ] || [ ! -f $M/TQA.DONE ]; do
     njson=$(find simulations/approximate_hits/results/online simulations/approximate_hits/results/aker_real -name "*.json" -newer $M/driver.sh | wc -l)
     echo "$(date '+%m-%d %T') free ${avail} GB; running sims $sims, aker $akers; new results since launch $njson; retries $fails, gave up / traceback $gaveup" >> $M/status.log
     # supervised launchers (all safe to restart: done / running jobs are skipped)
-    for pair in driver3.sh:ALL_3.DONE heavy4.sh:H_4.DONE tqa2.sh:TQA.DONE; do
+    for pair in driver3.sh:ALL_3.DONE heavy4.sh:H_4.DONE tqa_dpr.sh:TQA.DONE tqa_ip.sh:TQA_ip.DONE; do
       sc=${pair%%:*}; fl=${pair#*:}
       [ -f $M/$sc ] || continue
       if [ ! -f $M/$fl ] && ! pgrep -f "/tmp/mx/$sc" > /dev/null; then

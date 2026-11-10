@@ -62,6 +62,11 @@ WORKLOADS = {
     **{f"triviaqa-dpr-{s}": {"base": "sphere-10m.npy",
                              "trace": [f"triviaqa-dpr-sim-100k-{s}.npy"]}
        for s in ("0.3", "0.6", "0.99")},
+    # the same, after the inner-product -> Euclidean transform (769-d; Euclidean neighbors =
+    # inner-product neighbors; datasets/make_sphere_ip_transform.py)
+    **{f"triviaqa-ip-{s}": {"base": "sphere-ip-10m.npy",
+                            "trace": [f"triviaqa-ip-sim-100k-{s}.npy"]}
+       for s in ("0.3", "0.6", "0.99")},
     "spacev-real": {"base": "spacev-10m.npy",
                     "trace": ["spacev1b/query_log.bin", "spacev1b/query.bin"]},
 }

@@ -17,11 +17,11 @@ WORKLOADS = [("esci1m", "shift", 0.1), ("esci1m", "random", 0.1),
              ("spacev-aker-0.6", "trace", 0.01), ("spacev-aker-0.6", "shift", 0.01),
              ("spacev-aker-0.3", "trace", 0.01), ("spacev-aker-0.99", "trace", 0.01),
              ("spacev-real", "trace", 0.01)] + \
-    [(f"triviaqa-dpr-{z}", "trace", 0.01) for z in ("0.3", "0.6", "0.99")]
+    [(f"triviaqa-{v}-{z}", "trace", 0.01) for v in ("dpr", "ip") for z in ("0.3", "0.6", "0.99")]
 # start mix -> mild shift -> full shift -> return (online_prepare --add-multishift)
 MULTISHIFT = [("esci1m", "multishift", 0.1), ("spacev-aker-0.3", "multishift", 0.01),
               ("spacev-aker-0.6", "multishift", 0.01), ("spacev-aker-0.99", "multishift", 0.01)] + \
-    [(f"triviaqa-dpr-{z}", "multishift", 0.01) for z in ("0.3", "0.6", "0.99")]
+    [(f"triviaqa-{v}-{z}", "multishift", 0.01) for v in ("dpr", "ip") for z in ("0.3", "0.6", "0.99")]
 DETECT = {"none": "", "score": "score", "retention": "retention", "hitrate": "hitrate",
           "all": "score retention hitrate"}
 
