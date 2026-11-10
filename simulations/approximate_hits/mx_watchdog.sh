@@ -10,7 +10,7 @@
 cd /local/home/jialind/ann-exact-caching || exit 1
 M=/tmp/mx
 i=0
-while [ ! -f $M/ALL_3.DONE ]; do
+while [ ! -f $M/ALL_3.DONE ] || [ ! -f $M/H_4.DONE ] || [ ! -f $M/TQA.DONE ]; do
   # make the kernel's out-of-memory killer prefer light jobs (ESCI, 1% budget, real Aker;
   # cheap to retry) over the long heavy ones (ours / LRU at a 10% budget)
   # heavy jobs 500, light jobs 800; prep steps (one at a time, hours each) keep 0
@@ -40,10 +40,15 @@ while [ ! -f $M/ALL_3.DONE ]; do
     gaveup=$(grep -c "GAVE UP\|traceback" $M/failures.log 2>/dev/null); gaveup=${gaveup:-0}
     njson=$(find simulations/approximate_hits/results/online simulations/approximate_hits/results/aker_real -name "*.json" -newer $M/driver.sh | wc -l)
     echo "$(date '+%m-%d %T') free ${avail} GB; running sims $sims, aker $akers; new results since launch $njson; retries $fails, gave up / traceback $gaveup" >> $M/status.log
-    if ! pgrep -f "/tmp/mx/driver3.sh" > /dev/null; then
-      echo "$(date +%T) driver3 not running: restarting" >> $M/watchdog.log
-      nohup /tmp/mx/driver3.sh >> $M/driver3.log 2>&1 &
-    fi
+    # supervised launchers (all safe to restart: done / running jobs are skipped)
+    for pair in driver3.sh:ALL_3.DONE heavy4.sh:H_4.DONE tqa2.sh:TQA.DONE; do
+      sc=${pair%%:*}; fl=${pair#*:}
+      [ -f $M/$sc ] || continue
+      if [ ! -f $M/$fl ] && ! pgrep -f "/tmp/mx/$sc" > /dev/null; then
+        echo "$(date +%T) $sc not running: restarting" >> $M/watchdog.log
+        nohup sh /tmp/mx/$sc >> $M/${sc%.sh}.log 2>&1 &
+      fi
+    done
   fi
   # Aker's telemetry dumps (/tmp is RAM-backed): remove any older than 10 min
   if [ $((i % 30)) -eq 0 ]; then
