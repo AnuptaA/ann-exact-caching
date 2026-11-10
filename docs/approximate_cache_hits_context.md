@@ -2203,3 +2203,25 @@ Campaign repairs (night of 11-09):
   an empty answer file; re-tuned to .85 / .8 (`/tmp/mx/diskann_real.sh`).
 - Driver v3: `run_matrix.sh`; TriviaQA: `run_matrix_triviaqa.sh` (prep
   serialized, one ~65 GB step at a time; runs queued as inputs land).
+
+Campaign repairs, continued (11-10 morning):
+- Hidden memory consumer: /tmp is a RAM-backed tmpfs here, and Aker exports
+  ~300 MB of telemetry per run to /tmp/aker_trace_<time>_pid<PID>_gen<G>/;
+  519 such dumps held 62 GB of RAM ("shared" in `free`), which caused the
+  repeated memory crunches. The real-Aker harness now deletes its dump on
+  close; the watchdog removes any left over (> 10 min old).
+- A TriviaQA exact-neighbor prep (~65-80 GB) was itself OOM-killed while it
+  ramped up next to the simulator pools. Now: each prep step waits for 120 GB
+  free and sets /tmp/mx/HOLD for its first 15 min (mx_run_job.sh starts
+  nothing new meanwhile); the watchdog sets oom_score_adj 800 on light jobs
+  and 500 on heavy jobs so the kernel kills them before a prep step (0).
+- Heavy pool reordered (`run_matrix_heavy4.sh`, 7 slots): every cell's seed 0
+  first (ours, then LRU), then seed 1. Durations at a 10% SPACEV budget:
+  ours ~28 min, LRU ~1 h 40 min per 100k-request run.
+- Monitoring: `sh /tmp/mx/check.sh` (status, kills, failures, progress per
+  pool); /tmp/mx/status.log (every 10 min), watchdog.log, failures.log.
+  The watchdog supervises driver3.sh, heavy4.sh and tqa2.sh (restarts them
+  if they die) and re-queues given-up jobs hourly (at most twice per job).
+State 11-10 09:18: heavy 92 / 384, light 1% 1594 / 2852, light 10% 1706 /
+2208, real Aker (SPACEV) done; TriviaQA Zipf 0.6 prep in its last stage,
+then 0.99 and 0.3, then their runs.
