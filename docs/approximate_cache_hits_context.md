@@ -2356,3 +2356,23 @@ backend had ~.9 on misses). Paper values read off its Figure 9 (+- .02):
   TriviaQA at 5% (.75-.79); our earlier grid includes both settings.
 - TriviaQA here = the released (mismatched-encoder) queries, i.e. the paper's setup;
   our triviaqa-dpr / -ip workloads re-embed the queries and are not comparable to it.
+
+### 9i. Queue overload and global memory admission (11-10 evening)
+
+What went wrong: per-pool slot caps do not add up. The TriviaQA launchers start one new
+pool per trace as its prep lands, the hourly re-queue starts another pool each hour, and the
+LRU probes and real-Aker paper check added their own; about 70 jobs ran at once (26 of them
+ours / LRU at a 10% budget). The watchdog then killed young jobs in a loop (273 kills) and
+333 jobs ran out of retries.
+Memory facts (private memory, /proc/<pid>/smaps_rollup; RSS overstates it because every
+process maps the shared database, SPHERE 31 GB): ours at a 10% budget peaks ~17 GB while
+building its warm-up cache, then holds ~9-14 GB; LRU at 10% grows slowly (5-7 GB after 5 h);
+other jobs 1-5 GB; a TriviaQA prep step 35-90 GB.
+Fix (`mx_run_job.sh` v3): GLOBAL admission under a lock. A job starts only if committed
+memory + its peak estimate <= 320 GB and MemAvailable >= its estimate + 30 GB. Committed =
+running jobs at max(class peak, private) in their first 30 min, then 1.2 x private; a prep
+step at max(90, private). A cap of 350 GB caused two dips to 6-10 GB (kernel OOM kills), so
+320 + headroom. The 16 youngest heavy jobs (< 60 min old) and 58 idle old-version wrappers
+were stopped; `mx_requeue.sh` now re-queues every job that started (log exists) but has no
+result and no traceback, from every queue list (cap 2 per job); the watchdog's emergency
+threshold is 15 GB.

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Watchdog for the matrix driver (run_matrix.sh, copied to /tmp/mx/driver3.sh).
-# Every 10 s: if MemAvailable < 30 GB, kill the most recently started simulator /
+# Every 10 s: if MemAvailable < 15 GB (emergency only; mx_run_job.sh admits by committed memory), kill the most recently started simulator /
 # real-Aker job (it has lost the least work; mx_run_job.sh retries it later)
 # instead of letting the kernel's out-of-memory killer pick a long-running one.
 # Light jobs get oom_score_adj 800, heavy 500, so the kernel kills them before a prep step.
@@ -22,7 +22,7 @@ while [ ! -f $M/ALL_3.DONE ] || [ ! -f $M/H_4.DONE ] || [ ! -f $M/TQA.DONE ] || 
     [ "$(cat /proc/$pid/oom_score_adj 2>/dev/null)" = "500" ] || echo 500 > /proc/$pid/oom_score_adj 2>/dev/null
   done
   avail=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo)
-  if [ "$avail" -lt 30 ]; then
+  if [ "$avail" -lt 15 ]; then
     # youngest job = smallest elapsed seconds
     # youngest light job first; the youngest heavy job only if no light job runs
     jobs=$(ps -eo pid,etimes,args | grep -E "^ *[0-9]+ +[0-9]+ [^ ]*python[^ ]* -u [^ ]*(online_sim.py|eval_aker_real.py)")
