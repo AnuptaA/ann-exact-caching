@@ -276,7 +276,11 @@ def main():
     ap.add_argument("--variants", type=str, nargs="*", default=None,
                     help="only time hit-decision variants knn+shell, e.g. brute+fp32 "
                          "brute+sq4 brute+balls hnsw32+balls (no backend arms)")
+    from simulations.approximate_hits.timing_env import add_args, make_guard
+    add_args(ap)
     args = ap.parse_args()
+    guard = make_guard(args)       # refuses unless the machine is quiet (timing_env.py)
+    guard.start()
     st = dict(np.load(args.state))
     prep = Path(args.prep)
     meta = json.loads((prep / "meta.json").read_text()) if (prep / "meta.json").exists() \
@@ -298,6 +302,8 @@ def main():
     xd = np.ascontiguousarray(xs.astype(idx_dtype))     # queries as the DiskANN index takes them
     if args.variants:
         res = {"state": args.state, "n": len(xs), "variants": run_variants(args, db, q, st, xs)}
+        guard.stop()
+        res["environment"] = guard.report()
         out = Path(args.state).with_name(f"variants_{Path(args.state).stem}.json")
         out.write_text(json.dumps(res, indent=1))
         logger.info(f"wrote {out}")
@@ -364,6 +370,11 @@ def main():
                       if (~hits).any() else None,
                       "vs_equal_memory": res["backend_mem"]["mean_ms"] / res["cache"]["mean_ms"]}
     logger.info(f"speedup {res['speedup']}")
+    guard.stop()
+    res["environment"] = guard.report()
+    logger.info(f"environment: {res['environment']['verdict']} "
+                f"(other processes: mean {res['environment']['during']['other_cores_mean']} cores, "
+                f"max {res['environment']['during']['other_cores_max']})")
     out = Path(args.state).with_name(
         f"e2e_{Path(args.state).stem}_{args.decision.replace('+', '_')}_L{args.L}.json")
     out.write_text(json.dumps(res, indent=1))

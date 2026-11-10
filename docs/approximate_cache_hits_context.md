@@ -2248,3 +2248,28 @@ dpr (Euclidean on the DPR_web vectors, as Aker) and ip (transformed).
 job lists are named by variant; watchdog supervises both. Each variant costs
 3 top-500 preps (~2 h each) and 6 data-change preps (~2-2.5 h each), strictly
 one at a time.
+
+### 9d. Quiet-machine guard for timing runs
+
+Timing results are only valid if nothing else competed for CPU, memory
+bandwidth or the disk. `simulations/approximate_hits/timing_env.py`:
+- before a timing run, measures for 10 s how much CPU and disk traffic OTHER
+  processes cause (machine-wide busy time minus the timing process's own,
+  /proc/stat vs /proc/<pid>/stat; block-device bytes minus its own,
+  /proc/diskstats vs /proc/<pid>/io) and refuses to start unless others use
+  <= 1 core and <= 50 MB/s (`--wait-quiet MIN` waits for quiet instead,
+  `--allow-busy` runs anyway and records the contention);
+- during the run, a separate sampler process (not a thread: diskannpy holds
+  the GIL for minutes while loading an index and starved a first thread
+  version) records the same quantities every 2 s; validated: 24 added
+  busy processes show as +23 cores, the timing process's own load is excluded,
+  124 of 124 expected samples;
+- the result JSON gets "environment": verdict quiet / contended, start check
+  (busiest processes), mean / p95 / max load of others during the run, load
+  averages, host and CPU model. Wired into `eval_timing.py` (both paths) and
+  `aker_real/eval_aker_real.py --timing`.
+- `python simulations/approximate_hits/timing_env.py audit` lists the verdict
+  of every timing result. All 20 existing ones predate the guard ("no record";
+  by file timestamps nothing else wrote results during their windows). The
+  headline timing numbers will be re-run under the guard once the campaign
+  has drained; timing under shifts / data changes only runs under it.

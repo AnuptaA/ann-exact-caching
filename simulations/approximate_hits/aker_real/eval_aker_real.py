@@ -338,6 +338,9 @@ def run_timing(args, db, q, top, stream):
     neighbors' vectors and inserting the entry. Then the same requests against
     DiskANN alone, without and with Aker's memory as DiskANN node cache."""
     from simulations.approximate_hits.eval_timing import open_diskann, time_backend, summary
+    from simulations.approximate_hits.timing_env import make_guard
+    guard = make_guard(args)       # refuses unless the machine is quiet (timing_env.py)
+    guard.start()
     k, delta = args.k, args.delta
     n_neigh = k + delta
     pool = int(args.budget * len(db))
@@ -397,6 +400,11 @@ def run_timing(args, db, q, top, stream):
                       "vs_equal_memory": res["backend_mem"]["mean_ms"] / res["cache"]["mean_ms"]}
     logger.info(f"speedup {res['speedup']}")
     ak.close()
+    guard.stop()
+    res["environment"] = guard.report()
+    logger.info(f"environment: {res['environment']['verdict']} "
+                f"(other processes: mean {res['environment']['during']['other_cores_mean']} cores, "
+                f"max {res['environment']['during']['other_cores_max']})")
     return res
 
 
@@ -431,6 +439,8 @@ def main():
     ap.add_argument("--warm", type=int, default=200, help="timing: untimed searches first, per arm")
     ap.add_argument("--L", type=int, default=128, help="timing: DiskANN search list")
     ap.add_argument("--diskann", type=str, default=str(RES / "backends" / "spacev10m" / "diskann"))
+    from simulations.approximate_hits.timing_env import add_args
+    add_args(ap)
     args = ap.parse_args()
     sys.path.append(str(HERE.parent.parent.parent))
     prep = Path(args.prep)
