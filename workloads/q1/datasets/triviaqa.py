@@ -14,6 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
+from workloads.q1 import atomic
+from workloads.q1.progress import Progress
+
 logger = logging.getLogger(__name__)
 
 HF = "https://huggingface.co/datasets/mandarjoshi/trivia_qa/resolve/refs%2Fconvert%2Fparquet"
@@ -28,6 +31,7 @@ MIN_TORCH = (2, 6)     # torch.load defaults to weights_only=True from 2.6
 DIM = 768
 EXPECTED_DISTINCT = 95_000
 COUNT_TOLERANCE = 0.1
+PART_QUESTIONS = 5000     # encoded questions are kept in parts of this size, so a killed run resumes
 
 
 def dedup_questions(questions) -> list[str]:
@@ -60,13 +64,49 @@ def load_questions(parquet_paths: dict) -> tuple[list[str], dict]:
     return distinct, report
 
 
-def encode_questions(questions: list[str], encode, batch_size: int = 128) -> np.ndarray:
-    """Stack encoder outputs as float32, no normalization."""
-    parts = [np.asarray(encode(questions[i:i + batch_size]), dtype=np.float32)
-             for i in range(0, len(questions), batch_size)]
-    out = np.vstack(parts) if parts else np.zeros((0, DIM), dtype=np.float32)
-    if out.shape != (len(questions), DIM):
-        raise ValueError(f"encoder returned {out.shape}, expected {(len(questions), DIM)}")
+def _encode_batches(texts: list[str], encode, batch_size: int, progress: Progress, offset: int) -> np.ndarray:
+    parts = []
+    for i in range(0, len(texts), batch_size):
+        parts.append(np.asarray(encode(texts[i:i + batch_size]), dtype=np.float32))
+        progress.update(offset + i + len(parts[-1]))
+    return np.vstack(parts) if parts else np.zeros((0, DIM), dtype=np.float32)
+
+
+def encode_questions(questions: list[str], encode, batch_size: int = 128, parts_dir: Path | None = None,
+                     part_size: int = PART_QUESTIONS, progress_interval: float = 30.0) -> np.ndarray:
+    """Stack encoder outputs as float32, no normalization; logs the rate and an ETA.
+
+    With parts_dir the output is kept in atomic parts, so a killed run resumes from the finished
+    parts; the folder is checked against the questions and is left for the caller to delete.
+    """
+    from workloads.q1.datasets.esci import texts_sha256
+    n = len(questions)
+    size = part_size if parts_dir is not None else max(n, 1)
+    resumed = 0
+    if parts_dir is not None:
+        parts_dir = Path(parts_dir)
+        parts_dir.mkdir(parents=True, exist_ok=True)
+        want = {"n": n, "texts_sha256": texts_sha256(questions), "part_size": part_size}
+        manifest = parts_dir / "manifest.json"
+        if manifest.exists() and json.loads(manifest.read_text()) != want:
+            raise ValueError(f"{parts_dir} holds parts of other questions; remove it to start over")
+        atomic.write_json(manifest, want)
+        resumed = sum(min(size, n - s) for i, s in enumerate(range(0, n, size))
+                      if (parts_dir / f"part_{i:05d}.npy").exists())
+    progress = Progress("triviaqa encode", n, "questions", done=resumed, interval=progress_interval)
+    out_parts = []
+    for i, start in enumerate(range(0, n, size)):
+        path = parts_dir / f"part_{i:05d}.npy" if parts_dir is not None else None
+        if path is not None and path.exists():
+            out_parts.append(np.load(path))
+            continue
+        block = _encode_batches(questions[start:start + size], encode, batch_size, progress, start)
+        if path is not None:
+            atomic.save_npy(path, block)
+        out_parts.append(block)
+    out = np.vstack(out_parts) if out_parts else np.zeros((0, DIM), dtype=np.float32)
+    if out.shape != (n, DIM):
+        raise ValueError(f"encoder returned {out.shape}, expected {(n, DIM)}")
     return out
 
 
@@ -90,7 +130,7 @@ def check_safe_torch() -> None:
 
 
 def dpr_query_encoder(checkpoint_dir: Path, max_length: int = 64, device: str = "cpu",
-                      tokenizer_dir: Path | None = None):
+                      tokenizer_dir: Path | None = None, threads: int | None = None):
     """Callable list[str] -> (n, 768) ndarray using the DPR question encoder (CLS).
 
     With tokenizer_dir (a folder from fetch_tokenizer) nothing is downloaded.
@@ -98,6 +138,8 @@ def dpr_query_encoder(checkpoint_dir: Path, max_length: int = 64, device: str = 
     import torch
     from transformers import AutoTokenizer, BertTokenizerFast, DPRQuestionEncoder
     check_safe_torch()
+    if device == "cpu" and threads:
+        torch.set_num_threads(threads)
     tokenizer = (BertTokenizerFast.from_pretrained(str(tokenizer_dir)) if tokenizer_dir is not None
                  else AutoTokenizer.from_pretrained("bert-base-uncased"))
     model = DPRQuestionEncoder.from_pretrained(str(checkpoint_dir)).to(device).eval()

@@ -4,11 +4,15 @@ Aker and Proximity (Aker's fixed-threshold mode) replayed over a precomputed pgv
 table. `harness/DECISIONS.md` lists decisions, deviations and findings; `harness/aker/DIFFERENCES.md` lists
 every difference from the paper; `third_party/aker/PATCHES.md` lists the local changes to the library.
 
-## Run book (EC2, Ubuntu 22.04 or 24.04, Linux x86_64, one CUDA GPU)
+## Run book (EC2, Ubuntu 22.04 or 24.04, Linux x86_64; a CUDA GPU is recommended, not required)
 
 Suggested instance (a recommendation, not measured): one GPU instance with about 192 GB RAM
 (for example g5.12xlarge) and about 1.5 TB of gp3. Clone the repo at a commit and keep the
 tree clean (every q1 target refuses a dirty tree).
+
+Without a usable GPU, ground truth and text embedding run on the CPU: each stage prints "No GPU found: running <stage> on CPU"
+with an estimate, records the device in `.done/<stage>.json`, `env.json` and every result header, and `make q1-preflight` lists
+an estimate per dataset. All cores are used (`Q1_THREADS` caps them). The estimates are orders of magnitude from small samples.
 
     make q1-setup                    # packages, PostgreSQL 16 + pgvector v0.8.0, FAISS, venvs, drivers
     make q1-pg-start                 # if the cluster is not running
@@ -34,11 +38,11 @@ Logs: `$Q1_DATA/<dataset>/.logs/generate.log` (all stages, with progress and ETA
 `answer_table_<i>.log` per shard, `env.json` (versions, commit), `.failed/<stage>.json` after a failure.
 A failed stage stops `make` with the stage name and the log tail. Results: `$Q1_DATA/results/<commit>/`.
 
-Variables: `Q1_DATA` (default /data/q1), `Q1_LIST_SIZE` (L, default 200), `Q1_ALLOW_SLOW=1` (accept CPU ground
-truth or CPU ESCI embedding), `Q1_PG_DSN`, `Q1_PG_WORKERS` (parallel answer-table processes), `Q1_DEVICE` (auto, cuda, numpy), `DATASETS` (restrict a run to some datasets),
+Variables: `Q1_DATA` (default /data/q1), `Q1_LIST_SIZE` (L, default 200), `Q1_PG_DSN`, `Q1_PG_WORKERS` (parallel answer-table processes), `Q1_DEVICE` (auto = GPU if usable else CPU, cpu, cuda, mps;
+`cuda` and `mps` fail when unavailable), `Q1_THREADS` (cores for the CPU stages, default all), `DATASETS` (restrict a run to some datasets),
 `Q1_DRIVERS`, `GT_QUERY_CHUNK`/`GT_BASE_CHUNK`.
 
-Setup (`make q1-setup`) overrides are listed in the header of `harness/deploy/setup_instance.sh`: `Q1_MIN_DATA_GB`, `Q1_SETUP_DATASETS`, `Q1_ALLOW_ROOT_VOLUME`, `Q1_ALLOW_NO_GPU=1` and `Q1_ALLOW_SHORTFALL=1` (CPU dry run on a small machine: a missing GPU and disk/RAM shortfalls are warnings, see `EC2_FIRST_RUN.md` section 1b).
+Setup (`make q1-setup`) overrides are listed in the header of `harness/deploy/setup_instance.sh`: `Q1_MIN_DATA_GB`, `Q1_SETUP_DATASETS`, `Q1_ALLOW_ROOT_VOLUME` and `Q1_ALLOW_SHORTFALL=1` (dry run on a small machine: disk/RAM shortfalls are warnings, see `EC2_FIRST_RUN.md` section 1b). A missing GPU needs no flag: it is a `WARN` in the setup summary.
 
 `q1-generate` runs these stages in order and skips finished ones (markers in
 `$Q1_DATA/<dataset>/.done/`): fetch, embed, to_f32, inputs, groundtruth, pg_load, pg_index,

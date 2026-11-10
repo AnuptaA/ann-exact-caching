@@ -46,66 +46,42 @@ def test_steps_run_in_order_with_the_gpu_check_last_and_all_are_listed(tmp_path)
     assert summary["gpu"] == "PASS" and summary["drivers"] == "PASS" and "setup done" in out.stdout
 
 
+CAUSES = {10: "no NVIDIA driver", 11: "driver too old", 12: "torch missing", 13: "cannot use"}
+
+
 @pytest.mark.parametrize("code", [10, 11, 12, 13])
-def test_a_gpu_failure_never_prevents_the_builds_and_fails_setup(tmp_path, code):
-    env = _env(tmp_path, gpu_exit=code)
-    out = _setup(env)
+def test_no_usable_gpu_is_a_warning_and_setup_still_succeeds(tmp_path, code):
+    out = _setup(_env(tmp_path, gpu_exit=code))
     summary = _summary(out)
-    assert out.returncode == 1
-    assert summary["gpu"] == "FAIL" and summary["drivers"] == "PASS" and summary["postgres"] == "PASS"
+    assert out.returncode == 0, out.stderr + out.stdout
+    assert summary["gpu"] == "WARN" and summary["drivers"] == "PASS" and summary["postgres"] == "PASS"
     assert summary["pg_start"] == "PASS" and summary["preflight"] == "PASS"
-    assert "build_linux.sh" in out.stdout and "setup FAILED: gpu" in out.stdout
-    assert (tmp_path / "gpu_check_ran").exists()
-    assert {10: "no NVIDIA driver", 11: "driver too old", 12: "torch missing", 13: "cannot use"}[code] in out.stdout
+    assert "build_linux.sh" in out.stdout and "setup FAILED" not in out.stdout
+    assert "setup OK in CPU mode (no usable GPU)" in out.stdout and "stages run on the CPU" in out.stdout
+    assert "!!! No usable GPU: ground truth and text embedding will run on the CPU" in out.stderr
+    assert (tmp_path / "gpu_check_ran").exists() and CAUSES[code] in out.stdout
 
 
-def test_an_unrelated_failure_skips_only_its_dependents_and_the_gpu_check_still_runs(tmp_path):
-    out = _setup(_env(tmp_path, Q1_PGDATA="/data"))
-    summary = _summary(out)
-    assert out.returncode == 1
-    assert summary["pg_cluster"] == "FAIL" and "refusing a path" in out.stdout.split("setup summary")[1]
-    assert summary["pg_start"] == "SKIPPED" and summary["preflight"] == "SKIPPED"
-    assert summary["drivers"] == "PASS" and summary["python_env"] == "PASS" and summary["gpu"] == "PASS"
-    assert "setup FAILED: pg_cluster" in out.stdout
+def test_an_unexpected_gpu_check_failure_is_still_a_failure(tmp_path):
+    out = _setup(_env(tmp_path, gpu_exit=1))
+    assert out.returncode == 1 and _summary(out)["gpu"] == "FAIL" and "unexpectedly" in out.stdout
 
 
-def test_a_failed_toolchain_step_skips_the_drivers_but_not_the_rest(tmp_path):
-    env = _fake_system(tmp_path, "1.83.0.1ubuntu2", "3.28.3", gcc="7.5.0")
-    out = _setup(env)
-    summary = _summary(out)
-    assert out.returncode == 1 and "need >= 9" in out.stderr
-    assert summary["system_packages"] == "FAIL" and summary["drivers"] == "SKIPPED"
-    assert summary["preconditions"] == "PASS" and summary["data_volume"] == "PASS"
-    assert "setup FAILED: system_packages" in out.stdout
+def test_a_working_gpu_gives_no_cpu_banner(tmp_path):
+    out = _setup(_env(tmp_path, gpu_exit=0))
+    assert "No usable GPU" not in out.stderr and "CPU mode" not in out.stdout
 
 
-def test_a_failed_precondition_stops_everything_and_still_prints_the_summary(tmp_path):
-    env = _env(tmp_path, PYTHON_BIN="/nonexistent/python")
-    out = _setup(env)
-    summary = _summary(out)
-    assert out.returncode == 1 and "not found" in out.stderr
-    assert summary["preconditions"] == "FAIL" and summary["drivers"] == "NOT RUN" and summary["gpu"] == "NOT RUN"
-
-
-@pytest.mark.parametrize("value", [None, "", "0", "true", "yes", "2", "no", " 1"])
-def test_only_the_exact_value_1_turns_a_gpu_failure_into_a_warning(tmp_path, value):
+@pytest.mark.parametrize("value", [None, "", "0", "1", "yes"])
+def test_the_old_flag_changes_nothing(tmp_path, value):
     extra = {} if value is None else {"Q1_ALLOW_NO_GPU": value}
     out = _setup(_env(tmp_path, gpu_exit=10, **extra))
-    assert out.returncode == 1 and _summary(out)["gpu"] == "FAIL"
-    assert (tmp_path / "gpu_check_ran").exists()
-    assert "WARNING" not in out.stderr
+    assert out.returncode == 0 and _summary(out)["gpu"] == "WARN"
+    assert ("no longer needed" in out.stdout) == bool(value)
 
 
-def test_the_flag_gives_a_loud_warning_and_exit_0_but_still_runs_the_check(tmp_path):
-    out = _setup(_env(tmp_path, gpu_exit=10, Q1_ALLOW_NO_GPU="1"))
-    assert out.returncode == 0, out.stderr + out.stdout
-    assert _summary(out)["gpu"] == "WARN" and "Q1_ALLOW_NO_GPU=1" in out.stdout
-    assert "!!! WARNING: no usable GPU" in out.stderr and "setup OK with a GPU warning" in out.stdout
-    assert (tmp_path / "gpu_check_ran").exists()
-
-
-def test_the_flag_does_not_hide_other_failures(tmp_path):
-    out = _setup(_env(tmp_path, gpu_exit=10, Q1_ALLOW_NO_GPU="1", Q1_PGDATA="/data"))
+def test_other_failures_still_fail_setup_without_a_gpu(tmp_path):
+    out = _setup(_env(tmp_path, gpu_exit=10, Q1_PGDATA="/data"))
     assert out.returncode == 1 and _summary(out)["gpu"] == "WARN" and _summary(out)["pg_cluster"] == "FAIL"
 
 
@@ -116,31 +92,26 @@ def test_ci_mode_marks_gpu_and_encoder_steps_not_applicable(tmp_path):
     assert not (tmp_path / "gpu_check_ran").exists()
 
 
-def test_the_flag_is_read_only_by_the_setup_script():
-    readers = []
+def test_the_old_flag_is_not_read_by_any_code():
     for path in list((ROOT / "harness").rglob("*.py")) + list((ROOT / "workloads").rglob("*.py")):
-        if "Q1_ALLOW_NO_GPU" in path.read_text() and re.search(r"environ|getenv", path.read_text()):
-            readers.append(path.name)
-    assert readers == [] or readers == ["gpu_check.py"]            # gpu_check.py only mentions it in a hint
+        assert "Q1_ALLOW_NO_GPU" not in path.read_text(), path
     assert "Q1_ALLOW_NO_GPU" not in (ROOT / "Makefile").read_text()
-    for path in (ROOT / "harness").rglob("*.py"):
-        assert not re.search(r"(environ|getenv)[^\n]*Q1_ALLOW_NO_GPU", path.read_text()), path
+    script = (ROOT / "harness/deploy/setup_instance.sh").read_text()
+    assert not re.search(r"Q1_ALLOW_NO_GPU:-\}\"\s*(=|!=)", script)       # only mentioned in the ignore note
 
 
-def test_gpu_dependent_stages_still_fail_loudly_with_the_flag_set(tmp_path, monkeypatch):
+def test_gpu_dependent_stages_run_on_the_cpu_without_a_gpu_and_explicit_cuda_fails(tmp_path, monkeypatch):
+    import sys
     from harness import data, pipeline
-    monkeypatch.setenv("Q1_ALLOW_NO_GPU", "1")
-    monkeypatch.setattr(pipeline, "auto_device", lambda: "numpy")
-    with pytest.raises(pipeline.StageError, match="cannot see a CUDA device"):
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setattr("harness.deploy.gpu_check.query_smi", lambda: None)
+    with pytest.raises(pipeline.StageError, match="cuda requested"):
         pipeline.make_context("tiny", tmp_path, device="cuda")
-    ctx = pipeline.make_context("sphere", tmp_path, device="numpy")
+    ctx = pipeline.make_context("sphere", tmp_path)
+    assert ctx.device == "cpu" and ctx.device_info.requested == "auto"
     ctx.root.mkdir(parents=True)
     data.write_f32bin(ctx.root / "official.f32bin", np.zeros((10, 768), dtype=np.float32))
-    with pytest.raises(pipeline.StageError, match="Q1_ALLOW_SLOW"):
-        pipeline.check_resources(ctx, "groundtruth")
-    for name in ("esci", "sphere"):
-        with pytest.raises(pipeline.StageError, match="many hours"):
-            pipeline.stage_embed(pipeline.make_context(name, tmp_path, device="numpy"))
+    pipeline.check_resources(ctx, "groundtruth")                 # never refused for being on the CPU
 
 
 def test_setup_datasets_none_reaches_preflight_as_an_empty_list(tmp_path):

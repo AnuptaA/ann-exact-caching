@@ -129,7 +129,7 @@ q1-preflight: q1-guard
 q1-generate: q1-guard
 	$(PY) -m harness generate --dataset $(DATASET) --data-dir $(Q1_DATA) --dsn "$(Q1_PG_DSN)" \
 		--device $(Q1_DEVICE) --encode-python $(Q1_ENCODE_PY) --pg-workers $(Q1_PG_WORKERS) \
-		--list-size $(Q1_LIST_SIZE) --driver-dir $(Q1_DRIVERS) $(if $(Q1_ALLOW_SLOW),--allow-slow,) \
+		--list-size $(Q1_LIST_SIZE) --driver-dir $(Q1_DRIVERS) \
 		$(if $(GT_QUERY_CHUNK),--gt-query-chunk $(GT_QUERY_CHUNK),) \
 		$(if $(GT_BASE_CHUNK),--gt-base-chunk $(GT_BASE_CHUNK),)
 
@@ -137,7 +137,7 @@ q1-generate: q1-guard
 q1-stage: q1-guard
 	$(PY) -m harness generate --dataset $(DATASET) --data-dir $(Q1_DATA) --dsn "$(Q1_PG_DSN)" \
 		--device $(Q1_DEVICE) --encode-python $(Q1_ENCODE_PY) --pg-workers $(Q1_PG_WORKERS) \
-		--list-size $(Q1_LIST_SIZE) --driver-dir $(Q1_DRIVERS) $(if $(Q1_ALLOW_SLOW),--allow-slow,) \
+		--list-size $(Q1_LIST_SIZE) --driver-dir $(Q1_DRIVERS) \
 		--stages $(STAGE) $(if $(FORCE),--force $(STAGE),)
 
 # One system config over every dataset and stream:
@@ -196,7 +196,7 @@ q1-status:
 
 # Smoke test of the whole stack on a tiny synthetic dataset (not part of Q1 results).
 q1-smoke: q1-guard
-	$(MAKE) q1-generate DATASET=tiny Q1_DEVICE=numpy Q1_PG_WORKERS=2
+	$(MAKE) q1-generate DATASET=tiny Q1_PG_WORKERS=2
 	$(MAKE) q1-run SYSTEM=aker SETTING=paper BUDGET=1 DATASETS=tiny Q1_RESULTS=$(Q1_DATA)/smoke_results
 	$(MAKE) q1-run SYSTEM=proximity SETTING=p1 BUDGET=5 DATASETS=tiny Q1_RESULTS=$(Q1_DATA)/smoke_results
 	$(PY) -m harness collect --out-dir $(Q1_DATA)/smoke_results

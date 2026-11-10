@@ -7,8 +7,9 @@
 # initializes an isolated PostgreSQL cluster on its own port, builds the replay drivers and runs preflight.
 #
 # Each stage is a step. A failed step does not stop the steps that do not depend on it, the GPU check runs
-# last, and a summary lists every step as PASS, FAIL, SKIPPED (a dependency failed), N/A or NOT RUN.
-# Exit code is 1 if any step failed. No GPU is a failure unless Q1_ALLOW_NO_GPU=1 (then a loud warning).
+# last, and a summary lists every step as PASS, WARN, FAIL, SKIPPED (a dependency failed), N/A or NOT RUN.
+# Exit code is 1 if any step failed. A missing or unusable GPU is a WARN, not a failure: ground truth and
+# text embedding then run on the CPU (hours on the real datasets; each stage prints an estimate).
 # Disk and RAM shortfalls in preflight are failures unless Q1_ALLOW_SHORTFALL=1 (dry run on a small machine).
 #
 # Environment overrides:
@@ -19,8 +20,7 @@
 #   Q1_MIN_DATA_GB              minimum size of the data volume (default 400; 10 is enough for the smoke test)
 #   Q1_ALLOW_ROOT_VOLUME=1      accept a data directory on the root volume
 #   Q1_SETUP_DATASETS           datasets preflight sizes disk and RAM for (default "spacev sift10m sphere esci";
-#                               "none" skips the sizing, for a CPU dry run)
-#   Q1_ALLOW_NO_GPU=1           a missing or unusable GPU is a warning, not a failure (CPU dry run)
+#                               "none" skips the sizing, for a dry run)
 #   Q1_ALLOW_SHORTFALL=1        preflight disk and RAM shortfalls are warnings with the numbers (small dry-run
 #                               machine; combine with Q1_SETUP_DATASETS=tiny or one dataset name). Other preflight
 #                               problems (dirty tree, root volume, PostgreSQL) still fail.
@@ -67,6 +67,7 @@ export GIT_TERMINAL_PROMPT=0 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 
 log "data $Q1_DATA; tools $Q1_TOOLS; postgres port $Q1_PG_PORT"
 log "PATH after removing conda entries: $PATH"
+[ -z "${Q1_ALLOW_NO_GPU:-}" ] || log "Q1_ALLOW_NO_GPU is no longer needed and is ignored: a missing GPU is a warning"
 [ -z "${Q1_DRYRUN:-}" ] || log "dry run: state-changing commands are only printed"
 
 # --- step runner ---------------------------------------------------------------------------------------
@@ -74,7 +75,6 @@ STEP_ORDER=(preconditions data_volume tools_dir first_boot_wait system_packages 
     pg_cluster python_env encode_env drivers pg_start preflight clean_tree gpu)
 STATE_DIR="$(mktemp -d)"
 SUMMARY_PRINTED=0
-NO_GPU_WARNING=0
 CMAKE_BIN=""
 BOOST_ROOT=""
 FAISS_ROOT=""
@@ -144,13 +144,9 @@ step() {
 
 hard_stop() { [ "$(status_of "$1")" = PASS ] || finish; }
 
-# finish: print the summary and exit. A failed GPU check is a warning only when Q1_ALLOW_NO_GPU is exactly 1.
+# finish: print the summary and exit; the exit code is 1 when any step failed or did not run.
 finish() {
     local name status note failed="" rc=0
-    if [ "$(status_of gpu)" = FAIL ] && [ "${Q1_ALLOW_NO_GPU:-}" = "1" ]; then
-        set_status gpu WARN "$(cat "$STATE_DIR/gpu.note") (ignored: Q1_ALLOW_NO_GPU=1)"
-        NO_GPU_WARNING=1
-    fi
     SUMMARY_PRINTED=1
     echo
     log "setup summary"
@@ -166,10 +162,10 @@ finish() {
                 ;;
         esac
     done
-    if [ "$NO_GPU_WARNING" -eq 1 ]; then
+    if [ "$(status_of gpu)" = WARN ]; then
         {
-            echo "!!! WARNING: no usable GPU (Q1_ALLOW_NO_GPU=1). Ground truth, embedding and encoding will refuse"
-            echo "!!! to run on the CPU except for the tiny smoke dataset. Do not generate real datasets here."
+            echo "!!! No usable GPU: ground truth and text embedding will run on the CPU. That takes hours on the"
+            echo "!!! real datasets; each stage prints an estimate at its start (see also: make q1-preflight)."
         } >&2
     fi
     if [ "${Q1_ALLOW_SHORTFALL:-}" = "1" ]; then
@@ -180,11 +176,11 @@ finish() {
     fi
     if [ "$rc" -ne 0 ]; then
         log "setup FAILED:$failed"
-    elif [ "$NO_GPU_WARNING" -eq 1 ] || [ "${Q1_ALLOW_SHORTFALL:-}" = "1" ]; then
+    elif [ "$(status_of gpu)" = WARN ] || [ "${Q1_ALLOW_SHORTFALL:-}" = "1" ]; then
         local notes=""
-        [ "$NO_GPU_WARNING" -eq 0 ] || notes=" a GPU warning (Q1_ALLOW_NO_GPU=1)"
+        [ "$(status_of gpu)" != WARN ] || notes=" CPU mode (no usable GPU)"
         [ "${Q1_ALLOW_SHORTFALL:-}" != "1" ] || notes="$notes${notes:+ and} dry-run shortfall mode (Q1_ALLOW_SHORTFALL=1)"
-        log "setup OK with$notes. Next: make q1-smoke"
+        log "setup OK in$notes. Next: make q1-smoke"
     else
         log "setup done. Next: make q1-smoke"
     fi
@@ -344,7 +340,8 @@ step_clean_tree() {
     [ -z "$dirty" ] || die "git status --short is not empty after setup: $(printf '%s' "$dirty" | head -n5 | tr '\n' ';')"
 }
 
-# Last on purpose: a missing GPU must not hide whether the builds, PostgreSQL and pgvector work.
+# Last on purpose, so that it never hides whether the builds, PostgreSQL and pgvector work. Never a failure:
+# without a usable GPU the compute stages run on the CPU (the note says why the GPU is not used).
 step_gpu() {
     if [ "$CI" -eq 1 ]; then
         mark_na "--ci"
@@ -361,11 +358,11 @@ step_gpu() {
     PYTHONPATH="$root" "${cmd[@]}" || rc=$?
     case "$rc" in
         0) ;;
-        10) die "no NVIDIA driver or GPU found" ;;
-        11) die "NVIDIA driver too old for the installed torch CUDA build" ;;
-        12) die "torch missing or a CPU-only build" ;;
-        13) die "NVIDIA driver present but torch cannot use the GPU" ;;
-        *) die "GPU check failed (exit code $rc)" ;;
+        10) mark_warn "no NVIDIA driver or GPU found: stages run on the CPU" ;;
+        11) mark_warn "NVIDIA driver too old for the installed torch CUDA build: stages run on the CPU" ;;
+        12) mark_warn "torch missing or a CPU-only build: stages run on the CPU" ;;
+        13) mark_warn "NVIDIA driver present but torch cannot use the GPU: stages run on the CPU" ;;
+        *) die "GPU check failed unexpectedly (exit code $rc)" ;;
     esac
 }
 

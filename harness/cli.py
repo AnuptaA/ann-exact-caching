@@ -60,12 +60,14 @@ def _run(args):
 def _generate(args):
     from harness import pipeline
     datasets = args.dataset if args.dataset != ["all"] else list(pipeline_datasets())
+    if args.allow_slow:
+        logger.warning("--allow-slow is ignored: the CPU is used without it (see the ETA notices)")
     for name in datasets:
         ctx = pipeline.make_context(name, args.data_dir, args.dsn, args.device,
                                     encode_python=args.encode_python, pg_workers=args.pg_workers,
                                     gt_query_chunk=args.gt_query_chunk, gt_base_chunk=args.gt_base_chunk,
                                     list_size=args.list_size)
-        ctx.extra.update(allow_slow=args.allow_slow, driver_dir=args.driver_dir)
+        ctx.extra.update(driver_dir=args.driver_dir)
         ran = pipeline.run_pipeline(ctx, args.stages, args.force)
         print(f"{name}: ran {ran or 'nothing (all stages done)'}")
 
@@ -90,9 +92,12 @@ def _collect(args):
 
 def _fidelity(args):
     from harness import fidelity
+    from workloads.q1 import device as device_mod
     import json
+    info = device_mod.resolve(args.device)
+    device_mod.announce(info, "fidelity ground truth")
     out = fidelity.run_fidelity(Path(args.data_dir), args.dsn, Path(args.driver_dir), Path(args.out_dir),
-                                Path(args.work_dir), args.ef_search, device=args.device,
+                                Path(args.work_dir), args.ef_search, device=info.kind,
                                 inspect_pickle=args.inspect_pickle)
     print(json.dumps(out, indent=1))
 
@@ -166,11 +171,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dsn", default="", help="PostgreSQL connection string (database q1_<dataset> is used)")
     p.add_argument("--stages", nargs="+", default=None)
     p.add_argument("--force", default=None, help="clear this stage and all later ones first")
-    p.add_argument("--device", default="auto", help="auto, numpy, cuda or mps (ground truth)")
+    p.add_argument("--device", default="auto",
+                   help="auto (GPU if usable, else CPU), cpu, cuda or mps (text encoders and ground truth)")
     p.add_argument("--encode-python", default=sys.executable)
     p.add_argument("--pg-workers", type=int, default=4)
     p.add_argument("--list-size", type=int, default=200, help="neighbors stored per query (L)")
-    p.add_argument("--allow-slow", action="store_true", help="accept ground truth on the numpy device")
+    p.add_argument("--allow-slow", action="store_true", help="deprecated, ignored")
     p.add_argument("--driver-dir", default="build/replay")
     p.add_argument("--gt-query-chunk", type=int, default=None, help="default 1024; 8192 on cuda")
     p.add_argument("--gt-base-chunk", type=int, default=None, help="default 262144; 131072 on cuda")
@@ -188,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out-dir", required=True)
     p.add_argument("--work-dir", required=True)
     p.add_argument("--ef-search", type=int, required=True, help="the spacev tune.json choice")
-    p.add_argument("--device", default="numpy")
+    p.add_argument("--device", default="auto", help="auto, cpu, cuda or mps (ground truth)")
     p.add_argument("--inspect-pickle", action="store_true")
     p.set_defaults(run=_fidelity)
 

@@ -22,12 +22,11 @@ import numpy as np
 
 from harness import data, fingerprints
 from harness.datasets import DatasetSpec, get_spec
-from workloads.q1 import K, atomic, groundtruth, streams as stream_mod
+from workloads.q1 import K, atomic, cost, device as device_mod, groundtruth, streams as stream_mod
 from workloads.q1.recall import recall_batch
 
 logger = logging.getLogger(__name__)
 
-SLOW_NUMPY_FLOPS = 5e13        # ground truth on numpy beyond this needs Q1_ALLOW_SLOW=1 (about 15 min)
 EF_MAX = 1000
 LOG_TAIL_LINES = 40
 
@@ -44,7 +43,8 @@ class Context:
     data_dir: Path
     spec: DatasetSpec
     dsn: str = ""                     # base connection string; the database is q1_<dataset>
-    device: str = "numpy"
+    device: str = "cpu"                 # resolved kind: cpu, cuda or mps
+    device_info: device_mod.DeviceInfo | None = None
     encode_python: str = sys.executable
     pg_workers: int = 4
     gt_query_chunk: int = groundtruth.QUERY_CHUNK
@@ -53,6 +53,9 @@ class Context:
     tune_queries: int = TUNE_QUERIES
     seed: int = 0
     extra: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.device = device_mod.ALIASES.get(self.device, self.device)
 
     @property
     def root(self) -> Path:
@@ -82,14 +85,6 @@ class Context:
     def db_dsn(self) -> str:
         from harness.backend.pgvector import with_keepalives
         return with_keepalives(self.dsn, self.db_name)
-
-
-def auto_device() -> str:
-    try:
-        import torch
-        return "cuda" if torch.cuda.is_available() else "numpy"
-    except ImportError:
-        return "numpy"
 
 
 def _marker(ctx: Context, stage: str) -> Path:
@@ -137,11 +132,18 @@ def file_log(ctx: "Context"):
         handler.close()
 
 
+def device_info(ctx: "Context") -> device_mod.DeviceInfo:
+    """The device this run resolved to (a context built by hand resolves its device on first use)."""
+    if ctx.device_info is None:
+        ctx.device_info = device_mod.resolve(ctx.device)
+    return ctx.device_info
+
+
 def env_info(ctx: "Context") -> dict:
     """Versions and identity of this run, written next to the data (best effort)."""
     from harness.runner import results
     info = {**results.git_state(), "python": platform.python_version(), "platform": platform.platform(),
-            "numpy": np.__version__, "device": ctx.device, "list_size": ctx.list_size}
+            "numpy": np.__version__, "list_size": ctx.list_size, **device_info(ctx).record("compute stages")}
     try:
         import torch
         info.update(torch=torch.__version__, cuda=torch.version.cuda,
@@ -199,11 +201,6 @@ def check_resources(ctx: "Context", stage: str) -> None:
         check_free_disk(ctx.data_dir, n * d * 4 + ctx.spec.n_base // 10 * d * 4 + gib)
     elif stage == "groundtruth":
         check_free_disk(ctx.data_dir, ctx.n_ids * 100 * 12 + gib)
-        flops = 2.0 * ctx.n_ids * n * d
-        if ctx.device == "numpy" and flops > SLOW_NUMPY_FLOPS and not ctx.extra.get("allow_slow"):
-            raise StageError(
-                f"ground truth for {ctx.spec.name} on the numpy device needs about {flops:.1e} flops "
-                f"(hours); run on a GPU (Q1_DEVICE=cuda) or set Q1_ALLOW_SLOW=1 to accept it")
         base_bytes = n * d * 4
         ram = total_ram_bytes()
         if ram and base_bytes > 0.6 * ram:
@@ -238,15 +235,27 @@ def stage_fetch(ctx: Context) -> dict:
     return {}
 
 
+def _embed_text_count(name: str) -> int:
+    from workloads.q1.datasets import esci, triviaqa
+    return {"esci": esci.EXPECTED_PRODUCTS + esci.EXPECTED_QUERY_IDS,
+            "sphere": triviaqa.EXPECTED_DISTINCT}.get(name, 0)
+
+
 def stage_embed(ctx: Context) -> dict:
-    if ctx.spec.embed is not None and ctx.spec.name in ("esci", "sphere") and ctx.device != "cuda" \
-            and not ctx.extra.get("allow_slow"):
-        raise StageError(f"encoding the {ctx.spec.name} texts on the CPU takes many hours; use a GPU "
-                         "(Q1_DEVICE=cuda) or set Q1_ALLOW_SLOW=1 to accept it")
-    if ctx.spec.embed is not None:
-        ctx.spec.embed(ctx.raw, {"device": "cuda" if ctx.device == "cuda" else "cpu",
-                                 "encode_python": ctx.encode_python})
-    return {}
+    if ctx.spec.embed is None:
+        return {}
+    info = device_info(ctx)
+    stage = f"{ctx.spec.name} text embedding"
+    device_mod.announce(info, stage)
+    if info.kind == "cpu":
+        seconds = cost.encode_seconds(ctx.spec.name, _embed_text_count(ctx.spec.name), info.threads)
+        logger.info(f"estimated {stage} time on this CPU: {cost.describe(seconds)} (order of magnitude)")
+    from workloads.q1.datasets import esci
+    record = info.record(stage)
+    ctx.spec.embed(ctx.raw, {"device": info.kind, "encode_python": ctx.encode_python,
+                             "threads": info.threads, "provenance": record,
+                             "shard_texts": esci.CPU_SHARD_TEXTS if info.kind == "cpu" else esci.SHARD_TEXTS})
+    return record
 
 
 def stage_to_f32(ctx: Context) -> dict:
@@ -272,8 +281,14 @@ def stage_inputs(ctx: Context) -> dict:
 
 def stage_groundtruth(ctx: Context) -> dict:
     from harness.runner.prepare import prepare_ground_truth
-    prepare_ground_truth(ctx.root, ctx.device, ctx.gt_query_chunk, ctx.gt_base_chunk)
-    return {"device": ctx.device}
+    info = device_info(ctx)
+    device_mod.announce(info, "ground truth")
+    if info.kind == "cpu":
+        seconds = cost.ground_truth_seconds(ctx.n_ids, ctx.spec.n_base, ctx.spec.dim, info.threads)
+        logger.info(f"estimated ground truth time on this CPU for {ctx.n_ids} queries x {ctx.spec.n_base} "
+                    f"vectors: {cost.describe(seconds)} (order of magnitude)")
+    prepare_ground_truth(ctx.root, info.kind, ctx.gt_query_chunk, ctx.gt_base_chunk, workers=info.threads)
+    return info.record("ground truth")
 
 
 def _ensure_database(ctx: Context) -> None:
@@ -591,15 +606,12 @@ GPU_BASE_CHUNK = 131072
 
 
 def make_context(dataset: str, data_dir, dsn: str = "", device: str = "auto", **kw) -> Context:
-    dev = auto_device() if device == "auto" else device
-    if device == "auto" and dev == "numpy":
-        logger.warning("no CUDA device found: ground truth and encoders will run on the CPU "
-                       "(fine for the tiny smoke test, hours for real datasets)")
-    if dev == "cuda" and auto_device() != "cuda":
-        raise StageError("device cuda requested but torch cannot see a CUDA device "
-                         "(driver missing, CPU-only torch build, or no GPU on this instance)")
+    try:
+        info = device_mod.resolve(device)
+    except device_mod.DeviceError as exc:
+        raise StageError(str(exc)) from exc
     kw = {k: v for k, v in kw.items() if v is not None}
-    if dev == "cuda":
+    if info.kind == "cuda":
         kw.setdefault("gt_query_chunk", GPU_QUERY_CHUNK)
         kw.setdefault("gt_base_chunk", GPU_BASE_CHUNK)
-    return Context(Path(data_dir), get_spec(dataset), dsn, dev, **kw)
+    return Context(Path(data_dir), get_spec(dataset), dsn, info.kind, info, **kw)

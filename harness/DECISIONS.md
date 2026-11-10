@@ -24,7 +24,14 @@ Last updated with the EC2 preparation. Differences from the Aker paper and the l
   `ak_sequence_gen` excluded). Pool slots hold real float32 vectors. Linking after an approximate hit is
   reproduced in standard mode (a library no-op in Proximity).
 - Ground truth: GPU candidates top-(100+28), CPU float32 recompute, sort by (distance, id). With more than 28
-  exact ties at the 100th distance the kept ids can differ; distances stay exact.
+  exact ties at the 100th distance the kept ids can differ; distances stay exact. The CPU device runs the same
+  merge in numpy with the same recompute and tie margin.
+- CPU is a supported device for every compute stage (text embedding, TriviaQA question encoding, ground truth).
+  `--device auto` uses CUDA when torch can use it and the CPU otherwise (a GPU that is present but unusable falls
+  back with the diagnosis in the notice; only an explicit `cuda` or `mps` fails). There is no refusal and no
+  `Q1_ALLOW_SLOW`; each stage prints an estimate, and the device and notice go to `.done/<stage>.json`, `env.json`
+  and the result header (`generation_stages`). A missing GPU is a `WARN` in setup and preflight; `Q1_ALLOW_NO_GPU`
+  is gone. `--require-gpu` on preflight stays as an opt-in strict check.
 - Answer tables are re-sorted by recomputed float32 distance.
 - Universe members are not re-normalized after interpolation (Aker's procedure; ESCI member norms are about
   0.84 on average; the L2 ranking over unit-norm products does not depend on the query norm).

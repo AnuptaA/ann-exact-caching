@@ -34,8 +34,8 @@ jobs:
           done
           cat build/replay/TOOLCHAIN.txt
 
-      - name: Smoke test (tiny dataset, CPU)
-        run: make q1-smoke Q1_DEVICE=numpy 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+      - name: Smoke test (tiny dataset; no GPU here, so the CPU path)
+        run: make q1-smoke 2>&1 | tee "$RUNNER_TEMP/smoke.log"
 
       - name: Working tree is clean
         run: test -z "$(git status --short)" || { git status --short; exit 1; }

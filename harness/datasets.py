@@ -31,7 +31,9 @@ class DatasetSpec:
 
 
 def _esci_embed(raw: Path, env: dict) -> None:
-    esci.build(raw, raw, esci.make_encoder(device=env["device"]))
+    encode = esci.make_encoder(device=env["device"], threads=env.get("threads"))
+    esci.build(raw, raw, encode, shard_texts=env.get("shard_texts", esci.SHARD_TEXTS),
+               provenance=env.get("provenance"))
 
 
 def _sphere_fetch(raw: Path) -> None:
@@ -50,14 +52,18 @@ def _sphere_embed(raw: Path, env: dict) -> None:
     out = raw / "triviaqa_enc.npy"
     if out.exists():
         return
+    provenance = raw / "triviaqa_enc.provenance.json"
     clean = {"PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(REPO), "HOME": str(raw),
              "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
              "TORCH_FORCE_WEIGHTS_ONLY_LOAD": "1"}
+    if env.get("threads"):
+        clean["Q1_THREADS"] = str(env["threads"])
     subprocess.run([env["encode_python"], "-m", "workloads.q1", "triviaqa-encode",
                     "--questions", str(raw / "triviaqa_questions.npy"),
                     "--encoder-dir", str(raw / "dpr_web_query_encoder_hf"),
                     "--tokenizer-dir", str(raw / "bert-base-uncased"),
-                    "--out", str(out.with_suffix(".part.npy")), "--device", env["device"]],
+                    "--out", str(out.with_suffix(".part.npy")), "--device", env["device"],
+                    "--provenance", str(provenance)],
                    check=True, cwd=REPO, env=clean)
     out.with_suffix(".part.npy").rename(out)
 

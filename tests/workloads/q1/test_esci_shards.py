@@ -102,3 +102,52 @@ def test_bad_shards_are_rejected(tmp_path):
     with pytest.raises(ValueError, match="expected"):
         esci.embed_sharded(TEXTS, lambda t: np.ones((len(t) - 1, DIM), dtype=np.float32) / 2,
                            tmp_path / "q.npy", dim=DIM, shard_texts=100)
+
+
+def test_sub_batches_give_progress_lines_with_an_eta(tmp_path, caplog):
+    import logging
+    calls = []
+    with caplog.at_level(logging.INFO, logger="workloads.q1.progress"):
+        esci.embed_sharded(TEXTS, fake_encoder(calls), tmp_path / "p.npy", dim=DIM, shard_texts=100,
+                           sub_batch=30, progress_interval=0.0)
+    assert calls == [30, 30, 30, 10, 30, 30, 30, 10, 30, 20]
+    lines = [r.message for r in caplog.records if r.message.startswith("p.npy:") and "texts/s" in r.message]
+    assert len(lines) == len(calls) and "ETA" in lines[0] and "/250 texts" in lines[-1]
+    assert np.array_equal(np.load(tmp_path / "p.npy"), fake_encoder([])(TEXTS))
+
+
+def test_the_shard_size_is_not_part_of_the_compared_recipe(tmp_path):
+    embed(tmp_path)
+    calls = []
+    esci.embed_sharded(TEXTS, fake_encoder(calls), tmp_path / "p.npy", dim=DIM, shard_texts=20_000)
+    assert calls == [64]                                    # reused: only the proof sample was encoded
+    manifest = json.loads((tmp_path / "p.npy.manifest.json").read_text())
+    assert "shard_texts" not in manifest["recipe"] and manifest["made_with"]["shard_texts"] == 100
+    old = {**manifest, "recipe": {**manifest["recipe"], "shard_texts": 100000}}
+    (tmp_path / "p.npy.manifest.json").write_text(json.dumps(old))
+    esci.embed_sharded(TEXTS, fake_encoder([]), tmp_path / "p.npy", dim=DIM, shard_texts=100)
+
+
+def test_shards_of_another_size_are_never_mixed(tmp_path):
+    calls = []
+    inner = fake_encoder(calls)
+
+    def dying(texts):
+        if calls:
+            raise KeyboardInterrupt
+        return inner(texts)
+
+    with pytest.raises(KeyboardInterrupt):
+        embed(tmp_path, encode=dying)
+    with pytest.raises(ValueError, match="holds shards"):
+        esci.embed_sharded(TEXTS, fake_encoder([]), tmp_path / "p.npy", dim=DIM, shard_texts=50)
+
+
+def test_the_manifest_records_how_the_embeddings_were_made(tmp_path):
+    encode = fake_encoder([])
+    encode.provenance = {"model_revision": "abc", "max_seq_length": 128, "device": "cpu"}
+    esci.embed_sharded(TEXTS, encode, tmp_path / "p.npy", dim=DIM, shard_texts=100,
+                       provenance={"device_notice": "No GPU found: running embedding on CPU", "threads": 4})
+    made = json.loads((tmp_path / "p.npy.manifest.json").read_text())["made_with"]
+    assert made["model_revision"] == "abc" and made["threads"] == 4 and made["shard_texts"] == 100
+    assert made["device_notice"].startswith("No GPU found")

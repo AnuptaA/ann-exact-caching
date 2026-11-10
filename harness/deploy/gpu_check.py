@@ -1,4 +1,8 @@
-"""GPU check for setup and preflight: a missing driver is not the same problem as a driver that is too old."""
+"""GPU check for setup and preflight: a missing driver is not the same problem as a driver that is too old.
+
+No usable GPU is not an error for the pipeline (the stages run on the CPU); the exit codes tell setup which
+note to print.
+"""
 
 import os
 import re
@@ -54,7 +58,7 @@ def diagnose(torch, smi: Callable[[], tuple[str, str] | None] = query_smi) -> tu
             f"no NVIDIA driver or GPU found (nvidia-smi is missing or not answering; torch said: {error}). "
             "Use a GPU instance type with the NVIDIA driver installed (for example g5 or g6), or install "
             "nvidia-driver-<N> and reboot, then check that `nvidia-smi` lists the GPU. "
-            "For a CPU-only dry run set Q1_ALLOW_NO_GPU=1.")
+            "Without a GPU the compute stages run on the CPU, which takes hours on the real datasets.")
     driver, name = found if found is not None else ("unknown", "")
     required = MIN_DRIVER.get(int(cuda.split(".")[0]))
     if too_old_text or (required is not None and driver != "unknown"
@@ -74,14 +78,14 @@ def main() -> int:
     try:
         import torch
     except ImportError as exc:
-        print(f"GPU CHECK FAILED ({EXIT_TORCH}): torch cannot be imported ({exc}); reinstall from "
+        print(f"GPU CHECK: no usable GPU ({EXIT_TORCH}): torch cannot be imported ({exc}); reinstall from "
               "requirements-q1.lock", file=sys.stderr)
         return EXIT_TORCH
     code, message = diagnose(torch)
     if code == EXIT_OK:
         print(message)
     else:
-        print(f"GPU CHECK FAILED ({code}): {message}", file=sys.stderr)
+        print(f"GPU CHECK: no usable GPU ({code}): {message}", file=sys.stderr)
     return code
 
 

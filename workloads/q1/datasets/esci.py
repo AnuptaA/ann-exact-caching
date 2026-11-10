@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from workloads.q1 import atomic
+from workloads.q1.progress import Progress
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ EXPECTED_QUERY_IDS = 130_652
 COUNT_TOLERANCE = 0.03
 DIM = 384
 SHARD_TEXTS = 100_000
+CPU_SHARD_TEXTS = 20_000      # a CPU shard takes minutes, not an hour, so a kill loses little
+SUB_BATCH_TEXTS = 4096        # progress lines and ETA are given per sub-batch inside a shard
 TEXT_RECIPE = "product_title + '. ' + first line of product_bullet_point (product_text)"
 
 
@@ -70,15 +73,31 @@ def check_counts(n_products: int, n_query_ids: int, n_query_texts: int,
     return counts
 
 
-def make_encoder(batch_size: int = 256, device: str = "cpu"):
-    """Encoder returning L2-normalized float32 embeddings (needs sentence-transformers)."""
+def make_encoder(batch_size: int = 256, device: str = "cpu", threads: int | None = None):
+    """Encoder returning L2-normalized float32 embeddings (needs sentence-transformers).
+
+    The returned function carries a `provenance` dict (model revision, sequence length, versions).
+    """
+    import sentence_transformers
+    import torch
     from sentence_transformers import SentenceTransformer
+    if device == "cpu" and threads:
+        torch.set_num_threads(threads)
     model = SentenceTransformer(MODEL, device=device)
 
     def encode(texts):
         emb = model.encode(texts, batch_size=batch_size, normalize_embeddings=True,
-                           show_progress_bar=True, convert_to_numpy=True)
+                           show_progress_bar=False, convert_to_numpy=True)
         return emb.astype(np.float32)
+
+    try:
+        revision = model[0].auto_model.config._commit_hash
+    except (AttributeError, IndexError, TypeError):
+        revision = None
+    encode.provenance = {"model": MODEL, "model_revision": revision, "max_seq_length": model.max_seq_length,
+                         "batch_size": batch_size, "device": device, "threads": torch.get_num_threads(),
+                         "sentence_transformers": sentence_transformers.__version__,
+                         "torch": torch.__version__}
     return encode
 
 
@@ -96,8 +115,17 @@ def verify_embeddings_match(embeddings, texts, encode, n: int = 64, min_cos: flo
     return float(cos.min())
 
 
-def recipe(dim: int = DIM, shard_texts: int = SHARD_TEXTS) -> dict:
-    return {"model": MODEL, "text": TEXT_RECIPE, "normalize": True, "dim": dim, "shard_texts": shard_texts}
+def recipe(dim: int = DIM) -> dict:
+    """What decides the embedding values; the shard size and the device do not."""
+    return {"model": MODEL, "text": TEXT_RECIPE, "normalize": True, "dim": dim}
+
+
+def _comparable(manifest: dict) -> dict:
+    """The compared part of a manifest (older manifests also listed the shard size in the recipe)."""
+    out = {k: manifest.get(k) for k in ("recipe", "n", "texts_sha256")}
+    if isinstance(out["recipe"], dict):
+        out["recipe"] = {k: v for k, v in out["recipe"].items() if k != "shard_texts"}
+    return out
 
 
 def texts_sha256(texts) -> str:
@@ -121,20 +149,31 @@ def _check_shard(vectors: np.ndarray, n: int, dim: int, name: str) -> None:
         raise ValueError(f"{name}: rows are not L2-normalized")
 
 
+def _encode_shard(chunk: list[str], encode, sub_batch: int, progress: Progress, offset: int) -> np.ndarray:
+    parts = []
+    for j in range(0, len(chunk), sub_batch):
+        sub = chunk[j:j + sub_batch]
+        parts.append(np.asarray(encode(sub), dtype=np.float32))
+        progress.update(offset + j + len(sub))
+    return np.concatenate(parts) if parts else np.zeros((0, 0), dtype=np.float32)
+
+
 def embed_sharded(texts: list[str], encode, out_path: Path, dim: int = DIM,
-                  shard_texts: int = SHARD_TEXTS) -> Path:
+                  shard_texts: int = SHARD_TEXTS, sub_batch: int = SUB_BATCH_TEXTS,
+                  provenance: dict | None = None, progress_interval: float = 30.0) -> Path:
     """Embed texts into out_path in resumable shards, with a manifest of how they were made.
 
     An existing out_path is reused only if its manifest matches these texts and recipe, or
     (no manifest) if a sampled re-encode matches; otherwise this raises instead of overwriting.
+    The manifest also records the device, versions and shard size (not compared on reuse).
     """
     out_path = Path(out_path)
     manifest_path = out_path.with_name(out_path.name + ".manifest.json")
     shard_dir = out_path.with_name(out_path.name + ".shards")
-    want = {"recipe": recipe(dim, shard_texts), "n": len(texts), "texts_sha256": texts_sha256(texts)}
+    want = {"recipe": recipe(dim), "n": len(texts), "texts_sha256": texts_sha256(texts)}
     if out_path.exists():
         have = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
-        if have is not None and {k: have.get(k) for k in want} != want:
+        if have is not None and _comparable(have) != want:
             raise ValueError(f"{out_path} was made from other texts or another recipe: {have}")
         embeddings = np.load(out_path, mmap_mode="r")
         min_cos = verify_embeddings_match(embeddings, texts, encode)
@@ -145,17 +184,21 @@ def embed_sharded(texts: list[str], encode, out_path: Path, dim: int = DIM,
         return out_path
     shard_dir.mkdir(parents=True, exist_ok=True)
     shard_manifest = shard_dir / "manifest.json"
-    if shard_manifest.exists() and json.loads(shard_manifest.read_text()) != want:
+    shard_want = {**want, "shard_texts": shard_texts}
+    if shard_manifest.exists() and json.loads(shard_manifest.read_text()) != shard_want:
         raise ValueError(f"{shard_dir} holds shards of other texts or another recipe; remove it to start over")
-    atomic.write_json(shard_manifest, want)
+    atomic.write_json(shard_manifest, shard_want)
     n_shards = -(-len(texts) // shard_texts)
+    resumed = sum(min(shard_texts, len(texts) - i * shard_texts) for i in range(n_shards)
+                  if (shard_dir / f"shard_{i:05d}.npy").exists())
+    progress = Progress(out_path.name, len(texts), "texts", done=resumed, interval=progress_interval)
     began, built = time.time(), 0
     for i in range(n_shards):
         path = shard_dir / f"shard_{i:05d}.npy"
         if path.exists():
             continue
         chunk = texts[i * shard_texts:(i + 1) * shard_texts]
-        vectors = np.asarray(encode(chunk), dtype=np.float32)
+        vectors = _encode_shard(chunk, encode, sub_batch, progress, i * shard_texts)
         _check_shard(vectors, len(chunk), dim, path.name)
         atomic.save_npy(path, vectors)
         built += 1
@@ -170,12 +213,14 @@ def embed_sharded(texts: list[str], encode, out_path: Path, dim: int = DIM,
     merged.flush()
     del merged
     part.replace(out_path)
-    atomic.write_json(manifest_path, {**want, "code_commit": code_commit()}, indent=1)
+    made_with = {**getattr(encode, "provenance", {}), **(provenance or {}), "shard_texts": shard_texts}
+    atomic.write_json(manifest_path, {**want, "code_commit": code_commit(), "made_with": made_with}, indent=1)
     shutil.rmtree(shard_dir)
     return out_path
 
 
-def build(raw_dir: Path, out_dir: Path, encode=None, dim: int = DIM) -> dict:
+def build(raw_dir: Path, out_dir: Path, encode=None, dim: int = DIM, shard_texts: int = SHARD_TEXTS,
+          provenance: dict | None = None) -> dict:
     """Embed every product and distinct query; writes .npy files into out_dir."""
     import pandas as pd
     raw, out = Path(raw_dir), Path(out_dir)
@@ -190,8 +235,9 @@ def build(raw_dir: Path, out_dir: Path, encode=None, dim: int = DIM) -> dict:
     atomic.save_npy(out / "esci_query_ids.npy", q_ids)
     atomic.save_npy(out / "esci_query_texts.npy", np.array(q_texts, dtype=str))
     atomic.save_npy(out / "esci_product_ids.npy", products["product_id"].to_numpy().astype(str))
-    embed_sharded(q_texts, encode, out / "esci_queries.npy", dim)
-    embed_sharded(product_texts(products), encode, out / "esci_products.npy", dim)
+    embed_sharded(q_texts, encode, out / "esci_queries.npy", dim, shard_texts, provenance=provenance)
+    embed_sharded(product_texts(products), encode, out / "esci_products.npy", dim, shard_texts,
+                  provenance=provenance)
     return counts
 
 

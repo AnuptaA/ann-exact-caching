@@ -2,11 +2,12 @@
 
 import argparse
 import logging
+import shutil
 from pathlib import Path
 
 import numpy as np
 
-from workloads.q1 import atomic, groundtruth, stats, streams, universe
+from workloads.q1 import atomic, device as device_mod, groundtruth, stats, streams, universe
 from workloads.q1.datasets import triviaqa
 
 logger = logging.getLogger(__name__)
@@ -17,9 +18,17 @@ logger = logging.getLogger(__name__)
 
 def _triviaqa_encode(args):
     questions = np.load(args.questions, allow_pickle=False).tolist()
-    encode = triviaqa.dpr_query_encoder(Path(args.encoder_dir), device=args.device,
-                                        tokenizer_dir=Path(args.tokenizer_dir))
-    atomic.save_npy(args.out, triviaqa.encode_questions(questions, encode))
+    info = device_mod.resolve(args.device)
+    notice = device_mod.announce(info, "TriviaQA question encoding")
+    encode = triviaqa.dpr_query_encoder(Path(args.encoder_dir), device=info.kind,
+                                        tokenizer_dir=Path(args.tokenizer_dir), threads=info.threads)
+    parts_dir = Path(f"{args.out}.parts")
+    atomic.save_npy(args.out, triviaqa.encode_questions(questions, encode, parts_dir=parts_dir))
+    shutil.rmtree(parts_dir, ignore_errors=True)
+    if args.provenance:
+        atomic.write_json(Path(args.provenance), {**info.record("TriviaQA question encoding"),
+                                                  "n_questions": len(questions), "notice": notice,
+                                                  "encoder_dir": Path(args.encoder_dir).name}, indent=1)
 
 
 def _triviaqa_evidence(args):
@@ -64,7 +73,10 @@ def _streams(args):
 def _groundtruth(args):
     base = np.load(args.base, mmap_mode="r")
     queries = np.load(args.queries, mmap_mode="r")
-    groundtruth.build_ground_truth(queries, base, Path(args.out_dir), args.k, args.device)
+    info = device_mod.resolve(args.device)
+    device_mod.announce(info, "ground truth")
+    groundtruth.build_ground_truth(queries, base, Path(args.out_dir), args.k, info.kind,
+                                   workers=info.threads)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,7 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--encoder-dir", required=True)
     p.add_argument("--tokenizer-dir", required=True, help="folder with vocab.txt (no download)")
     p.add_argument("--out", required=True)
-    p.add_argument("--device", default="cpu")
+    p.add_argument("--device", default="auto", help="auto, cpu, cuda or mps")
+    p.add_argument("--provenance", default=None, help="write where the encoding ran to this JSON file")
     p.set_defaults(run=_triviaqa_encode)
 
     p = sub.add_parser("triviaqa-evidence", help="answer-passage lift of the question encoders (log only)")
@@ -115,7 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--queries", required=True)
     p.add_argument("--out-dir", required=True)
     p.add_argument("--k", type=int, default=groundtruth.TOP_K)
-    p.add_argument("--device", default="numpy", help="numpy, cuda or mps")
+    p.add_argument("--device", default="auto", help="auto, cpu, cuda or mps")
     p.set_defaults(run=_groundtruth)
     return ap
 

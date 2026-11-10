@@ -100,7 +100,9 @@ def test_fidelity_run_on_the_tiny_database(tmp_path):
 
 
 def test_gpu_contexts_get_large_ground_truth_chunks_and_explicit_values_win(tmp_path, monkeypatch):
-    monkeypatch.setattr(pipeline, "auto_device", lambda: "cuda")
+    import sys
+    from tests.harness.test_gpu_check import fake_torch
+    monkeypatch.setitem(sys.modules, "torch", fake_torch())
     gpu = pipeline.make_context("tiny", tmp_path, device="cuda")
     assert (gpu.gt_query_chunk, gpu.gt_base_chunk) == (pipeline.GPU_QUERY_CHUNK, pipeline.GPU_BASE_CHUNK)
     cpu = pipeline.make_context("tiny", tmp_path, device="numpy")
@@ -128,16 +130,23 @@ def test_failures_are_loud_logged_and_recorded(tmp_path):
     assert not (ctx.root / ".failed" / "to_f32.json").exists()
 
 
-def test_numpy_ground_truth_on_a_big_dataset_is_refused_unless_allowed(tmp_path):
-    ctx = pipeline.make_context("sphere", tmp_path, device="numpy")
+def test_cpu_ground_truth_on_a_big_dataset_is_not_refused_and_is_estimated(tmp_path, monkeypatch, caplog):
+    import logging
+    import sys
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setattr("harness.deploy.gpu_check.query_smi", lambda: None)
+    ctx = pipeline.make_context("sphere", tmp_path)
     ctx.root.mkdir(parents=True)
-    data.write_f32bin(ctx.root / "official.f32bin", np.zeros((96005, 768), dtype=np.float32)[:10])
-    big = ctx.spec
-    ctx = pipeline.Context(Path(tmp_path), big, device="numpy")
-    with pytest.raises(pipeline.StageError, match="Q1_ALLOW_SLOW"):
-        pipeline.check_resources(ctx, "groundtruth")
-    ctx.extra["allow_slow"] = True
-    pipeline.check_resources(ctx, "groundtruth")            # accepted on purpose (may warn)
+    data.write_f32bin(ctx.root / "official.f32bin", np.zeros((10, 768), dtype=np.float32))
+    pipeline.check_resources(ctx, "groundtruth")            # no refusal and no allow flag
+    calls = []
+    monkeypatch.setattr("harness.runner.prepare.prepare_ground_truth", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(pipeline.Context, "n_ids", property(lambda self: 606_000))
+    with caplog.at_level(logging.INFO):
+        info = pipeline.stage_groundtruth(ctx)
+    assert "No GPU found: running ground truth on CPU" in caplog.text and "estimated ground truth time" in caplog.text
+    assert info["device"] == "cpu" and info["requested_device"] == "auto" and info["threads"] >= 1
+    assert info["device_notice"].startswith("No GPU found") and calls[0][0][1] == "cpu"
 
 
 def test_pg_stage_resource_checks_use_the_server_data_dir_and_refuse_small_ram(tmp_path, monkeypatch):
@@ -158,10 +167,28 @@ def test_pg_stage_resource_checks_use_the_server_data_dir_and_refuse_small_ram(t
 
 
 @pytest.mark.parametrize("name", ["esci", "sphere"])
-def test_cpu_encoding_of_big_text_datasets_is_refused_unless_allowed(tmp_path, name):
-    ctx = pipeline.make_context(name, tmp_path, device="numpy")
-    with pytest.raises(pipeline.StageError, match="Q1_ALLOW_SLOW"):
-        pipeline.stage_embed(ctx)
+def test_cpu_encoding_of_big_text_datasets_is_not_refused(tmp_path, name):
+    import dataclasses
+    ctx = pipeline.make_context(name, tmp_path, device="cpu")
+    seen = []
+    ctx.spec = dataclasses.replace(ctx.spec, embed=lambda raw, env: seen.append(env["device"]))
+    info = pipeline.stage_embed(ctx)
+    assert seen == ["cpu"] and info["device"] == "cpu" and "on CPU" in info["device_notice"]
+
+
+def test_stage_markers_and_env_record_where_each_stage_ran(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setattr("harness.deploy.gpu_check.query_smi", lambda: None)
+    ctx = pipeline.make_context("tiny", tmp_path)
+    pipeline.run_pipeline(ctx, stages=["fetch", "embed", "to_f32", "inputs", "groundtruth"])
+    done = json.loads((ctx.root / ".done" / "groundtruth.json").read_text())
+    assert done["device"] == "cpu" and done["requested_device"] == "auto" and done["threads"] >= 1
+    assert done["device_notice"].startswith("No GPU found: running ground truth on CPU")
+    env = json.loads((ctx.root / "env.json").read_text())
+    assert env["device"] == "cpu" and env["device_notice"].startswith("No GPU found")
+    runs = json.loads((ctx.root / "gt" / "provenance.json").read_text())["runs"]
+    assert runs[0]["device"] == "cpu" and runs[0]["workers"] >= 1
 
 
 def test_validation_catches_bad_outputs(tmp_path):
@@ -187,13 +214,27 @@ def test_validation_catches_bad_outputs(tmp_path):
         pipeline.validate_stage(ctx, "groundtruth")
 
 
-def test_cuda_request_without_a_gpu_and_cpu_esci_embedding_are_refused(tmp_path, monkeypatch):
-    monkeypatch.setattr(pipeline, "auto_device", lambda: "numpy")
-    with pytest.raises(pipeline.StageError, match="cannot see a CUDA device"):
+def test_cuda_request_without_a_gpu_fails_and_cpu_embedding_runs_with_a_notice(tmp_path, monkeypatch, caplog):
+    import dataclasses
+    import logging
+    import sys
+    from workloads.q1.datasets import esci
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setattr("harness.deploy.gpu_check.query_smi", lambda: None)
+    with pytest.raises(pipeline.StageError, match="cuda requested"):
         pipeline.make_context("tiny", tmp_path, device="cuda")
-    ctx = pipeline.make_context("esci", tmp_path, device="numpy")
-    with pytest.raises(pipeline.StageError, match="many hours"):
-        pipeline.stage_embed(ctx)
+    seen = []
+    ctx = pipeline.make_context("esci", tmp_path)
+    ctx.spec = dataclasses.replace(ctx.spec, embed=lambda raw, env: seen.append(env))
+    with caplog.at_level(logging.INFO):
+        info = pipeline.stage_embed(ctx)
+    env = seen[0]
+    assert env["device"] == "cpu" and env["shard_texts"] == esci.CPU_SHARD_TEXTS and env["threads"] >= 1
+    assert env["provenance"]["device_notice"] == info["device_notice"]
+    assert "No GPU found: running esci text embedding on CPU" in caplog.text
+    assert "estimated esci text embedding time" in caplog.text and info["device"] == "cpu"
+    ctx = pipeline.make_context("tiny", tmp_path)
+    assert pipeline.stage_embed(ctx) == {}                      # nothing is embedded for tiny
 
 
 def test_sphere_embedding_runs_in_a_separate_stripped_environment(tmp_path, monkeypatch):
@@ -207,13 +248,14 @@ def test_sphere_embedding_runs_in_a_separate_stripped_environment(tmp_path, monk
     stub.chmod(0o755)
     raw = tmp_path / "raw"
     raw.mkdir()
-    datasets._sphere_embed(raw, {"device": "cuda", "encode_python": str(stub)})
+    datasets._sphere_embed(raw, {"device": "cuda", "encode_python": str(stub), "threads": 3})
     env = (tmp_path / "seen_env.txt").read_text()
     assert "AWS_SECRET_ACCESS_KEY" not in env and "TORCH_FORCE_WEIGHTS_ONLY_LOAD=1" in env
-    assert "HF_HUB_OFFLINE=1" in env and "TRANSFORMERS_OFFLINE=1" in env
+    assert "HF_HUB_OFFLINE=1" in env and "TRANSFORMERS_OFFLINE=1" in env and "Q1_THREADS=3" in env
     args = (tmp_path / "seen_args.txt").read_text()
     assert "-m workloads.q1 triviaqa-encode" in args and f"--tokenizer-dir {raw}/bert-base-uncased" in args
-    assert "--device cuda" in args and (raw / "triviaqa_enc.npy").exists()
+    assert "--device cuda" in args and f"--provenance {raw}/triviaqa_enc.provenance.json" in args
+    assert (raw / "triviaqa_enc.npy").exists()
     assert not (raw / "triviaqa_enc.part.npy").exists()
 
 

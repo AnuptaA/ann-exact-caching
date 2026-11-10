@@ -11,7 +11,10 @@ truth. Run from the repo root with `PYTHONPATH=.`; `python -m workloads.q1 --hel
 - `streams.py`: Zipf (0.30, 0.60, 0.99), uniform, and no-locality streams; 30/70 history/test split.
 - `stats.py`: per-stream statistics (distinct, exact-repeat share, top group, empirical vs
   theoretical Zipf).
-- `groundtruth.py`: exact top-100, GPU or numpy candidates, CPU float32 recompute, resumable.
+- `groundtruth.py`: exact top-100, GPU or numpy candidates, CPU float32 recompute, resumable. The CPU path needs only numpy:
+  tiles sized from the available RAM, threaded merge and recompute, progress with an ETA.
+- `device.py`: `auto` (CUDA if usable, else CPU), `cpu`, `cuda`, `mps`; the notice and the record kept in stage metadata.
+  `progress.py`: rate-limited progress lines. `cost.py`: per-core CPU rates for the ETA notices.
 - `distance.py`, `recall.py`: the single distance function and recall@10 with ties (always /10).
 
 Checkpoints and `.pkl` files from third parties are pickles: handle them only in an isolated

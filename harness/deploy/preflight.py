@@ -1,4 +1,8 @@
-"""Preflight for a Linux x86_64 run instance: architecture, disk, RAM, clean git tree."""
+"""Preflight for a Linux x86_64 run instance: architecture, disk, RAM, clean git tree.
+
+A missing GPU is a note, not a problem: the compute stages run on the CPU, and the notes give an estimate
+of how long that takes per dataset. --require-gpu makes a usable GPU mandatory.
+"""
 
 import argparse
 import os
@@ -10,6 +14,8 @@ from pathlib import Path
 
 from harness.backend.build_index import BUILD_PARAMS, hnsw_graph_bytes
 from harness.deploy import gpu_check
+from workloads.q1 import cost, device as device_mod, universe
+from workloads.q1.datasets import sift10m, spacev
 
 GIB = 2 ** 30
 # dataset: (vectors, dim)
@@ -27,6 +33,12 @@ OTHER_BYTES = 8 * GIB         # answer tables, ground truth, streams, results
 OTHER_BYTES_TINY = GIB // 4
 RAM_BASE_BYTES = 4 * GIB      # headroom on top of the HNSW graph
 RAM_BASE_BYTES_TINY = GIB
+
+# distinct official query vectors per dataset (the interpolation step draws from them); ESCI and SPHERE
+# are the expected distinct text counts of harness/DECISIONS.md
+OFFICIAL_QUERIES = {"esci": 130_193, "spacev": spacev.N_QUERY, "sift10m": sift10m.N_QUERY, "sphere": 96_005,
+                    "tiny": 600}
+EMBEDDED_TEXTS = {"esci": 1_814_924 + 130_193, "sphere": 96_005}
 
 
 def need_bytes(dataset: str) -> dict:
@@ -94,8 +106,29 @@ def check(datasets, data_dir: Path, require_linux: bool = True, repo: Path | Non
     return problems
 
 
+def compute_notes(datasets) -> list[str]:
+    """Where the compute stages will run and, on the CPU, how long each dataset takes (order of magnitude)."""
+    info = device_mod.resolve("auto")
+    if info.kind != "cpu":
+        return [f"compute stages run on {info.kind} ({info.name})"]
+    notes = [info.notice("ground truth and text embedding")]
+    for name in datasets:
+        if name not in OFFICIAL_QUERIES:
+            continue
+        n, d = SIZING[name]
+        n_ids = universe.N_GROUPS * universe.GROUP_SIZE + universe.N_GROUPS + OFFICIAL_QUERIES[name]
+        if name == "tiny":
+            n_ids = 100 * 5 + 100 + OFFICIAL_QUERIES[name]
+        embed = cost.encode_seconds(name, EMBEDDED_TEXTS.get(name, 0), info.threads)
+        truth = cost.ground_truth_seconds(n_ids, n, d, info.threads)
+        notes.append(f"{name} on the CPU ({info.threads} threads): text embedding "
+                     f"{cost.describe(embed) if embed else 'none (released vectors)'}, ground truth "
+                     f"{cost.describe(truth)} (order of magnitude)")
+    return notes
+
+
 def check_gpu() -> list[str]:
-    """A CUDA device must be usable for GPU ground truth and encoding."""
+    """A CUDA device must be usable (only with --require-gpu)."""
     try:
         import torch
     except ImportError:
@@ -131,7 +164,7 @@ def main(argv=None) -> int:
                     help="dry run on a small machine: disk and RAM shortfalls are warnings, other problems still fail")
     ap.add_argument("--data-dir", default="/data")
     ap.add_argument("--allow-non-linux", action="store_true", help="for dry runs on a dev machine")
-    ap.add_argument("--require-gpu", action="store_true")
+    ap.add_argument("--require-gpu", action="store_true", help="fail when no GPU is usable (default: a note)")
     ap.add_argument("--dsn", default=None, help="also check PostgreSQL 16 and pgvector 0.8.0")
     args = ap.parse_args(argv)
     shortfalls: list[str] = []
@@ -141,6 +174,8 @@ def main(argv=None) -> int:
         problems += check_gpu()
     if args.dsn:
         problems += check_postgres(args.dsn)
+    for note in compute_notes(args.datasets):
+        print(f"PREFLIGHT NOTE: {note}")
     for s in shortfalls:
         print(f"PREFLIGHT WARN: {s} (ignored: --allow-shortfall)")
     for p in problems:

@@ -212,6 +212,20 @@ def _generation_env(root: Path) -> dict:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
+DEVICE_KEYS = ("device", "device_name", "requested_device", "threads", "device_notice", "torch")
+
+
+def generation_stages(root: Path) -> dict:
+    """Where the compute stages of the dataset ran (from the stage markers); not part of reuse_key."""
+    out = {}
+    for stage in ("embed", "groundtruth"):
+        path = Path(root) / ".done" / f"{stage}.json"
+        if path.exists():
+            marker = json.loads(path.read_text())
+            out[stage] = {k: marker[k] for k in DEVICE_KEYS if k in marker}
+    return out
+
+
 def _tail(path: Path, lines: int = 30) -> str:
     return "\n".join(Path(path).read_text(errors="replace").splitlines()[-lines:])
 
@@ -266,6 +280,7 @@ def run_cell(cell: Cell, ds: DatasetDir, driver_dir: Path, out_dir: Path, work_d
               "fingerprints": ds.fingerprints, "code": code,
               "reuse_key": fingerprints.reuse_key(ds.fingerprints, code),
               "generation_env": _generation_env(ds.root),
+              "generation_stages": generation_stages(ds.root),
               "versions": {"python": platform.python_version(), "numpy": np.__version__}}
     path = results.write_result(out_dir, cell.cell_id, header, outcome=outcome,
                                 recall=score.recall.astype(np.float32), equality=score.equality,

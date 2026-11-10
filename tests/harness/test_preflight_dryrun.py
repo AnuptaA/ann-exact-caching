@@ -84,7 +84,6 @@ def _fake_preflight(tmp_path: Path, output: str, code: int) -> dict:
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     env = _fake_system(tmp_path / "sys", "1.83.0.1ubuntu2", "3.28.3", "13.2.0") if (tmp_path / "sys").mkdir() is None else {}
     env["Q1_PREFLIGHT_CMD"] = str(script)
-    env["Q1_ALLOW_NO_GPU"] = "1"
     return env
 
 
@@ -103,7 +102,7 @@ def test_setup_passes_the_flag_only_for_the_exact_value_and_reports_the_numbers(
     assert "--allow-shortfall" in _argv(tmp_path)
     assert re.search(r"preflight\s+WARN\s+1 shortfall\(s\): disk: 18 GiB free in /data/q1, need 281 GiB", out.stdout)
     assert "mode: DRY RUN" in out.stdout and "!!! DRY-RUN MODE" in out.stderr
-    assert "setup OK with" in out.stdout and "dry-run shortfall mode" in out.stdout
+    assert "setup OK in" in out.stdout and "dry-run shortfall mode" in out.stdout
 
 
 @pytest.mark.parametrize("value", [None, "", "0", "true", "yes", " 1"])
@@ -123,11 +122,14 @@ def test_with_the_flag_a_real_preflight_failure_still_fails_setup(tmp_path):
     assert out.returncode == 1 and re.search(r"preflight\s+FAIL", out.stdout)
 
 
-def test_no_gpu_plus_shortfall_flags_let_a_small_cpu_machine_finish_setup(tmp_path):
+def test_no_gpu_needs_no_flag_and_the_shortfall_flag_lets_a_small_machine_finish_setup(tmp_path):
     env = _fake_preflight(tmp_path, WARN, 0)
-    env.update(Q1_ALLOW_SHORTFALL="1", Q1_SETUP_DATASETS="tiny", Q1_GPU_CHECK_CMD="false")
+    no_gpu = tmp_path / "no_gpu.sh"
+    no_gpu.write_text("#!/bin/sh\nexit 10\n")
+    no_gpu.chmod(no_gpu.stat().st_mode | stat.S_IXUSR)
+    env.update(Q1_ALLOW_SHORTFALL="1", Q1_SETUP_DATASETS="tiny", Q1_GPU_CHECK_CMD=str(no_gpu))
     out = _setup(env)
     assert out.returncode == 0, out.stderr + out.stdout
     assert "tiny" in _argv(tmp_path) and "--allow-shortfall" in _argv(tmp_path)
     assert re.search(r"gpu\s+WARN", out.stdout) and re.search(r"preflight\s+WARN", out.stdout)
-    assert "a GPU warning" in out.stdout and "dry-run shortfall mode" in out.stdout
+    assert "CPU mode (no usable GPU)" in out.stdout and "dry-run shortfall mode" in out.stdout

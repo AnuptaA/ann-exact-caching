@@ -7,7 +7,7 @@ Run from a clean checkout of the audited commit. Do not edit anything on the ins
 ```
 git clone <repo> thesis && cd thesis && git checkout --detach <commit> && git status --short   # prints nothing
 lsblk; df -h /data                                                                              # /data is its own volume, >= 400 GB free
-nvidia-smi                                                                                      # a GPU and a driver; note the version
+nvidia-smi                                                                                      # a GPU and a driver; note the version (no GPU: the stages run on the CPU)
 ```
 
 Go only if `/data` is a separate mounted volume. Do not set `Q1_ALLOW_ROOT_VOLUME=1` to get past this.
@@ -31,7 +31,7 @@ Setup first waits (at most 10 min for cloud-init, 15 min for the apt/dpkg locks)
 
 Setup can be re-run: every step skips what is already done, and `pg.sh start` accepts a cluster that already runs. `tail -f ~/setup.log` never exits by itself; the run is over when the log ends with `setup done` or `setup FAILED: <steps>` (then press Ctrl-C). If `pg_start` fails, the summary note and the log show the end of the server log; the full file is `/data/q1/pgdata.log` (`/data/q1/pgdata` is the data directory, `pg_ctl -D /data/q1/pgdata status` tells whether it runs).
 
-Setup runs every independent step and ends with a summary table (PASS, FAIL, SKIPPED, N/A, NOT RUN per step); the GPU check is the last step, so a missing GPU never hides the builds. Exit code 0 needs every step to pass.
+Setup runs every independent step and ends with a summary table (PASS, FAIL, SKIPPED, N/A, NOT RUN per step); the GPU check is the last step. A missing or unusable GPU is a `WARN` (the compute stages then run on the CPU), never a failure. Exit code 0 needs every other step to pass.
 
 Watch for: Boost 1.84 build (only on 22.04), CMake wheel, FAISS v1.8.0 build, PostgreSQL 16 + pgvector 0.8.0, both drivers, then the `preflight` call. Expected end: `preflight ok`. `build/replay/TOOLCHAIN.txt` lists commit, cmake, gcc, boost, faiss. `git status --short` must still print nothing.
 
@@ -47,23 +47,24 @@ psql "host=127.0.0.1 port=54320 user=postgres" -Atc "show wal_level; show max_pa
 
 Expected: `minimal`, a number between 1 and 7, `0.8.0`.
 
-## 1b. CPU-only dry run (cheap instance or CI, before paying for a GPU)
+## 1b. CPU-only dry run (cheap instance or CI)
 
 Verifies the Linux build, PostgreSQL 16, pgvector 0.8.0, both drivers and the smoke test without a GPU, on a machine too
 small for the real datasets:
 
 ```
-Q1_ALLOW_NO_GPU=1 Q1_ALLOW_SHORTFALL=1 Q1_MIN_DATA_GB=10 Q1_SETUP_DATASETS=tiny make q1-setup 2>&1 | tee ~/setup.log
+Q1_ALLOW_SHORTFALL=1 Q1_MIN_DATA_GB=10 Q1_SETUP_DATASETS=tiny make q1-setup 2>&1 | tee ~/setup.log
 make q1-smoke 2>&1 | tee ~/smoke.log
 git status --short                                   # prints nothing
 ```
 
 Expected: every row of the summary is PASS except `gpu` (`WARN`, "no NVIDIA driver or GPU found"; a driver too old for torch
-gives a different message) and `preflight` (`WARN`, with the disk and RAM numbers), and the exit code is 0. A loud "DRY-RUN MODE"
-banner is printed. Without the two flags the same run exits 1 with `gpu FAIL` and/or `preflight FAIL`, and every other step
-still passes. The flags only downgrade the setup checks: ground truth, ESCI/SPHERE encoding and `--device cuda` still refuse
-to run without a GPU, `make q1-preflight` stays strict, and nothing real can be generated on that machine. Only the exact value
-`1` enables a flag. `Q1_SETUP_DATASETS` takes `tiny`, one dataset name, several names, or `none`.
+gives a different message) and `preflight` (`WARN`, with the disk and RAM numbers), and the exit code is 0. A "No usable GPU" notice
+and a loud "DRY-RUN MODE" banner are printed. A missing GPU needs no flag. Without `Q1_ALLOW_SHORTFALL=1` the same run exits 1
+with `preflight FAIL`, and every other step still passes. The flag only downgrades the disk and RAM checks (only the exact value `1`):
+`make q1-preflight` stays strict, and a machine that small cannot hold the real datasets. `Q1_ALLOW_NO_GPU` is no longer read (setup
+says so if it is set). `Q1_SETUP_DATASETS` takes `tiny`, one dataset name, several names, or `none`. The `tiny` smoke test runs
+on the CPU through the same device code as a real run: its `.done/groundtruth.json` must show `"device": "cpu"` and the notice.
 
 `build/replay/TOOLCHAIN.txt` must list the BLAS the drivers link, for example `blas_vendor OpenBLAS` and a
 `blas_lib /usr/lib/x86_64-linux-gnu/libopenblasp-r0.3.xx.so libopenblas0-pthread <version>`, plus the OpenMP library. The driver
@@ -106,7 +107,7 @@ Expected order: `fetch` (verified against the published sha256 lines), `embed` (
 Go when all hold:
 
 - `fetch`: each file logs `verified against the published value` (ESCI's two parquet files publish a sha256 through their LFS pointers).
-- `embed`: shards appear in `/data/q1/esci/raw/esci_products.npy.shards`; the manifest (`esci_products.npy.manifest.json`) lists the model, recipe, and commit. GPU speed: note minutes per 100K shard; the ETA line gives the total. If the ETA is over about 1 hour, stop and check the GPU is used.
+- `embed`: shards appear in `/data/q1/esci/raw/esci_products.npy.shards`; the manifest (`esci_products.npy.manifest.json`) lists the model, recipe, and commit. Progress lines (every 30 s) give texts/s and an ETA; shards are 100K texts on a GPU and 20K on the CPU. On a GPU, if the ETA is over about 1 hour, stop and check the GPU is used; on the CPU, compare the ETA with the estimate printed at the start of the stage (`make q1-preflight` lists it).
 - `groundtruth`: no `chunks reduced` warning, or a small reduction only; ETA is sensible.
 - `pg_index`: for esci (m 16, dim 384) the log shows `maintenance_work_mem` of about 4.7 GB (2256 bytes per vector x 1.8M x 1.15); no `server notice`; `index built in X min`.
 - `tune_ef`: `ef_search` between 200 and 400 and recall at that ef at least 0.9 (the stage fails otherwise).

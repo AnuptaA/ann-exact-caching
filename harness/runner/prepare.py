@@ -58,15 +58,15 @@ def request_vectors_of(ds: Path) -> RequestVectors:
     return RequestVectors(load_universe(ds / "universe.npz"), data.read_f32bin(ds / "official.f32bin"))
 
 
-def prepare_ground_truth(ds: Path, device: str = "numpy", query_chunk: int = groundtruth.QUERY_CHUNK,
-                         base_chunk: int = groundtruth.BASE_CHUNK) -> None:
+def prepare_ground_truth(ds: Path, device: str = "cpu", query_chunk: int = groundtruth.QUERY_CHUNK,
+                         base_chunk: int = groundtruth.BASE_CHUNK, workers: int | None = None) -> None:
     groundtruth.build_ground_truth(request_vectors_of(ds), data.read_f32bin(ds / "base.f32bin"),
                                    ds / "gt", device=device, query_chunk=query_chunk,
-                                   base_chunk=base_chunk)
+                                   base_chunk=base_chunk, workers=workers)
 
 
 def prepare_dataset(root: Path, name: str, base, official, backend, ef_search: int,
-                    list_size: int = 50, gt_device: str = "numpy", **inputs) -> Path:
+                    list_size: int = 50, gt_device: str = "cpu", **inputs) -> Path:
     """Everything in one go (used with a fake backend in tests and small runs)."""
     ds = prepare_inputs(root, name, base, official, **inputs)
     build_answer_table(backend, request_vectors_of(ds), data.read_f32bin(ds / "base.f32bin"),

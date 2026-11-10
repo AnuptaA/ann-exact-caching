@@ -33,7 +33,7 @@ def test_no_driver_is_reported_with_the_instance_fix():
     code, message = gpu_check.diagnose(fake_torch(error=NO_DRIVER), lambda: None)
     assert code == gpu_check.EXIT_NO_DRIVER
     assert "no NVIDIA driver or GPU" in message and "nvidia-driver-<N>" in message and "g5" in message
-    assert "Q1_ALLOW_NO_GPU=1" in message and NO_DRIVER.rstrip(".") in message
+    assert "Q1_ALLOW_NO_GPU" not in message and "run on the CPU" in message and NO_DRIVER.rstrip(".") in message
 
 
 def test_old_driver_is_reported_with_both_versions_and_the_fix():
