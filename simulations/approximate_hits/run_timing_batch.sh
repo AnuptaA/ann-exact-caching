@@ -14,8 +14,10 @@ M=/tmp/mx
 S=simulations/approximate_hits
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
 
-busy() {   # any job that would disturb a timing run
-  pgrep -f "(online_sim|eval_aker_real|online_prepare|online_prepare_data|eval_real_backend|reembed_triviaqa_queries)\.py" > /dev/null
+busy() {   # any running job that would disturb a timing run: python processes only (queued
+  # mx_run_job.sh wrappers carry the same script names in their arguments but only wait on HOLD;
+  # matching them deadlocked the first batch, 11-11)
+  pgrep -f "^[^ ]*python[^ ]* -u [^ ]*(online_sim|eval_aker_real|online_prepare|online_prepare_data|eval_real_backend|reembed_triviaqa_queries)\.py" > /dev/null
 }
 
 echo "$(date +%T) waiting for the tuned-Aker runs and the warm-up states"
@@ -23,7 +25,7 @@ while pgrep -f "aker_tuned.sh" > /dev/null || pgrep -f "tstates.sh" > /dev/null;
 PYTHONPATH=. .venv/bin/python $S/timing_jobs.py > $M/timing.txt || exit 1
 echo "$(date +%T) $(wc -l < $M/timing.txt) timing jobs"
 
-until mkdir $M/prep.lock 2>/dev/null; do sleep 120; done
+[ -n "$HAVE_LOCK" ] || until mkdir $M/prep.lock 2>/dev/null; do sleep 120; done   # HAVE_LOCK=1: restart holding it
 ( while [ -d $M/prep.lock ] && [ ! -f $M/TIMING.DONE ]; do touch $M/HOLD; sleep 60; done ) &
 keeper=$!
 echo "$(date +%T) prep lock taken, HOLD set; draining"
