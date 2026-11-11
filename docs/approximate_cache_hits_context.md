@@ -2452,3 +2452,28 @@ LRU sync, LRU background, Aker, QVCache = 30 jobs, ~8-10 min each), takes the pr
 the queue (HOLD), waits until no simulator / Aker / prep / index-build process is left, runs the
 jobs one at a time under the guard, then releases. Results:
 `results/timing_v2/spacev-aker-<z>/<technique>_b<b>.json`.
+
+### 9l. Timing batch results and decisions (11-11)
+
+- Batch: blocked 02:37-12:38 (its drain check matched the queued wrappers, which wait on HOLD:
+  deadlock; fixed, `d26c7e9`), then ran all 30 jobs 12:38-19:14. Guard verdicts "contended" on
+  9 runs come from ~1 core of interactive sessions (p95 1.02 cores, mean .27, I/O < 5 MB/s on 96
+  cores); timings are usable.
+- Result: in every run, speedup over DiskANN alone = 1 / (1 - h + audited share) within ~3%
+  (a hit costs ~0.03-0.9 ms without an audit vs ~63 ms per DiskANN search). Ours' and LRU's
+  mean hit cost is 6-8 ms because 10% of hits are audited (one DiskANN search each).
+  DiskANN given the cache's memory as node cache: 1.05-1.17x.
+- Caveat: the timed window is the 2,000 requests right after warm-up, so its hit rates differ
+  from the headline (whole-run) ones; e.g. at 10% LRU and ours are both ~57% (Zipf .99), while
+  the headline has LRU 67.0 vs ours 59.7 (LRU's advantage builds up later).
+- Decision (Jialin): LRU's cache update is charged as background work (plot: LRU = lru_bg;
+  sync runs in the table only). Sync costs: top-500 search ~190 ms per miss + insert.
+- TriviaQA primary variant: ip (inner-product transform), since DPR_web is trained and meant to
+  be searched by inner product; plain Euclidean shares only 20% of the top-10 and favors
+  low-norm passages. The dpr DiskANN index is built (sphere10m; recall@10 .24 at search list
+  128); its tuning was stopped, the ip index is building (`run_diskann_triviaqa_ip.sh`).
+- SPACEV real query log: not a hard limit; tuning stopped at search list 1000 (.886, still
+  rising ~.024 per step). Real-log queries are far from the base and have little contrast:
+  median distance to the nearest neighbor 125.7 vs 81.2 for the Aker-trace queries, and d10 / d1
+  1.038 vs 1.105 (d100 / d10 1.035 vs 1.086). Extended curve (search lists 1000-6400) running:
+  `results/backends/spacev-real-hiL/log_curve.txt`.

@@ -26,11 +26,16 @@ RES = Path("simulations/approximate_hits/results")
 T, TOL = 0.9, 0.01
 TRACES = [("Zipf 0.99", "spacev-aker-0.99"), ("Zipf 0.6", "spacev-aker-0.6"), ("Zipf 0.3", "spacev-aker-0.3")]
 BUDGETS = [0.01, 0.1]
+# LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
+# background work (decided with Jialin, 11-11); the sync runs stay in the table only
 TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
-         ("lru_sync", "LRU", "C1", lambda n: n.startswith("lru_sync_")),
-         ("lru_bg", "LRU (bg. upd.)", "C1", lambda n: n.startswith("lru_bg_")),
+         ("lru_bg", "LRU", "C1", lambda n: n.startswith("lru_bg_")),
          ("aker", "Aker", "C2", lambda n: n.startswith("aker_")),
          ("qvcache", "QVCache", "C3", lambda n: n.startswith("qvcache_"))]
+
+
+TABLE_ONLY = [("lru_sync", "LRU (sync update)", lambda n: n.startswith("lru_sync_"))]
+HEADLINE_KEY = {"ours": "ours", "lru_bg": "lru", "lru_sync": "lru", "aker": "aker", "qvcache": "qvcache"}
 
 
 def load(prep, budget):
@@ -39,7 +44,7 @@ def load(prep, budget):
     for f in sorted(d.glob(f"*_b{budget:g}.json")) if d.exists() else []:
         if f.name.startswith(("greedy_state", "state_")):
             continue
-        for key, _, _, match in TECHS:
+        for key, match in [(t[0], t[3]) for t in TECHS] + [(t[0], t[2]) for t in TABLE_ONLY]:
             if match(f.stem):
                 r = json.loads(f.read_text())
                 r["file"] = f.stem
@@ -61,6 +66,8 @@ def main():
         for j, (title, prep) in enumerate(TRACES):
             ax = axes[i][j]
             data = load(prep, b)
+            from simulations.approximate_hits.plot_headline import collect
+            head = collect(prep, "trace", b, True)
             xs = np.arange(len(TECHS))
             for x, (key, label, color, _) in zip(xs, TECHS):
                 r = data.get(key)
@@ -69,10 +76,11 @@ def main():
                     continue
                 sp = r["speedup"]["overall"]
                 ret = ret_of(r)
-                ok = ret is not None and ret >= T - TOL
-                quiet = r.get("environment", {}).get("verdict") == "quiet"
-                ax.bar(x, sp, color=color if ok else "white", edgecolor=color if quiet else "k",
-                       linewidth=1.5, hatch=None if quiet else "//")
+                # target met = the chosen setting meets it over the whole headline run (the timing
+                # window has few hits: its retention is noisy)
+                h = head.get(HEADLINE_KEY[key])
+                ok = bool(h and h["ok"])
+                ax.bar(x, sp, color=color if ok else "white", edgecolor=color, linewidth=1.5)
                 lim = r["speedup"]["limit_1_over_1_minus_h"]
                 ax.plot([x - 0.35, x + 0.35], [lim, lim], color="k", lw=1)
                 if r["speedup"].get("vs_equal_memory"):
@@ -86,6 +94,15 @@ def main():
                              (c.get("hits_ms") or {}).get("mean_ms"), (c.get("misses_ms") or {}).get("mean_ms"),
                              c["p99_ms"], r["backend"]["p99_ms"], sp, lim,
                              r.get("environment", {}).get("verdict")))
+            for key, label, _ in TABLE_ONLY:
+                r = data.get(key)
+                if r:
+                    c = r["cache"]
+                    rows.append((title, f"{100 * b:g}%", label, 100 * r["hit_rate"], ret_of(r),
+                                 r["recall_vs_exact_all"], r["backend"]["mean_ms"], c["mean_ms"],
+                                 (c.get("hits_ms") or {}).get("mean_ms"), (c.get("misses_ms") or {}).get("mean_ms"),
+                                 c["p99_ms"], r["backend"]["p99_ms"], r["speedup"]["overall"],
+                                 r["speedup"]["limit_1_over_1_minus_h"], r.get("environment", {}).get("verdict")))
             ax.axhline(1.0, color="grey", lw=0.8, ls="--")
             ax.set_xticks(xs)
             ax.set_xticklabels([t[1] for t in TECHS], rotation=30, ha="right", fontsize=8)
@@ -95,7 +112,7 @@ def main():
             ax.set_ylim(0, max([ax.get_ylim()[1], 1.2]) * 1.15)
     fig.suptitle("Cache + DiskANN (recall@10 0.95), mean latency over all requests. Bar labels: hit rate, "
                  "recall vs exact.\nTick: 1/(1-h) limit; diamond: DiskANN with equal-memory node cache; "
-                 "hollow: retention of hits < 0.89; hatched: machine not quiet", fontsize=8)
+                 "hollow: setting misses the target (headline run); LRU's cache update counted as background work", fontsize=8)
     fig.tight_layout(rect=(0, 0, 1, 0.93))
     out = RES / "summary" / "timing_draft_v1.png"
     out.parent.mkdir(parents=True, exist_ok=True)

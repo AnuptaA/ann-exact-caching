@@ -163,6 +163,8 @@ def main():
     ap.add_argument("--build-only", action="store_true",
                     help="build the index and report recall at --build-effort, no tuning")
     ap.add_argument("--build-effort", type=int, default=128)
+    ap.add_argument("--efforts", type=int, nargs="+", default=None,
+                    help="search efforts to try (default: the index's grid, GRIDS)")
     args = ap.parse_args()
     prep = Path(args.prep)
     out = RES / "backends" / (args.out_name or prep.name)
@@ -179,7 +181,7 @@ def main():
         logger.info(f"built: {info}")
         return
     curve = {}
-    for e in GRIDS[args.index]:
+    for e in args.efforts or GRIDS[args.index]:
         t0 = time.time()
         r = recall(truth[tune], ix.search(q[tune], args.k, e), args.k)
         curve[e] = (r, (time.time() - t0) / len(tune) * 1e3)
