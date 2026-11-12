@@ -77,9 +77,27 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--v2", action="store_true", help="the first batch (2,000 requests after warm-up)")
+    ap.add_argument("--set", choices=["matrix", "lru_retime", "sizes"], default="matrix",
+                    help="lru_retime: LRU again after the empty-search fix (doc 9n); sizes: the extra "
+                         "cache sizes 0.3% and 3%, every technique, 1 in 20")
     a = ap.parse_args()
     if a.v2:
         return main_v2()
+    if a.set == "lru_retime":
+        out = []
+        for z in ("0.99", "0.6", "0.3"):
+            for b in (0.01, 0.1):
+                out += lines(f"spacev-aker-{z}", b, 20, techs=("lru",))
+        out += lines("spacev-aker-0.6", 0.01, 10, techs=("lru",))
+        print("\n".join(out))
+        return
+    if a.set == "sizes":
+        out = []
+        for z in ("0.99", "0.6", "0.3"):
+            for b in (0.003, 0.03):
+                out += lines(f"spacev-aker-{z}", b, 20)
+        print("\n".join(out))
+        return
     out = []
     for z in ("0.99", "0.6", "0.3"):             # the matrix, 1 in 20
         for b in (0.01, 0.1):

@@ -2516,3 +2516,28 @@ every miss). Check sample rates 1 in 20 / 10 / 5.
   SPACEV traces, TriviaQA ip; ours, LRU, QVCache grid, real Aker standard + tuned) queued to start
   when the timing batch ends (/tmp/mx/hx.sh); plot_headline.py BUDGETS = .3, 1, 3, 10%;
   /tmp/mx/after_timing.sh redraws headline_draft_v3.png every 2 h and the timing plot at the end.
+
+### 9n. LRU empty-search bug; chained batches; timing as a line plot (11-12 afternoon)
+
+- LRU timing bug: once in ~15,000 lookups the incrementally built FAISS HNSW over the cached
+  vectors returned no result (62k live vectors indexed); the score became infinite, one infinite
+  label made every cutoff fail (lambda None), and LRU served nothing for 20,000 requests until the
+  label aged out (Zipf .99, 1%: 33.9% vs the simulator's 46.8%). Fix: exact search over the live
+  cached vectors when the graph search returns fewer than k (1 fallback in 40,000 requests);
+  the calibrator drops non-finite labels; ours' static hit path refuses to serve on a short result.
+  After the fix: 45.8% over 40,000 requests (simulator ~47%). All LRU timing runs are redone
+  (old ones in results/timing_v3/old_lru_before_fix).
+- TriviaQA 256-byte-PQ DiskANN: recall@10 .752 at search list 128 (32-byte PQ: .039); confirms the
+  PQ diagnosis. No TriviaQA experiment ever used the 32-byte index (no TriviaQA real-backend run
+  exists; its tuning never reached the target).
+- Normalizing TriviaQA instead of the 769-d transform: cosine shares only 57% of the inner-product
+  top-10 (2M-passage sample, 200 queries; Euclidean on raw 20%); norms 13.4-16.4 matter for DPR.
+- Chain (run_timing_batch2.sh <set> <name> <flags>): TIMING3 (matrix + sample-rate check) ->
+  TIMING3B (LRU re-time, 7 runs) -> extra headline sizes 0.3% / 3% (hx.sh) + warm-up states for
+  0.3% / 3% + TriviaQA DiskANN tuning -> TIMING3C (timing at 0.3% / 3%, every technique).
+  after_timing.sh redraws the plots as batches land.
+- plot_timing.py is now a line plot like the headline (timing_draft_v3.png): speedup over DiskANN
+  alone vs cache size per technique, DiskANN with the cache's memory as node cache (grey), and a
+  recall-vs-exact strip; a marker is hollow when that run's own whole-stream retention of hits
+  is < 0.89. QVCache's settings (picked on the exact-backend headline) miss with DiskANN at 1%
+  (Zipf .99: retention .75; Zipf .6 / .3 also hollow).

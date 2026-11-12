@@ -16,7 +16,7 @@ if [ ! -f $B/$idx/diskann/ann_disk.index ]; then
 fi
 [ -f $B/$idx/diskann/ann_disk.index ] || { echo "$(date +%T) DiskANN build failed: $idx" >> /tmp/mx/failures.log; exit 1; }
 # tuning (24 threads, hours) after the timing batch, which needs a quiet machine
-while [ ! -f /tmp/mx/TIMING3.DONE ]; do sleep 300; done
+while [ ! -f /tmp/mx/TIMING3B.DONE ]; do sleep 300; done
 for z in 0.99 0.6 0.3; do
   mkdir -p $B/triviaqa-ip-$z
   [ -e $B/triviaqa-ip-$z/diskann ] || ln -s ../$idx/diskann $B/triviaqa-ip-$z/diskann

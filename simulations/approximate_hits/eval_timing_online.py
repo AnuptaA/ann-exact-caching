@@ -94,6 +94,9 @@ class Calibrator:
         if len(self.lab) < 2:
             return
         a = np.array([(s, y, w) for _, s, y, w in self.lab])
+        a = a[np.isfinite(a).all(axis=1)]          # safety: a non-finite score would void every cutoff
+        if len(a) < 2:
+            return
         self.lam = select_weighted(a[:, 0], a[:, 1], a[:, 2], threshold_grid(a[:, 0]), self.T, self.delta)
 
 
@@ -122,8 +125,12 @@ class Ours:
     def lookup(self, qi, x):
         self.hp.lam = np.inf if self.cal.lam is None else self.cal.lam
         hit, s, near = self.hp.decide(x, self.t)
+        near = np.asarray(near)
+        if len(near) < self.k or np.any(near < 0) or not np.isfinite(s):
+            hit = False        # graph search came back short (never seen for the static graph)
+            self.fallbacks = getattr(self, "fallbacks", 0) + 1
         self._s = s
-        return bool(hit), np.asarray(near)
+        return bool(hit), near
 
     def label(self, t, answer, w):
         self.cal.add(t, self._s, float(self.cached[answer[:self.k]].mean()), w)
@@ -174,6 +181,7 @@ class LRU(Ours):
         if self.qlo is None:
             self.bits = 32
         self.background = self.rebuild_s = 0.0
+        self.fallbacks = 0
         self.hnsw = None
         self._rebuild()
         self._load_state(st)
@@ -358,6 +366,16 @@ class LRU(Ours):
                 break
             kk *= 4
         ii, dd = ii[live][:k], dd[live][:k]
+        if len(ii) < k and self.n_cached() >= k:
+            # the graph search found fewer than k live vectors (rare: FAISS HNSW with incremental
+            # inserts returned no result at all once in ~15,000 lookups): exact search over the
+            # live cached vectors, as the simulator does
+            self.fallbacks += 1
+            rows = np.flatnonzero(self.ref[self.cv_id[:self.n_cv]] > 0)
+            d2 = ((self.cv[rows] - x) ** 2).sum(axis=1)
+            o = np.argpartition(d2, k - 1)[:k]
+            o = o[np.argsort(d2[o])]
+            ii, dd = rows[o], d2[o]
         near = self.cv_id[ii]
         nr = float(np.sqrt(max(dd.max(), 0.0))) + EPS if len(dd) else np.inf
         b = time.perf_counter()
@@ -387,6 +405,12 @@ class LRU(Ours):
         f[-1] = np.log1p(cnt)
         d = time.perf_counter()
         s = float(((f - self.mu) / self.sd) @ self.coef + self.b)
+        if not np.isfinite(s) and not getattr(self, "_warned", False):
+            self._warned = True
+            logger.warning(f"non-finite score at t={getattr(self, '_now', None)}: n near {len(near)}, "
+                           f"nr {nr}, hnsw ntotal {self.hnsw.ntotal}, n_cv {self.n_cv}, dead {self.dead}, "
+                           f"entries {self.n_e}, min radius {self.rad[:self.n_e].min() if self.n_e else None}, "
+                           f"f {f.tolist()}")
         hit = len(near) >= k and self.cal.lam is not None and s >= self.cal.lam
         e = time.perf_counter()
         t["knn"] += b - a
@@ -680,6 +704,7 @@ def main():
     ret, ret_b, ret_sim = np.zeros(n), np.zeros(n), np.full(n, np.nan)
     total = []
     maint = 0.0
+    trace = []
     t0 = time.time()
     for i, qi in enumerate(req.tolist()):
         t_req = args.warmup + i
@@ -717,6 +742,13 @@ def main():
         hits[i], audited_all[i] = hit, audited
         ret[i] = float(np.isin(answer, top[qi, :args.k]).mean())           # vs exact (not timed)
         ret_b[i] = float(np.isin(answer, ans[qi, :args.k]).mean())         # vs DiskANN's answer
+        if (i + 1) % 1000 == 0:      # per-1,000 trace (cutoff, labels, cache size)
+            cal = getattr(m, "cal", None)
+            trace.append({"t": t_req + 1, "hits": int(hits[i - 999:i + 1].sum()),
+                          "lam": None if cal is None or cal.lam is None else float(cal.lam),
+                          "labels": None if cal is None else len(cal.lab),
+                          "entries": len(getattr(m, "entries", {})) or None,
+                          "memory": float(m.memory()) if hasattr(m, "memory") else None})
         if (i + 1) % 10000 == 0:
             logger.info(f"  {i + 1} / {n} requests ({time.time() - t0:.0f} s), hit rate so far "
                         f"{hits[:i + 1].mean():.3f}")
@@ -736,7 +768,8 @@ def main():
            "background_maintenance_s_timed": float(maint),
            "cache": dict(summary(total), hits_ms=summary(total[th]), misses_ms=summary(total[~th])),
            "stage_ms": {s_: v / n * 1e3 for s_, v in getattr(m, "t", {}).items()},
-           "replay_s": time.time() - t0}
+           "replay_s": time.time() - t0, "trace": trace,
+           "knn_fallbacks": int(getattr(m, "fallbacks", 0))}
     logger.info(f"hit rate {res['hit_rate']:.3f} (timed sample {res['hit_rate_timed']:.3f}); recall vs "
                 f"exact {res['recall_vs_exact_all']:.3f}; cache + DiskANN {res['cache']['mean_ms']:.2f} ms")
     req_all = req

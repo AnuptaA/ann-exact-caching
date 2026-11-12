@@ -24,8 +24,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 RES = Path("simulations/approximate_hits/results")
 T, TOL = 0.9, 0.01
-TRACES = [("Zipf 0.99", "spacev-aker-0.99"), ("Zipf 0.6", "spacev-aker-0.6"), ("Zipf 0.3", "spacev-aker-0.3")]
-BUDGETS = [0.01, 0.1]
+TRACES = [("Zipf 0.3", "spacev-aker-0.3"), ("Zipf 0.6", "spacev-aker-0.6"), ("Zipf 0.99", "spacev-aker-0.99")]
+BUDGETS = [0.003, 0.01, 0.03, 0.1]
 # LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
 # background work (decided with Jialin, 11-11); the sync runs stay in the table only
 TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
@@ -63,64 +63,80 @@ def ret_of(r):
 
 
 def main():
-    fig, axes = plt.subplots(len(BUDGETS), len(TRACES), figsize=(4.2 * len(TRACES), 3.6 * len(BUDGETS)),
-                             squeeze=False)
+    """Line plot in the headline's style: per trace, speedup over DiskANN alone vs cache size, one
+    line per technique (filled marker: the setting meets the target in the headline run; hollow:
+    it does not); grey dashed: DiskANN given the memory of the cache (mean over techniques);
+    strip below: recall vs exact over all requests (grey: DiskANN alone)."""
+    from matplotlib.gridspec import GridSpec
+    from simulations.approximate_hits.plot_headline import STYLE, JITTER
+    fig = plt.figure(figsize=(5.0 * len(TRACES), 4.6))
+    gs = GridSpec(2, len(TRACES), height_ratios=[3.2, 1.2], hspace=0.08, wspace=0.28, figure=fig,
+                  top=0.84, bottom=0.2)
     rows = []
-    for i, b in enumerate(BUDGETS):
-        for j, (title, prep) in enumerate(TRACES):
-            ax = axes[i][j]
-            data = load(prep, b)
-            from simulations.approximate_hits.plot_headline import collect
-            head = collect(prep, "trace", b, True)
-            xs = np.arange(len(TECHS))
-            for x, (key, label, color, _) in zip(xs, TECHS):
-                r = data.get(key)
+    for j, (title, prep) in enumerate(TRACES):
+        ax = fig.add_subplot(gs[0, j])
+        st = fig.add_subplot(gs[1, j], sharex=ax)
+        per_b = {b: load(prep, b) for b in BUDGETS}
+        eq_pts = []
+        for key, label, _, _ in TECHS:
+            hk = HEADLINE_KEY[key]
+            name, color, marker, lw = STYLE[hk]
+            pts = []
+            for b in BUDGETS:
+                r = per_b[b].get(key)
                 if r is None:
-                    ax.text(x, 0.05, "pending", rotation=90, ha="center", va="bottom", fontsize=7, color="grey")
                     continue
-                sp = r["speedup"]["overall"]
-                ret = ret_of(r)
-                # target met = the chosen setting meets it over the whole headline run (the timing
-                # window has few hits: its retention is noisy)
-                h = head.get(HEADLINE_KEY[key])
-                ok = bool(h and h["ok"])
-                ax.bar(x, sp, color=color if ok else "white", edgecolor=color, linewidth=1.5)
-                lim = r["speedup"]["limit_1_over_1_minus_h"]
-                ax.plot([x - 0.35, x + 0.35], [lim, lim], color="k", lw=1)
-                if r["speedup"].get("vs_equal_memory"):
-                    eq = r["backend"]["mean_ms"] / r["backend_mem"]["mean_ms"]
-                    ax.plot(x, eq, marker="D", color="grey", ms=4)
-                ax.text(x, sp, f"{100 * r['hit_rate']:.0f}%\n{r['recall_vs_exact_all']:.2f}",
-                        ha="center", va="bottom", fontsize=7)
+                # target met: this run's own mean retention of hits (whole stream, real DiskANN)
+                rt = ret_of(r)
+                ok = rt is not None and rt >= T - TOL
+                pts.append((b * JITTER[hk], r["speedup"]["overall"], r["recall_vs_exact_all"], ok))
+                if r.get("backend_mem"):
+                    eq_pts.append((b, r["backend"]["mean_ms"] / r["backend_mem"]["mean_ms"]))
                 c = r["cache"]
-                rows.append((title, f"{100 * b:g}%", label, 100 * r["hit_rate"], ret,
+                rows.append((title, f"{100 * b:g}%", label, 100 * r["hit_rate"], ret_of(r),
                              r["recall_vs_exact_all"], r["backend"]["mean_ms"], c["mean_ms"],
                              (c.get("hits_ms") or {}).get("mean_ms"), (c.get("misses_ms") or {}).get("mean_ms"),
-                             c["p99_ms"], r["backend"]["p99_ms"], sp, lim,
-                             r.get("environment", {}).get("verdict")))
-            for key, label, _ in TABLE_ONLY:
-                r = data.get(key)
-                if r:
-                    c = r["cache"]
-                    rows.append((title, f"{100 * b:g}%", label, 100 * r["hit_rate"], ret_of(r),
-                                 r["recall_vs_exact_all"], r["backend"]["mean_ms"], c["mean_ms"],
-                                 (c.get("hits_ms") or {}).get("mean_ms"), (c.get("misses_ms") or {}).get("mean_ms"),
-                                 c["p99_ms"], r["backend"]["p99_ms"], r["speedup"]["overall"],
-                                 r["speedup"]["limit_1_over_1_minus_h"], r.get("environment", {}).get("verdict")))
-            ax.axhline(1.0, color="grey", lw=0.8, ls="--")
-            ax.set_xticks(xs)
-            ax.set_xticklabels([t[1] for t in TECHS], rotation=30, ha="right", fontsize=8)
-            ax.set_title(f"SPACEV {title}, cache {100 * b:g}%", fontsize=9)
-            if j == 0:
-                ax.set_ylabel("speedup over DiskANN alone")
-            ax.set_ylim(0, max([ax.get_ylim()[1], 1.2]) * 1.15)
-    fig.suptitle("Cache + DiskANN (recall@10 0.95), mean latency over all requests. Bar labels: hit rate, "
-                 "recall vs exact.\nTick: 1/(1-h) limit; diamond: DiskANN with equal-memory node cache; "
-                 "hollow: setting misses the target (headline run); cache updates counted as background work. Whole stream after warm-up, 1 in 20 requests timed", fontsize=8)
-    fig.tight_layout(rect=(0, 0, 1, 0.93))
-    out = RES / "summary" / "timing_draft_v2.png"
+                             c["p99_ms"], r["backend"]["p99_ms"], r["speedup"]["overall"],
+                             r["speedup"]["limit_1_over_1_minus_h"], r.get("environment", {}).get("verdict")))
+            if not pts:
+                continue
+            xs, ys, rs, oks = zip(*pts)
+            ax.plot(xs, ys, color=color, lw=lw, zorder=3, label=name if j == 0 else None)
+            st.plot(xs, rs, color=color, lw=1, alpha=0.7)
+            for x, y, rr, ok in pts:
+                kw = dict(marker=marker, ms=8 if hk == "ours" else 6.5, color=color, zorder=4,
+                          mfc=color if ok else "white", mec=color, mew=1.5)
+                ax.plot([x], [y], **kw)
+                st.plot([x], [rr], **dict(kw, ms=4.5))
+        if eq_pts:
+            eb = sorted(set(b for b, _ in eq_pts))
+            ax.plot(eb, [np.mean([v for b2, v in eq_pts if b2 == b]) for b in eb], color="grey", ls="--",
+                    lw=1.2, marker="x", ms=5, label="DiskANN, cache's memory as node cache" if j == 0 else None)
+        ax.axhline(1.0, color="k", lw=0.8)
+        ax.set_xscale("log")
+        ax.set_title(f"SPACEV, {title}", fontsize=10, loc="left", fontweight="bold")
+        if j == 0:
+            ax.set_ylabel("speedup over DiskANN alone\n(mean latency, all requests)")
+            st.set_ylabel("recall vs\nexact (all)", fontsize=8)
+        ax.grid(alpha=0.3)
+        ax.tick_params(labelbottom=False)
+        st.axhline(0.953, color="grey", lw=1, ls="--")
+        st.set_ylim(0.70, 0.98)
+        st.grid(alpha=0.3)
+        st.set_xticks(BUDGETS)
+        st.set_xticklabels([f"{100 * b:g}%" for b in BUDGETS], fontsize=8)
+        st.minorticks_off()
+        st.set_xlim(BUDGETS[0] * 0.75, BUDGETS[-1] * 1.35)
+        st.set_xlabel("cache size (fraction of the dataset)", fontsize=9)
+    fig.legend(loc="lower center", ncol=5, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
+    fig.text(0.5, 0.9, "DiskANN tuned to recall@10 0.95, same index for every technique; whole stream after "
+             "warm-up, 1 in 20 requests timed end to end; cache updates are background work.\n"
+             "Filled: mean retention of hits >= 0.89 in this run; hollow: below. "
+             "Strip: recall vs exact over all requests (grey dashed: DiskANN alone, .953).",
+             ha="center", fontsize=7.5)
+    out = RES / "summary" / "timing_draft_v3.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=150)
+    fig.savefig(out, dpi=150, bbox_inches="tight")
     hdr = ("| trace | budget | technique | hit % | ret. hits | recall all | DiskANN ms | cache+DiskANN ms | "
            "hit ms | miss ms | p99 ms | DiskANN p99 | speedup | 1/(1-h) | env |")
     lines = [hdr, "|" + "---|" * 15]
