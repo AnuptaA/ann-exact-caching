@@ -109,13 +109,42 @@ def select(method: str, s_cal: np.ndarray, y_cal: np.ndarray,
     return float(grid_desc[np.flatnonzero(ok)[-1]])
 
 
-def select_weighted(s_cal, y_cal, w_cal, grid_desc, target, delta):
+def start_from_fit(s_fit, y_fit, target, delta, n_points=100):
+    """Starting threshold for the fixed-order walk, chosen on the FIT split (independent of the
+    calibration labels, so the walk's guarantee is unchanged; doc 9p): the grid threshold whose
+    fit-set one-sided normal lower bound on mean retention is highest, i.e. the point the
+    independent data says is easiest to certify. Thresholds stricter than it are not tested (a
+    tiny, noisy top group can otherwise veto every threshold). None if the fit split is empty."""
+    s_fit, y_fit = np.asarray(s_fit, float), np.asarray(y_fit, float)
+    ok = np.isfinite(s_fit) & np.isfinite(y_fit)
+    s_fit, y_fit = s_fit[ok], y_fit[ok]
+    if len(s_fit) < 2:
+        return None
+    grid = threshold_grid(s_fit, n_points)
+    order = np.argsort(-s_fit)
+    s, y = s_fit[order], y_fit[order]
+    cum = lambda v: np.concatenate([[0.0], np.cumsum(v)])
+    S, SS = cum(y), cum(y * y)
+    n = np.searchsorted(-s, -grid, side="right")
+    z = NormalDist().inv_cdf(1.0 - delta)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = S[n] / n
+        var = (SS[n] - n * mean ** 2) / np.maximum(n - 1, 1)
+        lcb = np.where(n >= 2, mean - z * np.sqrt(np.maximum(var, 0.0) / n), -np.inf)
+    return float(grid[int(np.nanargmax(lcb))])
+
+
+def select_weighted(s_cal, y_cal, w_cal, grid_desc, target, delta, start=None):
     """normal_fixed with inverse-probability weights (a query labeled with
     probability pi gets weight 1 / pi). Per threshold: ratio estimate of the
     mean retention over {s >= lam}, sum w y / sum w, with variance
     sum w^2 (y - mean)^2 / (sum w)^2 (times n / (n - 1)); equals the
     unweighted bound when all weights are 1. Fixed order, stop at the first
     failure. Returns lambda or None (admit nothing)."""
+    if start is not None:
+        # walk from the fit split's starting threshold (start_from_fit); stricter ones are skipped
+        keep = grid_desc <= start
+        grid_desc = grid_desc[keep] if keep.any() else grid_desc[-1:]
     order = np.argsort(-s_cal)
     s, y, w = s_cal[order], y_cal[order], w_cal[order].astype(np.float64)
     cum = lambda v: np.concatenate([[0.0], np.cumsum(v)])

@@ -77,7 +77,7 @@ import numpy as np
 from simulations.approximate_hits.eval_core import quantize
 from simulations.approximate_hits.eval_generalize import fit_logistic
 from simulations.approximate_hits.greedy_population import GreedyPopulator, hits_from_histograms
-from simulations.approximate_hits.threshold_selection import select_weighted, threshold_grid
+from simulations.approximate_hits.threshold_selection import select_weighted, threshold_grid, start_from_fit
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -555,7 +555,8 @@ class Sim:
         s = np.concatenate([c[1] for c in self.cal])
         y = np.concatenate([c[2] for c in self.cal])
         w = np.concatenate([c[3] for c in self.cal])
-        self.lam = select_weighted(s, y, w, threshold_grid(s), self.T, self.a.delta) \
+        self.lam = select_weighted(s, y, w, threshold_grid(s), self.T, self.a.delta,
+                                   start=getattr(self, "lam_start", None)) \
             if len(s) >= 2 else None
 
     # -- warm-up -----------------------------------------------------------
@@ -583,7 +584,12 @@ class Sim:
         self.cache.replace(entries)
         self.cache.set_p_to_fill()
         X, nf = self.cache.features(fit)
-        self.model = fit_logistic(X, self.y(fit, nf))
+        y_fit = self.y(fit, nf)
+        self.model = fit_logistic(X, y_fit)
+        # starting threshold of the calibration walk, from the fit split (doc 9p)
+        self.fit_q = fit
+        self.lam_start = (start_from_fit(self.model(X), y_fit, self.T, a.delta)
+                          if getattr(a, "start", "fit") == "fit" else None)
         X, nc = self.cache.features(cal)
         s = self.model(X)
         self.cal = [(a.warmup, s, self.y(cal, nc), np.ones(len(cal)), cal)]
@@ -792,7 +798,9 @@ class Sim:
                  cal_s=np.concatenate([x[1] for x in self.cal]) if self.cal else np.empty(0),
                  cal_y=np.concatenate([x[2] for x in self.cal]) if self.cal else np.empty(0),
                  cal_w=np.concatenate([x[3] for x in self.cal]) if self.cal else np.empty(0),
-                 cal_q=np.concatenate([x[4] for x in self.cal]) if self.cal else np.empty(0, int))
+                 cal_q=np.concatenate([x[4] for x in self.cal]) if self.cal else np.empty(0, int),
+                 fit_q=getattr(self, "fit_q", np.empty(0, int)),
+                 lam_start=np.nan if getattr(self, "lam_start", None) is None else self.lam_start)
         logger.info(f"saved cache state to {path}")
 
     def run(self, method):
@@ -1015,6 +1023,9 @@ def main():
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--target", type=float, default=0.9)
     ap.add_argument("--delta", type=float, default=0.05)
+    ap.add_argument("--start", choices=["fit", "none"], default="fit",
+                    help="calibration walk: start at the fit split's most certifiable threshold "
+                         "(default since 11-12, doc 9p), or at the strictest")
     ap.add_argument("--label", choices=["served", "cached"], default="served",
                     help="retention label: overlap of the served answer with the backend's top-k, or the "
                          "share of the backend's top-k that is cached (the same with an exact backend)")

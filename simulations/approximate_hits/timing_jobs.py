@@ -79,7 +79,7 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--v2", action="store_true", help="the first batch (2,000 requests after warm-up)")
-    ap.add_argument("--set", choices=["matrix", "lru_retime", "retime", "sizes"], default="matrix",
+    ap.add_argument("--set", choices=["matrix", "lru_retime", "retime", "sizes", "final"], default="matrix",
                     help="lru_retime: LRU again after the empty-search fix (doc 9n); sizes: the extra "
                          "cache sizes 0.3% and 3%, every technique, 1 in 20")
     a = ap.parse_args()
@@ -98,6 +98,15 @@ def main():
         for z in ("0.99", "0.6", "0.3"):
             for b in (0.01, 0.1):
                 out += lines(f"spacev-aker-{z}", b, 20, techs=("ours", "lru"))
+        print("\n".join(out))
+        return
+    if a.set == "final":        # after the fit-split start (doc 9p): ours / LRU at 1% and 10%,
+        out = []                # every technique at 0.3% and 3%
+        for z in ("0.99", "0.6", "0.3"):
+            for b in (0.01, 0.1):
+                out += lines(f"spacev-aker-{z}", b, 20, techs=("ours", "lru"))
+            for b in (0.003, 0.03):
+                out += lines(f"spacev-aker-{z}", b, 20)
         print("\n".join(out))
         return
     if a.set == "sizes":

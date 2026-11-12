@@ -2569,3 +2569,28 @@ vectors, search list 32) at 10%: cached share .91-.92 but served overlap with Di
 - The sample-rate check was stopped after 2 points (1 in 20 vs 1 in 10: speedup 1.130 vs 1.119);
   ours / LRU states regenerated (served labels), ours and LRU re-timed (set "retime"); earlier
   runs in results/timing_v3/old_before_served_labels.
+
+### 9p. Calibration walk starts at the fit split's most certifiable threshold (11-12 night)
+
+Problem: the fixed-order walk (select_weighted: strictest grid threshold first, stop at the first
+failing one-sided 95% normal lower bound) tests the top 1% of scores first (~40 of 4,000 labels);
+a few low labels there fail it and no cutoff survives. Seen: timing state Zipf .99, 10% (served
+labels): mean retention .95-.99 in every score band, cutoff None, ours 0 hits; LRU's intermittent
+collapses; and in the headline, 44 runs had batches with no cutoff (SPACEV Zipf .3 1% LRU 43-48 of
+80 batches, ours 5-7; SPACEV real log ours 19-23 of 104, LRU up to 42).
+Fix (decided with Jialin): `threshold_selection.start_from_fit`: on the FIT split (independent of
+the calibration labels), the grid threshold with the highest fit-set lower bound; the calibration
+walk starts there (stricter thresholds untested). Validity unchanged: the starting point does not
+depend on the calibration labels. Rejected: a fixed minimum count (100 works on these states by
+luck; 200 skips the correct cutoff of Zipf .3 1%, which admits 160 of 4,000; no count fits all
+hit rates). Where nothing is certifiable (few good hits, modest margin) the method serves nothing
+(safe; e.g. timing state Zipf .3 at 0.3%).
+- online_sim --start fit (default), state saves fit_q / lam_start; the timing harness relabels the
+  fit split on its serving path and uses its own start.
+- New states: Zipf .99 10% cutoff -0.115 (admits 2,320 of 4,000); the other five unchanged
+  (as expected: the walk result changes only where it failed at a skipped threshold).
+- Re-runs: headline ours / LRU (128 jobs, /tmp/mx/hr.sh; old results in
+  r2_*/old_before_fit_start); extra sizes (hx.sh, its ours / LRU killed and retried on the new
+  code); timing "final" set (ours / LRU at 1% / 10%, every technique at 0.3% / 3%) after
+  HX + HR + states (run_timing_batch2.sh final TIMING3C ...). Old timing ours / LRU in
+  results/timing_v3/old_before_fit_start.

@@ -84,13 +84,21 @@ def recalibrate_on_serving_path(m, st, q, args):
     m.cal.lam = None                       # lookups below only score (no hit, no LRU use marks)
     t0 = dict(m.t)
     answers = args._answers
+    if "fit_q" in st and len(st["fit_q"]) and getattr(args, "start", "fit") == "fit":
+        from simulations.approximate_hits.threshold_selection import start_from_fit
+        sf, yf = [], []
+        for qi in st["fit_q"].tolist():
+            m.lookup(int(qi), np.asarray(q[qi], dtype=np.float32))
+            sf.append(m._s)
+            yf.append(served_overlap(m._near, answers[qi], m.k))
+        m.cal.start = start_from_fit(np.array(sf), np.array(yf), m.cal.T, m.cal.delta)
     for qi, w in zip(st["cal_q"].tolist(), st["cal_w"].tolist()):
         m.lookup(int(qi), np.asarray(q[qi], dtype=np.float32))
         m.cal.add(int(st["warmup"]), m._s, served_overlap(m._near, answers[qi], m.k), float(w))
     m.t = t0
     m.cal.select_now()
-    logger.info(f"warm-up calibration on the serving path: {len(st['cal_q'])} labels, cutoff "
-                f"{lam0} (simulator) -> {m.cal.lam}")
+    logger.info(f"warm-up calibration on the serving path: {len(st['cal_q'])} labels, start "
+                f"{m.cal.start}, cutoff {lam0} (simulator) -> {m.cal.lam}")
 
 
 class Calibrator:
@@ -102,6 +110,7 @@ class Calibrator:
         self.lam, self.T, self.delta = lam, target, delta
         self.span, self.every = cal_span, cal_every
         self.lab = deque()
+        self.start = None       # starting threshold of the walk, from the fit split (doc 9p)
 
     def add(self, t, s, y, w):
         self.lab.append((t, s, y, w))
@@ -111,7 +120,8 @@ class Calibrator:
         a = np.array([(s, y, w) for _, s, y, w in self.lab])
         a = a[np.isfinite(a).all(axis=1)]
         if len(a) >= 2:
-            self.lam = select_weighted(a[:, 0], a[:, 1], a[:, 2], threshold_grid(a[:, 0]), self.T, self.delta)
+            self.lam = select_weighted(a[:, 0], a[:, 1], a[:, 2], threshold_grid(a[:, 0]), self.T, self.delta,
+                                       start=self.start)
 
     def seed(self, st):
         """The warm-up's calibration labels (online_sim --save-state cal_*), kept as the simulator
@@ -133,7 +143,8 @@ class Calibrator:
         if len(a) < 2:
             return
         prev = self.lam
-        self.lam = select_weighted(a[:, 0], a[:, 1], a[:, 2], threshold_grid(a[:, 0]), self.T, self.delta)
+        self.lam = select_weighted(a[:, 0], a[:, 1], a[:, 2], threshold_grid(a[:, 0]), self.T, self.delta,
+                                   start=self.start)
         if self.lam is None and prev is not None and os.environ.get("CAL_DEBUG"):
             np.savez(os.environ["CAL_DEBUG"], a=a, t=np.array([x[0] for x in self.lab]))
             logger.warning(f"cutoff lost at t={t}: {len(a)} labels dumped to {os.environ['CAL_DEBUG']}")
@@ -643,6 +654,8 @@ def main():
     ap.add_argument("--sample-every", type=int, default=10,
                     help="time every this-many-th request end to end (live DiskANN); the rest replay "
                          "DiskANN's stored answers")
+    ap.add_argument("--start", choices=["fit", "none"], default="fit",
+                    help="calibration walk: start at the fit split's most certifiable threshold")
     ap.add_argument("--ours-recal", action="store_true",
                     help="ours: recalibrate (with audits) as the simulator; default static")
     ap.add_argument("--warm", type=int, default=200, help="untimed requests first (each arm)")
