@@ -770,7 +770,13 @@ class Sim:
                  memory=c.memory(), test_q=test_q, test_scores=test_scores,
                  entry_samp=np.concatenate(c.entry_samp) if c.entry_samp else np.empty(0, int),
                  entry_samp_off=np.cumsum([0] + [len(x) for x in c.entry_samp]),
-                 shell_scope=c.shell_scope)
+                 shell_scope=c.shell_scope,
+                 # calibration labels at save time (the warm-up's calibration set): the timing
+                 # harness seeds its recalibration with them, as the simulator keeps them
+                 cal_t=np.concatenate([np.full(len(x[1]), x[0]) for x in self.cal]) if self.cal else np.empty(0),
+                 cal_s=np.concatenate([x[1] for x in self.cal]) if self.cal else np.empty(0),
+                 cal_y=np.concatenate([x[2] for x in self.cal]) if self.cal else np.empty(0),
+                 cal_w=np.concatenate([x[3] for x in self.cal]) if self.cal else np.empty(0))
         logger.info(f"saved cache state to {path}")
 
     def run(self, method):

@@ -78,6 +78,13 @@ class Calibrator:
     def add(self, t, s, y, w):
         self.lab.append((t, s, y, w))
 
+    def seed(self, st):
+        """The warm-up's calibration labels (online_sim --save-state cal_*), kept as the simulator
+        keeps them until they fall out of the last cal_span requests."""
+        if "cal_s" in st:
+            for t, s, y, w in zip(st["cal_t"], st["cal_s"], st["cal_y"], st["cal_w"]):
+                self.add(int(t), float(s), float(y), float(w))
+
     def maybe(self, t):
         if t % self.every:
             return
@@ -93,9 +100,12 @@ class Calibrator:
 # -- ours: static greedy cache ------------------------------------------------------------------
 
 class Ours:
-    audits = True
+    """Static after warm-up. Default (stationary workloads, decided with Jialin 11-11): no
+    recalibration, no audits, no drift tests (in the simulator these never fire on the stationary
+    traces, and the static cache keeps the target); --ours-recal: recalibrate as the simulator."""
 
     def __init__(self, args, db, q, st):
+        self.audits = self.recal = bool(getattr(args, "ours_recal", False))
         from simulations.approximate_hits.eval_timing import FastHitPath
         self.hp = FastHitPath(db, q, st, "hnsw32", "balls10")
         self.k = int(st["k"])
@@ -104,6 +114,7 @@ class Ours:
         lam = float(st["lam"])
         self.cal = Calibrator(None if np.isnan(lam) else lam, args.target, args.cal_delta,
                               args.cal_span, args.cal_every)
+        self.cal.seed(st)
         self.miss_k = self.k
         self.memory_bytes = int(sum(self.hp.bytes.values()) + self.hp.extra_bytes)
         self.t = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0}
@@ -122,10 +133,12 @@ class Ours:
         return float(self.cached[answer[:self.k]].mean())
 
     def on_miss(self, t, qi, x, ids, ix):
-        self.label(t, ids, 1.0)
+        if self.recal:
+            self.label(t, ids, 1.0)
 
     def after(self, t):
-        self.cal.maybe(t)
+        if self.recal:
+            self.cal.maybe(t)
 
 
 # -- LRU: our hit rule + LRU population, maintained incrementally -------------------------------
@@ -144,6 +157,8 @@ class LRU(Ours):
         lam = float(st["lam"])
         self.cal = Calibrator(None if np.isnan(lam) else lam, args.target, args.cal_delta,
                               args.cal_span, args.cal_every)
+        self.cal.seed(st)
+        self.audits = self.recal = True       # LRU's cache changes on every miss: recalibration needed
         self.miss_k = self.R
         self.ref = np.zeros(len(db), dtype=np.int32)              # entries holding a vector
         self.slot = np.full(len(db), -1, dtype=np.int64)          # vector id -> row in cv
@@ -154,6 +169,10 @@ class LRU(Ours):
         self.holders = {}                                         # vector id -> set of centers
         self.n_samp = 0
         self.sref = np.zeros(len(db), dtype=np.int32)
+        sv0 = np.asarray(st["sv"], dtype=np.float32)
+        self.qlo, self.qhi = (sv0.min(axis=0), sv0.max(axis=0)) if len(sv0) else (None, None)
+        if self.qlo is None:
+            self.bits = 32
         self.background = self.rebuild_s = 0.0
         self.hnsw = None
         self._rebuild()
@@ -200,10 +219,14 @@ class LRU(Ours):
             if index:
                 self.hnsw.add(v)
         self.dead -= int(((self.ref[ids] == 0) & (self.slot[ids] >= 0)).sum()) - len(new)  # revived rows
+        old = self._eff(ids)
         self.ref[ids] += 1
+        self.n_samp += int(self._eff(ids).sum() - old.sum())
 
     def _drop_vectors(self, ids):
+        old = self._eff(ids)
         self.ref[ids] -= 1
+        self.n_samp += int(self._eff(ids).sum() - old.sum())
         gone = ids[self.ref[ids] == 0]
         self.dead += len(gone)
         if self.dead > 0.3 * max(self.n_cv, 1):
@@ -215,14 +238,16 @@ class LRU(Ours):
     def memory(self):
         return self.n_cached() + self.n_samp * self.bits / 32
 
+    def _eff(self, ids):
+        # a vector counts as a shell sample iff some entry's shell sample holds it and it is not
+        # cached (the simulator's shell = union of the entries' shells minus cached vectors)
+        return (self.sref[ids] > 0) & (self.ref[ids] == 0)
+
     def _samp(self, sid, inc):
         # distinct shell-sample vectors (one sample is shared by every entry whose shell holds it)
-        if inc > 0:
-            self.n_samp += int((self.sref[sid] == 0).sum())
-            self.sref[sid] += 1
-        else:
-            self.sref[sid] -= 1
-            self.n_samp -= int((self.sref[sid] == 0).sum())
+        old = self._eff(sid)
+        self.sref[sid] += 1 if inc > 0 else -1
+        self.n_samp += int(self._eff(sid).sum() - old.sum())
 
     # entries
     def _add_entry(self, c, x, row, K):
@@ -232,6 +257,11 @@ class LRU(Ours):
         rad = float(np.sqrt(((np.asarray(self.db[ball[-1]], np.float32) - x) ** 2).sum())) + 1e-12
         self._add_vectors(ball)
         sv = np.asarray(self.db[shell], dtype=np.float32) if len(shell) else np.zeros((0, self.dim), np.float32)
+        if len(sv) and self.bits < 32:
+            # b-bit scalar quantization as the simulator stores the sample (eval_core.quantize),
+            # over the warm-up sample's per-dimension range
+            step = np.maximum(self.qhi - self.qlo, 1e-12) / (2 ** self.bits - 1)
+            sv = (self.qlo + np.round((np.clip(sv, self.qlo, self.qhi) - self.qlo) / step) * step).astype(np.float32)
         self.entries[c] = {"x": x.astype(np.float32), "r": rad, "ball": ball, "sv": sv, "sid": shell,
                            "sv_sq": (sv * sv).sum(axis=1), "used": 0}
         self._samp(shell, 1)
@@ -351,7 +381,8 @@ class LRU(Ours):
         for j in sel:
             e = self.entries[self.keys[j]]
             if len(e["sv"]):
-                inside.append(e["sid"][(e["sv_sq"] - 2.0 * (e["sv"] @ x) + x_sq) < nr * nr])
+                sid = e["sid"][(e["sv_sq"] - 2.0 * (e["sv"] @ x) + x_sq) < nr * nr]
+                inside.append(sid[self.ref[sid] == 0])       # cached vectors are not shell samples
         cnt = len(np.unique(np.concatenate(inside))) if inside else 0
         f[-1] = np.log1p(cnt)
         d = time.perf_counter()
@@ -539,7 +570,13 @@ def main():
     ap.add_argument("--state", default=None, help="ours / lru: online_sim --save-state file")
     ap.add_argument("--target-recall", default="0.95", help="DiskANN effort tuned to this recall@10")
     ap.add_argument("--diskann", default=str(RES / "backends" / "spacev10m" / "diskann"))
-    ap.add_argument("--n", type=int, default=2000, help="timed requests after the warm-up")
+    ap.add_argument("--n", type=int, default=None,
+                    help="requests after the warm-up (default: the rest of the stream, as the headline)")
+    ap.add_argument("--sample-every", type=int, default=10,
+                    help="time every this-many-th request end to end (live DiskANN); the rest replay "
+                         "DiskANN's stored answers")
+    ap.add_argument("--ours-recal", action="store_true",
+                    help="ours: recalibrate (with audits) as the simulator; default static")
     ap.add_argument("--warm", type=int, default=200, help="untimed requests first (each arm)")
     ap.add_argument("--warmup", type=int, default=20000,
                     help="aker / qvcache: warm-up requests (ours / lru: the state's warm-up)")
@@ -588,9 +625,17 @@ def main():
     if st is not None:                  # ours / LRU: the requests after the state's warm-up
         args.warmup = int(st["warmup"])
     warm_q = np.asarray(stream[:args.warmup], dtype=np.int64)
-    req = np.asarray(stream[args.warmup:args.warmup + args.n], dtype=np.int64)
+    end = len(stream) if args.n is None else min(len(stream), args.warmup + args.n)
+    req = np.asarray(stream[args.warmup:end], dtype=np.int64)
+    # requests timed end to end with live DiskANN calls: every --sample-every-th, from offset 0;
+    # the others are replayed with DiskANN's stored answers (identical to live ones: checked on
+    # 300 queries, top-10 at the tuned search list and top-500, 100% equal), so the cache evolves
+    # exactly as with live calls, over the whole stream (doc 9m)
+    timed_mask = (np.arange(len(req)) % args.sample_every) == 0
     logger.info(f"{args.method} on {prep.name}, budget {args.budget}, DiskANN search list {L} "
-                f"(recall@10 {bk['targets'][args.target_recall]['recall_answer_at_k']:.3f})")
+                f"(recall@10 {bk['targets'][args.target_recall]['recall_answer_at_k']:.3f}); "
+                f"{len(req)} requests, {int(timed_mask.sum())} timed (1 in {args.sample_every})")
+    deep = None
     if args.method in ("ours", "lru"):
         if args.method == "ours":
             m = Ours(args, db, q, st)
@@ -607,27 +652,42 @@ def main():
         m = AkerReal(args, db, q, warm_q, ans[warm_q])
     else:
         m = QVCacheFast(args, db, q, warm_q, ans[warm_q])
+    if deep is None and max(getattr(m, "miss_k", args.k), args.k) > ans.shape[1]:
+        deep = np.load(RES / "backends" / prep.name / "diskann.npz")[f"deep_{args.target_recall}"]
     mem0 = m.memory_bytes
-    for s_ in getattr(m, "t", {}):            # stage times count the timed requests only
+    for s_ in getattr(m, "t", {}):            # stage times: per request, over all requests
         m.t[s_] = 0.0
     logger.info(f"cache ready: {mem0 / 1e6:.1f} MB")
     ix = open_diskann(args.diskann, 0)
     xs_native = q.astype(db_native.dtype) if db_native.dtype != np.float32 else q
 
-    def backend(qi, kk):
+    def live(qi, kk):
         r = ix.search(xs_native[qi], k_neighbors=kk, complexity=max(L, kk), beam_width=2)
         return np.asarray(r.identifiers if hasattr(r, "identifiers") else r[0], dtype=np.int64)
 
+    def stored(qi, kk):
+        # top-kk at search list max(L, kk), as live() would return
+        if kk <= ans.shape[1] and kk <= L:
+            return np.asarray(ans[qi, :kk], dtype=np.int64)
+        return np.asarray(deep[qi, :kk], dtype=np.int64)
+
     for qi in warm_q[-args.warm:]:                             # warm the OS page cache, untimed
-        backend(int(qi), args.k)
+        live(int(qi), args.k)
     rng = np.random.default_rng(0)
-    total, hits, kinds, ret, ret_b, ret_sim = [], [], [], [], [], []
+    n = len(req)
+    hits = np.zeros(n, dtype=bool)
+    audited_all = np.zeros(n, dtype=bool)
+    ret, ret_b, ret_sim = np.zeros(n), np.zeros(n), np.full(n, np.nan)
+    total = []
     maint = 0.0
+    t0 = time.time()
     for i, qi in enumerate(req.tolist()):
         t_req = args.warmup + i
         x = q[qi]
+        timed = bool(timed_mask[i])
+        backend = live if timed else stored
         if hasattr(m, "retention"):      # not timed: the cache's content before this request
-            ret_sim.append(m.retention(ans[qi]))
+            ret_sim[i] = m.retention(ans[qi])
         bg0 = getattr(m, "background", 0.0) + maint
         a = time.perf_counter()
         hit, near = m.lookup(qi, x)
@@ -643,47 +703,59 @@ def main():
             # background work, its time reported apart
             answer = backend(qi, args.k)[:args.k]
             b_, r_ = time.perf_counter(), getattr(m, "background", 0.0)
-            deep = backend(qi, m.miss_k) if m.miss_k > args.k else answer
-            m.on_miss(t_req, qi, x, deep, ix)
-            maint += time.perf_counter() - b_ - (getattr(m, "background", 0.0) - r_)   # rebuilds apart
+            dl = backend(qi, m.miss_k) if m.miss_k > args.k else answer
+            m.on_miss(t_req, qi, x, dl, ix)
+            if timed:
+                maint += time.perf_counter() - b_ - (getattr(m, "background", 0.0) - r_)
         else:
             ids = backend(qi, m.miss_k)
             m.on_miss(t_req, qi, x, ids, ix)
             answer = ids[:args.k]
         m.after(t_req)
-        total.append(time.perf_counter() - a - (getattr(m, "background", 0.0) + maint - bg0))
-        hits.append(hit)
-        kinds.append("audited_hit" if audited else ("hit" if hit else "miss"))
-        ret.append(float(np.isin(answer, top[qi, :args.k]).mean()))           # vs exact (not timed)
-        ret_b.append(float(np.isin(answer, ans[qi, :args.k]).mean()))         # vs DiskANN's answer
-    total, hits = np.array(total), np.array(hits)
-    res = {"args": vars(args), "search_list": L, "n": len(req), "hit_rate": float(hits.mean()),
-           "audited_share": float(np.mean([k_ == "audited_hit" for k_ in kinds])),
-           "recall_vs_exact_all": float(np.mean(ret)),
-           "recall_vs_exact_hits": float(np.mean(np.array(ret)[hits])) if hits.any() else None,
-           "retention_vs_backend_hits": float(np.mean(np.array(ret_b)[hits])) if hits.any() else None,
+        if timed:
+            total.append(time.perf_counter() - a - (getattr(m, "background", 0.0) + maint - bg0))
+        hits[i], audited_all[i] = hit, audited
+        ret[i] = float(np.isin(answer, top[qi, :args.k]).mean())           # vs exact (not timed)
+        ret_b[i] = float(np.isin(answer, ans[qi, :args.k]).mean())         # vs DiskANN's answer
+        if (i + 1) % 10000 == 0:
+            logger.info(f"  {i + 1} / {n} requests ({time.time() - t0:.0f} s), hit rate so far "
+                        f"{hits[:i + 1].mean():.3f}")
+    total = np.array(total)
+    th = hits[timed_mask]
+    has_sim = not np.all(np.isnan(ret_sim))
+    res = {"args": vars(args), "search_list": L, "n": n, "n_timed": int(timed_mask.sum()),
+           "hit_rate": float(hits.mean()), "hit_rate_timed": float(th.mean()),
+           "audited_share": float(audited_all.mean()),
+           "recall_vs_exact_all": float(ret.mean()),
+           "recall_vs_exact_hits": float(ret[hits].mean()) if hits.any() else None,
+           "retention_vs_backend_hits": float(ret_b[hits].mean()) if hits.any() else None,
            # the simulator's (and the guarantee's) retention: share of DiskANN's answer cached
-           "retention_sim_hits": float(np.mean(np.array(ret_sim)[hits])) if ret_sim and hits.any() else None,
+           "retention_sim_hits": float(np.nanmean(ret_sim[hits])) if has_sim and hits.any() else None,
            "cache_memory_bytes": int(mem0),
            "background_rebuild_s": float(getattr(m, "rebuild_s", 0.0)),
-           "background_maintenance_s": float(maint),
-           "cache": dict(summary(total), hits_ms=summary(total[hits]), misses_ms=summary(total[~hits])),
-           "stage_ms": {s: v / len(req) * 1e3 for s, v in getattr(m, "t", {}).items()}}
-    logger.info(f"hit rate {res['hit_rate']:.3f}; recall vs exact {res['recall_vs_exact_all']:.3f}; "
-                f"cache + DiskANN {res['cache']['mean_ms']:.2f} ms")
+           "background_maintenance_s_timed": float(maint),
+           "cache": dict(summary(total), hits_ms=summary(total[th]), misses_ms=summary(total[~th])),
+           "stage_ms": {s_: v / n * 1e3 for s_, v in getattr(m, "t", {}).items()},
+           "replay_s": time.time() - t0}
+    logger.info(f"hit rate {res['hit_rate']:.3f} (timed sample {res['hit_rate_timed']:.3f}); recall vs "
+                f"exact {res['recall_vs_exact_all']:.3f}; cache + DiskANN {res['cache']['mean_ms']:.2f} ms")
+    req_all = req
+    req = req_all[timed_mask]          # the DiskANN-alone arms run the timed sample
     # DiskANN alone, and with the cache's memory as its node cache
     from simulations.approximate_hits.eval_timing import time_backend
     xq = np.ascontiguousarray(xs_native[req])
     time_backend(ix, xq[:args.warm], args.k, L)
     lat = time_backend(ix, xq, args.k, L)
     res["backend"] = summary(lat)
+    lat_mem = None
     if not args.no_equal_memory:
         node_bytes = db_native.shape[1] * np.dtype(db_native.dtype).itemsize + 4 + 64 * 4
         nodes = int(mem0 // node_bytes)
         del ix
         ix2 = open_diskann(args.diskann, nodes)
         time_backend(ix2, xq[:args.warm], args.k, L)
-        res["backend_mem"] = dict(summary(time_backend(ix2, xq, args.k, L)), nodes_cached=nodes)
+        lat_mem = time_backend(ix2, xq, args.k, L)
+        res["backend_mem"] = dict(summary(lat_mem), nodes_cached=nodes)
     b0 = res["backend"]["mean_ms"]
     res["speedup"] = {"overall": b0 / res["cache"]["mean_ms"],
                       "limit_1_over_1_minus_h": 1 / max(1 - res["hit_rate"] + res["audited_share"], 1e-9),
@@ -693,6 +765,9 @@ def main():
     res["environment"] = guard.report()
     logger.info(f"speedup {res['speedup']}; environment {res['environment']['verdict']}")
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(str(Path(args.out).with_suffix("")) + "_lat.npz", idx=np.flatnonzero(timed_mask),
+                        cache=total, hit=th, backend=lat,
+                        backend_mem=lat_mem if lat_mem is not None else np.empty(0))
     Path(args.out).write_text(json.dumps(res, indent=1))
 
 

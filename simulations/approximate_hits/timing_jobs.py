@@ -44,7 +44,53 @@ def qv_args(name):
     return f"--qv-D {m[1]} --qv-mini {m[2]} --qv-dims {m[3]} --qv-buckets {m[4]}"
 
 
+def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="timing_v3"):
+    """Full-stream runs (doc 9m): the whole stream after warm-up, every `every`-th request timed
+    live, cache updates as background work for every technique; ours static (no recalibration /
+    audits), LRU recalibrating, seeded with the warm-up's labels."""
+    pick = collect(prep, "trace", b, True)
+    out = f"{R}/{out_root}/{prep}"
+    state = f"{out}/state_b{b:g}.npz"
+    base = (f".venv-ann/bin/python -u {S}/eval_timing_online.py --prep {R}/online/{prep} "
+            f"--budget {b:g} --sample-every {every} --maintenance background --wait-quiet 30")
+    jobs = []
+    if "ours" in techs:
+        jobs.append((f"ours_s{every}_b{b:g}", f"--method ours --state {state}", ""))
+    if "lru" in techs:
+        jobs.append((f"lru_s{every}_b{b:g}", f"--method lru --state {state}", ""))
+    if "aker" in techs and pick.get("aker"):
+        a, lib = aker_args(pick["aker"]["name"])
+        jobs.append((f"aker_{pick['aker']['name']}_s{every}_b{b:g}", f"--method aker {a}", lib))
+    if "qvcache" in techs and pick.get("qvcache"):
+        jobs.append((f"{pick['qvcache']['name']}_s{every}_b{b:g}",
+                     f"--method qvcache {qv_args(pick['qvcache']['name'])}", ""))
+    res = []
+    for tag, extra, lib in jobs:
+        env = f"LD_LIBRARY_PATH={lib} " if lib else ""
+        js = f"{out}/{tag}.json"
+        res.append(f"mkdir -p {out}/logs && [ -f {js} ] || {env}{base} {extra} --out {js} "
+                   f"> {out}/logs/{tag}.txt 2>&1")
+    return res
+
+
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--v2", action="store_true", help="the first batch (2,000 requests after warm-up)")
+    a = ap.parse_args()
+    if a.v2:
+        return main_v2()
+    out = []
+    for z in ("0.99", "0.6", "0.3"):             # the matrix, 1 in 20
+        for b in (0.01, 0.1):
+            out += lines(f"spacev-aker-{z}", b, 20)
+    for every in (10, 5):                         # sample-rate check on two cells (ours, LRU)
+        for z, b in (("0.6", 0.01), ("0.99", 0.1)):
+            out += lines(f"spacev-aker-{z}", b, every, techs=("ours", "lru"))
+    print("\n".join(out))
+
+
+def main_v2():
     for z in ("0.99", "0.6", "0.3"):
         prep = f"spacev-aker-{z}"
         for b in (0.01, 0.1):

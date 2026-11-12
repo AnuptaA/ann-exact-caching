@@ -2477,3 +2477,42 @@ jobs one at a time under the guard, then releases. Results:
   median distance to the nearest neighbor 125.7 vs 81.2 for the Aker-trace queries, and d10 / d1
   1.038 vs 1.105 (d100 / d10 1.035 vs 1.086). Extended curve (search lists 1000-6400) running:
   `results/backends/spacev-real-hiL/log_curve.txt`.
+
+### 9m. Timing v3: whole stream, sampled timing; LRU fidelity fixes (11-12 night)
+
+Decisions (Jialin, 11-11): time the same requests as the headline (the whole stream after
+warm-up); all cache updates are background work; stationary workloads, so ours runs static (no
+recalibration, audits or drift tests: in the headline runs no test ever fired, and the static
+cache meets the target with the same hit rates); LRU keeps recalibrating (its cache changes on
+every miss). Check sample rates 1 in 20 / 10 / 5.
+- Replay: DiskANN is deterministic: its stored answers equal live searches exactly (300 queries,
+  top-10 / 15 / 20 at search list 160 and top-500 at 500, ids and order). eval_timing_online.py
+  now drives the cache through every request; every --sample-every-th request is timed end to end
+  with live DiskANN calls, the others use the stored answers; DiskANN alone / with equal memory
+  run on the timed sample; per-request latencies saved (<out>_lat.npz).
+- LRU fixes. (1) The warm-up state now carries the warm-up's calibration labels (online_sim
+  save_state cal_*; states regenerated in results/timing_v3); the calibrator is seeded with
+  them, as the simulator keeps them (before: the first recalibration used ~1,000 labels and raised
+  the cutoff: 4.7% vs the simulator's 12.2%). (2) Shell samples exclude cached vectors (the
+  simulator's shell = union of shells minus cached vectors; also in the memory count). (3) New
+  shell vectors quantized to 4 bits like the simulator's sample (warm-up sample's range).
+  Check, SPACEV Zipf .6, 1%, requests 20k-24k, identical settings (DiskANN answers, shell scope 10
+  balls): harness 9.3% vs simulator 10.1% (per-request vs batch-of-1,000 decisions, HNSW).
+- Batch (`run_timing_batch.sh`, log /tmp/mx/timing3.log): 24 runs at 1 in 20 (SPACEV Zipf .99 /
+  .6 / .3 x 1% / 10% x ours, LRU, Aker, QVCache) + sample-rate check (1 in 10 and 1 in 5 for ours
+  and LRU on Zipf .6 1% and Zipf .99 10%). Plot: plot_timing.py -> timing_draft_v2.png (table
+  includes the sample-rate comparison).
+- The queue had run dry at ~22:00 11-11 (watchdog exited "all done"); ~6 h idle. New watchdog
+  `mx_watchdog2.sh` supervises the current launchers; hourly re-queue of old lists disabled.
+- TriviaQA ip: tuned Aker (60 + 12 jobs incl. Proximity fractions .003 / .001) running; the
+  32-byte-PQ DiskANN index was unusable (recall@10 .11 at search list 1000; 769 dims at 24 dims
+  per PQ byte vs ~3 for SPACEV): rebuilding with 256-byte PQ (`run_diskann_triviaqa_ip_pq.sh`),
+  tuning to .95 after the timing batch (efforts up to 4000). Old index results moved to
+  backends/triviaqa-ip-<z>-pq32.
+- SPACEV real log, extended curve (5,000 tuning queries): recall@10 .9476 at search list 2000,
+  .9597 at 2500 (batched 134 / 167 ms per query with 32 threads vs 12 ms at 160 for the Aker
+  traces): .95 is reachable at ~2,100-2,500, at roughly 10x the per-query cost.
+- Headline: TriviaQA row now ip (primary variant); extra cache sizes 0.3% and 3% (912 jobs:
+  SPACEV traces, TriviaQA ip; ours, LRU, QVCache grid, real Aker standard + tuned) queued to start
+  when the timing batch ends (/tmp/mx/hx.sh); plot_headline.py BUDGETS = .3, 1, 3, 10%;
+  /tmp/mx/after_timing.sh redraws headline_draft_v3.png every 2 h and the timing plot at the end.

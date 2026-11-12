@@ -29,7 +29,7 @@ from matplotlib.gridspec import GridSpecFromSubplotSpec
 
 RES = Path("simulations/approximate_hits/results")
 T, TOL = 0.9, 0.01
-BUDGETS = [0.01, 0.1]
+BUDGETS = [0.003, 0.01, 0.03, 0.1]
 STYLE = {"ours": ("Ours (calibrated)", "#D55E00", "o", 2.6),
          "lru": ("LRU", "#6B6B6B", "^", 1.6),
          "aker": ("Aker", "#0072B2", "D", 1.6),
@@ -40,9 +40,9 @@ LAYOUT = [
     [("SPACEV, Zipf 0.3", "spacev-aker-0.3", "trace", True),
      ("SPACEV, Zipf 0.6", "spacev-aker-0.6", "trace", True),
      ("SPACEV, Zipf 0.99", "spacev-aker-0.99", "trace", True)],
-    [("TriviaQA (dpr), Zipf 0.3", "triviaqa-dpr-0.3", "trace", True),
-     ("TriviaQA (dpr), Zipf 0.6", "triviaqa-dpr-0.6", "trace", True),
-     ("TriviaQA (dpr), Zipf 0.99", "triviaqa-dpr-0.99", "trace", True)],
+    [("TriviaQA, Zipf 0.3", "triviaqa-ip-0.3", "trace", True),
+     ("TriviaQA, Zipf 0.6", "triviaqa-ip-0.6", "trace", True),
+     ("TriviaQA, Zipf 0.99", "triviaqa-ip-0.99", "trace", True)],
     [("ESCI (no repeated queries)", "esci1m", "random", False),
      ("SPACEV real query log", "spacev-real", "trace", True),
      None],

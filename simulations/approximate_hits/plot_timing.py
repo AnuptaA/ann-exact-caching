@@ -29,7 +29,7 @@ BUDGETS = [0.01, 0.1]
 # LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
 # background work (decided with Jialin, 11-11); the sync runs stay in the table only
 TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
-         ("lru_bg", "LRU", "C1", lambda n: n.startswith("lru_bg_")),
+         ("lru_bg", "LRU", "C1", lambda n: n.startswith(("lru_bg_", "lru_s"))),
          ("aker", "Aker", "C2", lambda n: n.startswith("aker_")),
          ("qvcache", "QVCache", "C3", lambda n: n.startswith("qvcache_"))]
 
@@ -38,10 +38,14 @@ TABLE_ONLY = [("lru_sync", "LRU (sync update)", lambda n: n.startswith("lru_sync
 HEADLINE_KEY = {"ours": "ours", "lru_bg": "lru", "lru_sync": "lru", "aker": "aker", "qvcache": "qvcache"}
 
 
-def load(prep, budget):
-    d = RES / "timing_v2" / prep
+VERSION, EVERY = "timing_v3", 20     # full-stream runs, 1 request in EVERY timed (doc 9m)
+
+
+def load(prep, budget, every=None):
+    every = EVERY if every is None else every
+    d = RES / VERSION / prep
     out = {}
-    for f in sorted(d.glob(f"*_b{budget:g}.json")) if d.exists() else []:
+    for f in sorted(d.glob(f"*_s{every}_b{budget:g}.json")) if d.exists() else []:
         if f.name.startswith(("greedy_state", "state_")):
             continue
         for key, match in [(t[0], t[3]) for t in TECHS] + [(t[0], t[2]) for t in TABLE_ONLY]:
@@ -112,9 +116,9 @@ def main():
             ax.set_ylim(0, max([ax.get_ylim()[1], 1.2]) * 1.15)
     fig.suptitle("Cache + DiskANN (recall@10 0.95), mean latency over all requests. Bar labels: hit rate, "
                  "recall vs exact.\nTick: 1/(1-h) limit; diamond: DiskANN with equal-memory node cache; "
-                 "hollow: setting misses the target (headline run); LRU's cache update counted as background work", fontsize=8)
+                 "hollow: setting misses the target (headline run); cache updates counted as background work. Whole stream after warm-up, 1 in 20 requests timed", fontsize=8)
     fig.tight_layout(rect=(0, 0, 1, 0.93))
-    out = RES / "summary" / "timing_draft_v1.png"
+    out = RES / "summary" / "timing_draft_v2.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150)
     hdr = ("| trace | budget | technique | hit % | ret. hits | recall all | DiskANN ms | cache+DiskANN ms | "
@@ -122,6 +126,17 @@ def main():
     lines = [hdr, "|" + "---|" * 15]
     fmt = lambda v: "-" if v is None else (f"{v:.3g}" if isinstance(v, float) else str(v))  # noqa: E731
     lines += ["| " + " | ".join(fmt(v) for v in r) + " |" for r in rows]
+    # sample-rate check: the same runs timed 1 in 20 / 10 / 5
+    lines += ["", "Sample-rate check (mean ms, cache + DiskANN / DiskANN alone / speedup; whole-run hit rate)", ""]
+    for z, b in (("0.6", 0.01), ("0.99", 0.1)):
+        for key, label in (("ours", "Ours"), ("lru_bg", "LRU")):
+            cells = []
+            for every in (20, 10, 5):
+                r = load(f"spacev-aker-{z}", b, every).get(key)
+                cells.append(f"1/{every}: " + ("pending" if r is None else
+                             f"{r['cache']['mean_ms']:.2f} / {r['backend']['mean_ms']:.2f} / "
+                             f"{r['speedup']['overall']:.3f} (h {100 * r['hit_rate']:.1f}%, n {r['n_timed']})"))
+            lines.append(f"- Zipf {z}, {100 * b:g}%, {label}: " + "; ".join(cells))
     (RES / "summary" / "timing_table.md").write_text("\n".join(lines) + "\n")
     print(f"wrote {out} and timing_table.md ({len(rows)} runs)")
 
