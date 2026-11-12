@@ -2541,3 +2541,31 @@ every miss). Check sample rates 1 in 20 / 10 / 5.
   recall-vs-exact strip; a marker is hollow when that run's own whole-stream retention of hits
   is < 0.89. QVCache's settings (picked on the exact-backend headline) miss with DiskANN at 1%
   (Zipf .99: retention .75; Zipf .6 / .3 also hollow).
+
+### 9o. Retention is measured on the served answer; accurate in-cache search (11-12)
+
+Targets are retention relative to the backend (share of the backend's top-k, averaged over hits),
+not recall vs exact (kept: it is what the cache can observe and certify, index-agnostic; recall
+vs exact is reported alongside). Found: the label "share of the backend's top-k that is cached"
+is not what is served when the in-cache search is approximate. Timing runs (HNSW over the cached
+vectors, search list 32) at 10%: cached share .91-.92 but served overlap with DiskANN's top-10
+.86-.88 (in-cache 10-NN recall at search list 32: .83-.89; 128: .95-.97; 256: .975-.985; 512:
+~.989, ~1 ms). Decisions (Jialin): both fixes.
+- Label = served retention (online_sim --label served, the new default): share of the backend's
+  top-k in the answer the cache would serve (its k nearest cached vectors). With the exact backend
+  it equals the old label except for distance ties (SPACEV is 8-bit: one batch .9209 vs .9215 in a
+  4-batch check; hits identical), so the headline needs no re-run.
+- Timing harness: in-cache HNSW search list 256 (ours and LRU); labels on the served answer; the
+  warm-up calibration set (state cal_q / cal_w, new) is relabeled on the harness's own serving
+  path and the cutoff recomputed before timing (untimed); the plot judges every technique by the
+  served answer's overlap with DiskANN's top-10.
+- Validation (Zipf .99, 1%, 20,000 requests): ours hit 48.5%, served overlap .913, recall vs exact
+  on hits .916; LRU 45.6% (when its cutoff holds), served .905.
+- Open: LRU sometimes loses its cutoff near request 35,000 (2 of 7 runs; lambda None, no hits
+  for 20,000 requests); not tied to the exact-search fallback alone (fallbacks without collapse in
+  4 runs). Fixed-order selection stops at the first failing threshold, so a few bad labels among
+  the highest scores void every cutoff. LRU jobs now dump their labels when the cutoff is lost
+  (CAL_DEBUG, <run>_caldbg.npz); plot_timing flags such runs.
+- The sample-rate check was stopped after 2 points (1 in 20 vs 1 in 10: speedup 1.130 vs 1.119);
+  ours / LRU states regenerated (served labels), ours and LRU re-timed (set "retime"); earlier
+  runs in results/timing_v3/old_before_served_labels.

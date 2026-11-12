@@ -56,8 +56,9 @@ def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="ti
     jobs = []
     if "ours" in techs:
         jobs.append((f"ours_s{every}_b{b:g}", f"--method ours --state {state}", ""))
-    if "lru" in techs:
-        jobs.append((f"lru_s{every}_b{b:g}", f"--method lru --state {state}", ""))
+    if "lru" in techs:      # CAL_DEBUG: dump the labels if the cutoff is ever lost (doc 9o)
+        jobs.append((f"lru_s{every}_b{b:g}", f"--method lru --state {state}", "",
+                     f"CAL_DEBUG={out}/lru_s{every}_b{b:g}_caldbg.npz "))
     if "aker" in techs and pick.get("aker"):
         a, lib = aker_args(pick["aker"]["name"])
         jobs.append((f"aker_{pick['aker']['name']}_s{every}_b{b:g}", f"--method aker {a}", lib))
@@ -65,8 +66,9 @@ def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="ti
         jobs.append((f"{pick['qvcache']['name']}_s{every}_b{b:g}",
                      f"--method qvcache {qv_args(pick['qvcache']['name'])}", ""))
     res = []
-    for tag, extra, lib in jobs:
-        env = f"LD_LIBRARY_PATH={lib} " if lib else ""
+    for job in jobs:
+        tag, extra, lib = job[:3]
+        env = (f"LD_LIBRARY_PATH={lib} " if lib else "") + (job[3] if len(job) > 3 else "")
         js = f"{out}/{tag}.json"
         res.append(f"mkdir -p {out}/logs && [ -f {js} ] || {env}{base} {extra} --out {js} "
                    f"> {out}/logs/{tag}.txt 2>&1")
@@ -77,7 +79,7 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--v2", action="store_true", help="the first batch (2,000 requests after warm-up)")
-    ap.add_argument("--set", choices=["matrix", "lru_retime", "sizes"], default="matrix",
+    ap.add_argument("--set", choices=["matrix", "lru_retime", "retime", "sizes"], default="matrix",
                     help="lru_retime: LRU again after the empty-search fix (doc 9n); sizes: the extra "
                          "cache sizes 0.3% and 3%, every technique, 1 in 20")
     a = ap.parse_args()
@@ -89,6 +91,13 @@ def main():
             for b in (0.01, 0.1):
                 out += lines(f"spacev-aker-{z}", b, 20, techs=("lru",))
         out += lines("spacev-aker-0.6", 0.01, 10, techs=("lru",))
+        print("\n".join(out))
+        return
+    if a.set == "retime":       # ours and LRU after the served-label / in-cache search change (doc 9o)
+        out = []
+        for z in ("0.99", "0.6", "0.3"):
+            for b in (0.01, 0.1):
+                out += lines(f"spacev-aker-{z}", b, 20, techs=("ours", "lru"))
         print("\n".join(out))
         return
     if a.set == "sizes":

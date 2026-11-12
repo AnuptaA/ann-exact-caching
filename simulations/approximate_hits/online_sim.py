@@ -398,6 +398,13 @@ class Cache:
         that is cached (the label we can observe)."""
         return self.cached[topk_present(self.D, qidx, self.k, key="answer")].mean(axis=1)
 
+    def served_retention(self, qidx, near, key="answer"):
+        """Share of each query's top-k (the backend's answer, or "truth") contained in the answer the
+        cache serves for it (near: its k nearest cached vectors). With an exact backend this equals
+        retention() (a cached true top-k vector is among the k nearest cached ones)."""
+        A = topk_present(self.D, qidx, self.k, key=key)
+        return (np.asarray(near)[:, :, None] == A[:, None, :]).any(axis=2).mean(axis=1)
+
     def retention_exact(self, qidx):
         """Share of each query's exact top-k that is cached (evaluation
         only; equals retention() with an exact backend)."""
@@ -509,6 +516,14 @@ class Sim:
 
     # -- calibration -------------------------------------------------------
 
+    def y(self, qidx, near):
+        """Label of each query: --label served (default since 11-12, doc 9o): share of the
+        backend's top-k in the answer the cache would serve; cached: share of it that is cached
+        (identical with an exact backend)."""
+        if getattr(self.a, "label", "served") == "served":
+            return self.cache.served_retention(qidx, near)
+        return self.cache.retention(qidx)
+
     def calibrate(self, t):
         """lambda from the labeled queries of the last --cal-span queries since
         the last reset (weighted normal bound, fixed order)."""
@@ -527,8 +542,8 @@ class Sim:
             # (updated on inserts / deletes), so its score and retention are
             # recomputed against the current cache and database
             qs = np.concatenate([c[4] for c in self.cal])
-            X, _ = self.cache.features(qs)
-            sc, yy = self.model(X), self.cache.retention(qs)
+            X, nq = self.cache.features(qs)
+            sc, yy = self.model(X), self.y(qs, nq)
             out, i = [], 0
             for c in self.cal:
                 n = len(c[4])
@@ -567,11 +582,11 @@ class Sim:
                                     np.ones(len(score)), a.f * self.M, self.k, self.T)
         self.cache.replace(entries)
         self.cache.set_p_to_fill()
-        X, _ = self.cache.features(fit)
-        self.model = fit_logistic(X, self.cache.retention(fit))
-        X, _ = self.cache.features(cal)
+        X, nf = self.cache.features(fit)
+        self.model = fit_logistic(X, self.y(fit, nf))
+        X, nc = self.cache.features(cal)
         s = self.model(X)
-        self.cal = [(a.warmup, s, self.cache.retention(cal), np.ones(len(cal)), cal)]
+        self.cal = [(a.warmup, s, self.y(cal, nc), np.ones(len(cal)), cal)]
         self.ref = [(a.warmup, s)]
         self.calibrate(a.warmup)
         logger.info(f"warm-up: {len(entries)} entries, {self.cache.n_cached()} cached vectors, "
@@ -683,11 +698,11 @@ class Sim:
         self.cache.replace(self._greedy(qs, wts))
         self.cache.set_p_to_fill()
         hq = q[hold]
-        X, _ = self.cache.features(hq)
+        X, nh = self.cache.features(hq)
         s = self.model(X)
         self.reset_detection()
         hl = lab[hold]
-        self.cal = [(t, s[hl], self.cache.retention(hq)[hl], 1 / pi[hold][hl], hq[hl])]
+        self.cal = [(t, s[hl], self.y(hq, nh)[hl], 1 / pi[hold][hl], hq[hl])]
         self.ref = [(t, s)]
         self.calibrate(t)
         self.events.append({"t": t, "event": "rebuild", "new": new_hits, "cur": cur_hits,
@@ -776,7 +791,8 @@ class Sim:
                  cal_t=np.concatenate([np.full(len(x[1]), x[0]) for x in self.cal]) if self.cal else np.empty(0),
                  cal_s=np.concatenate([x[1] for x in self.cal]) if self.cal else np.empty(0),
                  cal_y=np.concatenate([x[2] for x in self.cal]) if self.cal else np.empty(0),
-                 cal_w=np.concatenate([x[3] for x in self.cal]) if self.cal else np.empty(0))
+                 cal_w=np.concatenate([x[3] for x in self.cal]) if self.cal else np.empty(0),
+                 cal_q=np.concatenate([x[4] for x in self.cal]) if self.cal else np.empty(0, int))
         logger.info(f"saved cache state to {path}")
 
     def run(self, method):
@@ -803,8 +819,10 @@ class Sim:
             score = self.model(X)
             serve = (score >= self.lam if self.lam is not None and cache.n_cached() >= self.k
                      else np.zeros(len(qb), bool))
-            y = cache.retention(qb)
-            y_exact = y if self.D["truth"] is self.D["answer"] else cache.retention_exact(qb)
+            y = self.y(qb, near)
+            y_exact = y if self.D["truth"] is self.D["answer"] else (
+                cache.served_retention(qb, near, key="truth") if self.a.label == "served"
+                else cache.retention_exact(qb))
             if self.D["truth"] is self.D["answer"]:
                 b_rec = np.ones(len(qb))
             else:
@@ -997,6 +1015,9 @@ def main():
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--target", type=float, default=0.9)
     ap.add_argument("--delta", type=float, default=0.05)
+    ap.add_argument("--label", choices=["served", "cached"], default="served",
+                    help="retention label: overlap of the served answer with the backend's top-k, or the "
+                         "share of the backend's top-k that is cached (the same with an exact backend)")
     ap.add_argument("--budget", type=float, default=0.1, help="memory, fraction of database")
     ap.add_argument("--f", type=float, default=0.85, help="share of budget for the cache")
     ap.add_argument("--R", type=int, default=500)

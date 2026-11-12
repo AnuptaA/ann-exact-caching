@@ -58,8 +58,8 @@ def load(prep, budget, every=None):
 
 def ret_of(r):
     """Mean retention of hits: the simulator's definition if recorded, else vs DiskANN's answer."""
-    v = r.get("retention_sim_hits")
-    return v if v is not None else r.get("retention_vs_backend_hits")
+    # the served answer's overlap with DiskANN's top-k (doc 9o), the same measure for every technique
+    return r.get("retention_vs_backend_hits")
 
 
 def main():
@@ -93,6 +93,9 @@ def main():
                 if r.get("backend_mem"):
                     eq_pts.append((b, r["backend"]["mean_ms"] / r["backend_mem"]["mean_ms"]))
                 c = r["cache"]
+                lost = sum(1 for x in r.get("trace", []) if x.get("labels") is not None and x.get("lam") is None)
+                if lost:
+                    label = f"{label} (cutoff lost {lost}k requests)"
                 rows.append((title, f"{100 * b:g}%", label, 100 * r["hit_rate"], ret_of(r),
                              r["recall_vs_exact_all"], r["backend"]["mean_ms"], c["mean_ms"],
                              (c.get("hits_ms") or {}).get("mean_ms"), (c.get("misses_ms") or {}).get("mean_ms"),
@@ -131,7 +134,7 @@ def main():
     fig.legend(loc="lower center", ncol=5, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
     fig.text(0.5, 0.9, "DiskANN tuned to recall@10 0.95, same index for every technique; whole stream after "
              "warm-up, 1 in 20 requests timed end to end; cache updates are background work.\n"
-             "Filled: mean retention of hits >= 0.89 in this run; hollow: below. "
+             "Filled: mean retention of hits (served answer vs DiskANN's top-10) >= 0.89 in this run; hollow: below. "
              "Strip: recall vs exact over all requests (grey dashed: DiskANN alone, .953).",
              ha="center", fontsize=7.5)
     out = RES / "summary" / "timing_draft_v3.png"

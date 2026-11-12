@@ -42,6 +42,7 @@ import json
 import time
 import argparse
 import logging
+import os
 from pathlib import Path
 from collections import deque
 
@@ -52,6 +53,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 RES = Path("simulations/approximate_hits/results")
+KNN_EF = 256    # in-cache HNSW search list: 0.975-0.985 neighbor recall at 10% (32: 0.83-0.89; doc 9o)
 SHELL_BALLS = 10      # the hit path's shell scope (FastHitPath "balls10", online_sim --shell-balls 10)
 
 
@@ -65,6 +67,32 @@ def summary(lat):
 
 # -- calibration (ours, LRU): the simulator's rule ----------------------------------------------
 
+def served_overlap(near, answer, k):
+    near = np.asarray(near)[:k]
+    return float(np.isin(np.asarray(answer)[:k], near).mean()) if len(near) else 0.0
+
+
+def recalibrate_on_serving_path(m, st, q, args):
+    """The warm-up's calibration set (online_sim --save-state cal_q / cal_w), labeled on the
+    harness's own serving path: score and served answer from m.lookup, label = overlap with the
+    backend's stored top-k (diskann.npz answer); then the cutoff from these labels (untimed, part of
+    the warm-up). Falls back to the state's cutoff and labels for older states."""
+    if "cal_q" not in st or not len(st["cal_q"]):
+        m.cal.seed(st)
+        return
+    lam0 = m.cal.lam
+    m.cal.lam = None                       # lookups below only score (no hit, no LRU use marks)
+    t0 = dict(m.t)
+    answers = args._answers
+    for qi, w in zip(st["cal_q"].tolist(), st["cal_w"].tolist()):
+        m.lookup(int(qi), np.asarray(q[qi], dtype=np.float32))
+        m.cal.add(int(st["warmup"]), m._s, served_overlap(m._near, answers[qi], m.k), float(w))
+    m.t = t0
+    m.cal.select_now()
+    logger.info(f"warm-up calibration on the serving path: {len(st['cal_q'])} labels, cutoff "
+                f"{lam0} (simulator) -> {m.cal.lam}")
+
+
 class Calibrator:
     """Labels (score, retention, weight) of misses (free: the backend answered) and audited hits
     (weight 1 / audit rate); lambda = select_weighted over the last cal_span requests, every
@@ -77,6 +105,13 @@ class Calibrator:
 
     def add(self, t, s, y, w):
         self.lab.append((t, s, y, w))
+
+    def select_now(self):
+        from simulations.approximate_hits.threshold_selection import select_weighted, threshold_grid
+        a = np.array([(s, y, w) for _, s, y, w in self.lab])
+        a = a[np.isfinite(a).all(axis=1)]
+        if len(a) >= 2:
+            self.lam = select_weighted(a[:, 0], a[:, 1], a[:, 2], threshold_grid(a[:, 0]), self.T, self.delta)
 
     def seed(self, st):
         """The warm-up's calibration labels (online_sim --save-state cal_*), kept as the simulator
@@ -97,7 +132,11 @@ class Calibrator:
         a = a[np.isfinite(a).all(axis=1)]          # safety: a non-finite score would void every cutoff
         if len(a) < 2:
             return
+        prev = self.lam
         self.lam = select_weighted(a[:, 0], a[:, 1], a[:, 2], threshold_grid(a[:, 0]), self.T, self.delta)
+        if self.lam is None and prev is not None and os.environ.get("CAL_DEBUG"):
+            np.savez(os.environ["CAL_DEBUG"], a=a, t=np.array([x[0] for x in self.lab]))
+            logger.warning(f"cutoff lost at t={t}: {len(a)} labels dumped to {os.environ['CAL_DEBUG']}")
 
 
 # -- ours: static greedy cache ------------------------------------------------------------------
@@ -110,22 +149,23 @@ class Ours:
     def __init__(self, args, db, q, st):
         self.audits = self.recal = bool(getattr(args, "ours_recal", False))
         from simulations.approximate_hits.eval_timing import FastHitPath
-        self.hp = FastHitPath(db, q, st, "hnsw32", "balls10")
+        self.hp = FastHitPath(db, q, st, f"hnsw{KNN_EF}", "balls10")
         self.k = int(st["k"])
         self.cached = np.zeros(len(db), dtype=bool)
         self.cached[st["cached_ids"]] = True
         lam = float(st["lam"])
         self.cal = Calibrator(None if np.isnan(lam) else lam, args.target, args.cal_delta,
                               args.cal_span, args.cal_every)
-        self.cal.seed(st)
         self.miss_k = self.k
         self.memory_bytes = int(sum(self.hp.bytes.values()) + self.hp.extra_bytes)
         self.t = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0}
+        recalibrate_on_serving_path(self, st, q, args)
 
     def lookup(self, qi, x):
         self.hp.lam = np.inf if self.cal.lam is None else self.cal.lam
         hit, s, near = self.hp.decide(x, self.t)
         near = np.asarray(near)
+        self._near = near
         if len(near) < self.k or np.any(near < 0) or not np.isfinite(s):
             hit = False        # graph search came back short (never seen for the static graph)
             self.fallbacks = getattr(self, "fallbacks", 0) + 1
@@ -133,7 +173,8 @@ class Ours:
         return bool(hit), near
 
     def label(self, t, answer, w):
-        self.cal.add(t, self._s, float(self.cached[answer[:self.k]].mean()), w)
+        # served label (doc 9o): share of the backend's top-k in the answer the cache would serve
+        self.cal.add(t, self._s, served_overlap(self._near, answer, self.k), w)
 
     def retention(self, answer):
         """The simulator's retention: share of the backend's top-k answer that is cached."""
@@ -155,6 +196,7 @@ class LRU(Ours):
         import faiss
         self.faiss = faiss
         self.db, self.q, self.k, self.K, self.R = db, q, int(st["k"]), args.k_lru, 500
+        self._args = args
         self.deep = deep
         self.dim = db.shape[1]
         self.budget = float(st["budget"])
@@ -164,7 +206,6 @@ class LRU(Ours):
         lam = float(st["lam"])
         self.cal = Calibrator(None if np.isnan(lam) else lam, args.target, args.cal_delta,
                               args.cal_span, args.cal_every)
-        self.cal.seed(st)
         self.audits = self.recal = True       # LRU's cache changes on every miss: recalibration needed
         self.miss_k = self.R
         self.ref = np.zeros(len(db), dtype=np.int32)              # entries holding a vector
@@ -184,8 +225,8 @@ class LRU(Ours):
         self.fallbacks = 0
         self.hnsw = None
         self._rebuild()
-        self._load_state(st)
         self.t = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0, "insert": 0.0, "evict": 0.0}
+        self._load_state(st)
 
     # vectors
     def _rebuild(self):
@@ -202,7 +243,7 @@ class LRU(Ours):
         a = time.perf_counter()
         self.hnsw = faiss.IndexHNSWFlat(self.dim, 32)
         self.hnsw.hnsw.efConstruction = 200
-        self.hnsw.hnsw.efSearch = 32
+        self.hnsw.hnsw.efSearch = KNN_EF
         if len(ids):
             # a rebuild is background work in a real system: built with 32 threads, its time
             # reported separately ("rebuild_s") and not charged to the request that triggers it
@@ -313,6 +354,8 @@ class LRU(Ours):
         self.background = self.rebuild_s = 0.0
         self._arr_build()
         self.memory_bytes = self._bytes()
+        self._now = int(st["warmup"])
+        recalibrate_on_serving_path(self, st, self.q, self._args)
         logger.info(f"LRU warm-up cache: {len(self.entries)} entries, {self.n_cached()} vectors, "
                     f"{self.n_samp} shell samples; memory {self.memory():.0f} of {self.budget:.0f}")
 
@@ -418,6 +461,7 @@ class LRU(Ours):
         t["shell"] += d - c
         t["model"] += e - d
         self._s = s
+        self._near = near
         if hit:      # LRU: entries supplying a served vector were used now
             for v in near.tolist():
                 for cc in self.holders.get(v, ()):
@@ -425,7 +469,7 @@ class LRU(Ours):
         return bool(hit), near
 
     def label(self, t, answer, w):
-        self.cal.add(t, self._s, float((self.ref[answer[:self.k]] > 0).mean()), w)
+        self.cal.add(t, self._s, served_overlap(self._near, answer, self.k), w)
 
     def retention(self, answer):
         return float((self.ref[answer[:self.k]] > 0).mean())
@@ -660,6 +704,7 @@ def main():
                 f"(recall@10 {bk['targets'][args.target_recall]['recall_answer_at_k']:.3f}); "
                 f"{len(req)} requests, {int(timed_mask.sum())} timed (1 in {args.sample_every})")
     deep = None
+    args._answers = ans                     # for the serving-path warm-up calibration
     if args.method in ("ours", "lru"):
         if args.method == "ours":
             m = Ours(args, db, q, st)
@@ -676,6 +721,7 @@ def main():
         m = AkerReal(args, db, q, warm_q, ans[warm_q])
     else:
         m = QVCacheFast(args, db, q, warm_q, ans[warm_q])
+    del args._answers
     if deep is None and max(getattr(m, "miss_k", args.k), args.k) > ans.shape[1]:
         deep = np.load(RES / "backends" / prep.name / "diskann.npz")[f"deep_{args.target_recall}"]
     mem0 = m.memory_bytes
