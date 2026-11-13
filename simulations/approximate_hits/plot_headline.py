@@ -45,7 +45,7 @@ LAYOUT = [
     [("TriviaQA, Zipf 0.3", "triviaqa-ip-0.3", "trace", True),
      ("TriviaQA, Zipf 0.6", "triviaqa-ip-0.6", "trace", True),
      ("TriviaQA, Zipf 0.99", "triviaqa-ip-0.99", "trace", True)],
-    [("ESCI (no repeated queries)", "esci1m", "random", False),
+    [("ESCI (no repeated queries)", "esci1m", "random", True),
      ("SPACEV real query log", "spacev-real", "trace", True),
      None],
 ]

@@ -131,11 +131,8 @@ class Aker:
 def load(prep, stream_name="trace", native=False):
     """native: the database in its stored type (int8 for SPACEV, as the DiskANN
     index takes it); else float32 (a shared memory map when available)."""
-    meta = json.loads((prep / "meta.json").read_text())
-    from simulations.approximate_hits.run_e2e_oracle_trace import load_base, load_base_f32
-    db = load_base(meta["trace"]) if native else load_base_f32(meta["trace"])
-    q = np.ascontiguousarray(np.load(prep / "q.npy"), dtype=np.float32)
-    top = np.load(prep / "top500.npy", mmap_mode="r")
+    from simulations.approximate_hits.prep_io import load_prep      # trace or ESCI preps (doc 9r)
+    db, q, top, _ = load_prep(prep, native=native)
     stream = np.load(prep / "streams.npz")[stream_name]
     return db, q, top, stream
 

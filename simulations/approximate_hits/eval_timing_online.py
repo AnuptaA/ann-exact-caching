@@ -648,7 +648,9 @@ def main():
     ap.add_argument("--budget", type=float, required=True)
     ap.add_argument("--state", default=None, help="ours / lru: online_sim --save-state file")
     ap.add_argument("--target-recall", default="0.95", help="DiskANN effort tuned to this recall@10")
-    ap.add_argument("--diskann", default=str(RES / "backends" / "spacev10m" / "diskann"))
+    ap.add_argument("--diskann", default=None,
+                    help="index directory (default: results/backends/<prep>/diskann, else spacev10m)")
+    ap.add_argument("--stream", default="trace", help="request stream of the prep (ESCI: random)")
     ap.add_argument("--n", type=int, default=None,
                     help="requests after the warm-up (default: the rest of the stream, as the headline)")
     ap.add_argument("--sample-every", type=int, default=10,
@@ -691,14 +693,14 @@ def main():
     guard = make_guard(args)
     guard.start()
     from simulations.approximate_hits.eval_timing import open_diskann
-    from simulations.approximate_hits.run_e2e_oracle_trace import load_base, load_base_f32
+    from simulations.approximate_hits.prep_io import load_prep
     prep = Path(args.prep)
-    meta = json.loads((prep / "meta.json").read_text())
-    db_native = load_base(meta["trace"])                      # what the DiskANN index takes (int8 / f32)
-    db = load_base_f32(meta["trace"])                         # float32 view for the caches
-    q = np.ascontiguousarray(np.load(prep / "q.npy"), dtype=np.float32)
-    stream = np.load(prep / "streams.npz")["trace"]
-    top = np.load(prep / "top500.npy", mmap_mode="r")
+    db_native = load_prep(prep, native=True)[0]               # what the DiskANN index takes (int8 / f32)
+    db, q, top, kind = load_prep(prep)                        # float32 view for the caches
+    stream = np.load(prep / "streams.npz")[args.stream]
+    if args.diskann is None:                                  # the prep's own index (SPACEV: shared)
+        own = RES / "backends" / prep.name / "diskann"
+        args.diskann = str(own if (own / "ann_disk.index").exists() else RES / "backends" / "spacev10m" / "diskann")
     bk = json.loads((RES / "backends" / prep.name / "diskann.json").read_text())
     L = int(bk["targets"][args.target_recall]["effort"])
     ans = np.load(RES / "backends" / prep.name / "diskann.npz")[f"answer_{args.target_recall}"]

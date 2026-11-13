@@ -24,7 +24,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 RES = Path("simulations/approximate_hits/results")
 T, TOL = 0.9, 0.01
-TRACES = [("Zipf 0.3", "spacev-aker-0.3"), ("Zipf 0.6", "spacev-aker-0.6"), ("Zipf 0.99", "spacev-aker-0.99")]
+TRACES = [("Zipf 0.3", "spacev-aker-0.3"), ("Zipf 0.6", "spacev-aker-0.6"), ("Zipf 0.99", "spacev-aker-0.99"),
+          ("ESCI (no repeated queries)", "esci1m")]
 BUDGETS = [0.003, 0.01, 0.03, 0.1]
 # LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
 # background work (decided with Jialin, 11-11); the sync runs stay in the table only
@@ -121,7 +122,8 @@ def main():
                     lw=1.2, marker="x", ms=5, label="DiskANN, cache's memory as node cache" if j == 0 else None)
         ax.axhline(1.0, color="k", lw=0.8)
         ax.set_xscale("log")
-        ax.set_title(f"SPACEV, {title}", fontsize=10, loc="left", fontweight="bold")
+        ax.set_title(title if prep.startswith("esci") else f"SPACEV, {title}", fontsize=10, loc="left",
+                     fontweight="bold")
         if j == 0:
             ax.set_ylabel("speedup over DiskANN alone\n(mean latency, all requests)")
             st.set_ylabel("recall vs\nexact (all)", fontsize=8)

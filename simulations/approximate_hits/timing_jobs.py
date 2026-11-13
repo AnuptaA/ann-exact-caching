@@ -44,15 +44,15 @@ def qv_args(name):
     return f"--qv-D {m[1]} --qv-mini {m[2]} --qv-dims {m[3]} --qv-buckets {m[4]}"
 
 
-def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="timing_v3"):
+def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="timing_v3", stream="trace"):
     """Full-stream runs (doc 9m): the whole stream after warm-up, every `every`-th request timed
     live, cache updates as background work for every technique; ours static (no recalibration /
     audits), LRU recalibrating, seeded with the warm-up's labels."""
-    pick = collect(prep, "trace", b, True)
+    pick = collect(prep, stream, b, True)
     out = f"{R}/{out_root}/{prep}"
     state = f"{out}/state_b{b:g}.npz"
     base = (f".venv-ann/bin/python -u {S}/eval_timing_online.py --prep {R}/online/{prep} "
-            f"--budget {b:g} --sample-every {every} --maintenance background --wait-quiet 30")
+            f"--budget {b:g} --sample-every {every} --maintenance background --wait-quiet 30 --stream {stream}")
     jobs = []
     if "ours" in techs:
         jobs.append((f"ours_s{every}_b{b:g}", f"--method ours --state {state}", ""))
@@ -114,6 +114,9 @@ def main():
             for b in (0.003, 0.03):
                 out += lines(f"spacev-aker-{z}", b, 20,
                              techs=("ours", "lru", "aker", "qvcache", "aker_paper", "qvcache_paper"))
+        for b in (0.003, 0.01, 0.03, 0.1):           # ESCI (doc 9r): every technique, all four sizes
+            out += lines("esci1m", b, 20, stream="random",
+                         techs=("ours", "lru", "aker", "qvcache", "aker_paper", "qvcache_paper"))
         print("\n".join(out))
         return
     if a.set == "sizes":
