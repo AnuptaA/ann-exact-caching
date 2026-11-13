@@ -31,11 +31,14 @@ BUDGETS = [0.003, 0.01, 0.03, 0.1]
 TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
          ("lru_bg", "LRU", "C1", lambda n: n.startswith(("lru_bg_", "lru_s"))),
          ("aker", "Aker", "C2", lambda n: n.startswith("aker_")),
+         ("aker_paper", "Aker (paper default)", "C2", lambda n: n.startswith("akerpaper_")),
+         ("qvcache_paper", "QVCache (paper's D)", "C3", lambda n: n.startswith("qvpaper_")),
          ("qvcache", "QVCache", "C3", lambda n: n.startswith("qvcache_"))]
 
 
 TABLE_ONLY = [("lru_sync", "LRU (sync update)", lambda n: n.startswith("lru_sync_"))]
-HEADLINE_KEY = {"ours": "ours", "lru_bg": "lru", "lru_sync": "lru", "aker": "aker", "qvcache": "qvcache"}
+HEADLINE_KEY = {"ours": "ours", "lru_bg": "lru", "lru_sync": "lru", "aker": "aker", "qvcache": "qvcache",
+                "aker_paper": "aker_paper", "qvcache_paper": "qvcache_paper"}
 
 
 VERSION, EVERY = "timing_v3", 20     # full-stream runs, 1 request in EVERY timed (doc 9m)
@@ -104,7 +107,8 @@ def main():
             if not pts:
                 continue
             xs, ys, rs, oks = zip(*pts)
-            ax.plot(xs, ys, color=color, lw=lw, zorder=3, label=name if j == 0 else None)
+            ax.plot(xs, ys, color=color, lw=lw, zorder=3, label=name if j == 0 else None,
+                    ls=(0, (5, 2.5)) if hk.endswith("_paper") else "-")
             st.plot(xs, rs, color=color, lw=1, alpha=0.7)
             for x, y, rr, ok in pts:
                 kw = dict(marker=marker, ms=8 if hk == "ours" else 6.5, color=color, zorder=4,

@@ -15,12 +15,6 @@ M=/tmp/mx
 S=simulations/approximate_hits
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
 
-busy() {   # any running job that would disturb a timing run: python processes only (queued
-  # mx_run_job.sh wrappers carry the same script names in their arguments but only wait on HOLD;
-  # matching them deadlocked the first batch, 11-11)
-  pgrep -f "^[^ ]*python[^ ]* -u [^ ]*(online_sim|eval_aker_real|online_prepare|online_prepare_data|reembed_triviaqa_queries)\.py" > /dev/null
-}
-
 echo "$(date +%T) waiting for the tuned-Aker runs and the warm-up states"
 SET=$1; NAME=$2; shift 2
 for f in "$@"; do while [ ! -f $M/$f ]; do sleep 300; done; done
@@ -32,24 +26,30 @@ PYTHONPATH=. .venv/bin/python $S/timing_jobs.py --set $SET > $M/$NAME.txt || exi
 echo "$(date +%T) $(wc -l < $M/$NAME.txt) timing jobs ($SET)"
 
 [ -n "$HAVE_LOCK" ] || until mkdir $M/prep.lock 2>/dev/null; do sleep 120; done   # HAVE_LOCK=1: restart holding it
-( while [ -d $M/prep.lock ] && [ ! -f $M/$NAME.DONE ]; do touch $M/HOLD; sleep 60; done ) &
+# quiet machine by suspension (v5, 11-13): no queued job is admitted (HOLD), and every other job of
+# ours (simulator, real Aker, index tuning, preps) is suspended (SIGSTOP) for the batch and resumed
+# at the end; a job started meanwhile by another launcher is suspended too. The quiet-machine guard
+# of each timing run (--wait-quiet) then decides, by measurement, when the machine is quiet.
+JOBRE="^[^ ]*python[^ ]* -u [^ ]*(online_sim|eval_aker_real|online_prepare|online_prepare_data|eval_real_backend|reembed_triviaqa_queries)\.py"
+: > $M/$NAME.stopped
+suspend_all() {
+  for p in $(pgrep -f "$JOBRE"); do
+    grep -qx "$p" $M/$NAME.stopped || { kill -STOP $p 2>/dev/null && echo $p >> $M/$NAME.stopped; }
+  done
+}
+( while [ -d $M/prep.lock ] && [ ! -f $M/$NAME.DONE ]; do touch $M/HOLD; suspend_all; sleep 60; done ) &
 keeper=$!
-echo "$(date +%T) prep lock taken, HOLD set; draining"
-while busy; do sleep 120; done
-# index tuning (eval_real_backend, hours, many threads) is suspended during timing, resumed after
-STOPPED=$(pgrep -f "^[^ ]*python[^ ]* -u [^ ]*eval_real_backend\.py")
-[ -n "$STOPPED" ] && kill -STOP $STOPPED && echo "$(date +%T) suspended index tuning: $STOPPED"
-sleep 10
-echo "$(date +%T) drained; timing"
-
+suspend_all
+echo "$(date +%T) prep lock taken, HOLD set; suspended $(grep -c . $M/$NAME.stopped) jobs"
 while IFS= read -r line; do
   echo "$(date +%T) start: $(printf '%s' "$line" | grep -o -- '--out [^ ]*' | cut -d' ' -f2)"
   sh -c "$line"
 done < $M/$NAME.txt
 
 touch $M/$NAME.DONE
-[ -n "$STOPPED" ] && kill -CONT $STOPPED && echo "$(date +%T) resumed index tuning: $STOPPED"
 kill $keeper 2>/dev/null
+for p in $(cat $M/$NAME.stopped); do kill -CONT $p 2>/dev/null; done
+echo "$(date +%T) resumed $(grep -c . $M/$NAME.stopped) jobs"
 rm -f $M/HOLD
 rmdir $M/prep.lock 2>/dev/null
 echo "$(date +%T) done"

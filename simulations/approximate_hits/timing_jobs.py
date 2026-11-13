@@ -62,6 +62,12 @@ def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="ti
     if "aker" in techs and pick.get("aker"):
         a, lib = aker_args(pick["aker"]["name"])
         jobs.append((f"aker_{pick['aker']['name']}_s{every}_b{b:g}", f"--method aker {a}", lib))
+    if "aker_paper" in techs and pick.get("aker_paper"):     # the papers' own settings (doc 9q)
+        a, lib = aker_args(pick["aker_paper"]["name"])
+        jobs.append((f"akerpaper_{pick['aker_paper']['name']}_s{every}_b{b:g}", f"--method aker {a}", lib))
+    if "qvcache_paper" in techs and pick.get("qvcache_paper"):
+        jobs.append((f"qvpaper_{pick['qvcache_paper']['name']}_s{every}_b{b:g}",
+                     f"--method qvcache {qv_args(pick['qvcache_paper']['name'])}", ""))
     if "qvcache" in techs and pick.get("qvcache"):
         jobs.append((f"{pick['qvcache']['name']}_s{every}_b{b:g}",
                      f"--method qvcache {qv_args(pick['qvcache']['name'])}", ""))
@@ -104,9 +110,10 @@ def main():
         out = []                # every technique at 0.3% and 3%
         for z in ("0.99", "0.6", "0.3"):
             for b in (0.01, 0.1):
-                out += lines(f"spacev-aker-{z}", b, 20, techs=("ours", "lru"))
+                out += lines(f"spacev-aker-{z}", b, 20, techs=("ours", "lru", "aker_paper", "qvcache_paper"))
             for b in (0.003, 0.03):
-                out += lines(f"spacev-aker-{z}", b, 20)
+                out += lines(f"spacev-aker-{z}", b, 20,
+                             techs=("ours", "lru", "aker", "qvcache", "aker_paper", "qvcache_paper"))
         print("\n".join(out))
         return
     if a.set == "sizes":

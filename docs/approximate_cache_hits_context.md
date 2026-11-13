@@ -2594,3 +2594,36 @@ hit rates). Where nothing is certifiable (few good hits, modest margin) the meth
   code); timing "final" set (ours / LRU at 1% / 10%, every technique at 0.3% / 3%) after
   HX + HR + states (run_timing_batch2.sh final TIMING3C ...). Old timing ours / LRU in
   results/timing_v3/old_before_fit_start.
+
+### 9q. Self-adjusting queue; papers' own baseline settings in both plots (11-13)
+
+Queue (Jialin: make the fixes self-adaptive, not ad hoc):
+- mx_run_job.sh v4: peak private memory of every run recorded per class (prep, budget, method) in
+  /tmp/mx/peaks.tsv (sampled every 20 s); admission estimate = max(prior table, 1.3 x largest
+  finished peak, 1.6 x largest killed peak). Measured: SPACEV LRU at 10% 12-29 GB (prior was 10).
+  A run that dies without output and without a traceback (memory kill) is retried with back-off
+  2-32 min, up to 20 attempts, so memory pressure costs time, not results.
+- mx_complete.sh <list> <flag>: runs a list, then checks the OUTPUTS (JSON exists / skipped /
+  traceback) and re-runs what is missing (up to 5 rounds) before setting the flag (flags used to
+  be set when a list had been worked through; the 3% timing states were marked done while missing).
+- run_timing_batch2.sh v5: no drain by process names; HOLD + SIGSTOP of all our other jobs
+  (simulator, real Aker, index tuning, preps; also ones started later), resumed at the end; the
+  per-run quiet guard (--wait-quiet) decides by measurement.
+- 11-13 losses (old runner): 398 memory kills; headline re-runs 62 / 128, extra sizes 543 / 720,
+  extra-size Aker 170 / 192, 3% timing states missing; all re-queued (run_headline_complete.sh).
+
+How the papers set their parameters (neither tunes to a recall target):
+- Aker: fixed default (alpha_T, alpha_L) = (0.25, 1.1), "prioritizes search accuracy", no reserve
+  (Delta = 0); reports the resulting recall (>= .8 over all requests); backends tuned to recall
+  .9 without the cache.
+- QVCache (arXiv 2602.02057): alpha .9, 4 mini-indexes, PCA 16 dims x 8 buckets; D chosen by
+  starting at 0 and raising it by .025 while the hit ratio keeps improving meaningfully
+  ("D in [0, .5] is a practical regime"); recall is monitored, no target.
+Plots: both now show, per baseline, the hand-tuned setting (best hit rate among grid settings
+reaching .9, chosen after the fact on the same run) and the paper's setting (dashed): Aker
+at0.25_d0 (real code); QVCache m4 / r16x8 with D from the paper's procedure over our D grid
+(0 / .025 / .075 / .15 / .25 / .5; stop when the next D gains < 5% relative). headline_draft_v4:
+the paper settings miss .9 almost everywhere (recall .13-.87). Timing "final" set: 60 runs
+(paper settings at all four sizes; ours / LRU at 1% / 10%; all at 0.3% / 3%).
+- TriviaQA DiskANN at recall .95 needs search list 2000: 3.3 s per query (one thread, loaded
+  machine) vs 63 ms on SPACEV; full-stream timing at 1 in 20 would take 7-10 h per run.

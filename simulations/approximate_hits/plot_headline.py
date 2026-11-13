@@ -30,11 +30,13 @@ from matplotlib.gridspec import GridSpecFromSubplotSpec
 RES = Path("simulations/approximate_hits/results")
 T, TOL = 0.9, 0.01
 BUDGETS = [0.003, 0.01, 0.03, 0.1]
-STYLE = {"ours": ("Ours (calibrated)", "#D55E00", "o", 2.6),
+STYLE = {"aker_paper": ("Aker, paper default (a_T .25, a_L 1.1)", "#0072B2", "D", 1.1),
+         "qvcache_paper": ("QVCache, paper's D procedure", "#009E73", "s", 1.1),
+         "ours": ("Ours (calibrated)", "#D55E00", "o", 2.6),
          "lru": ("LRU", "#6B6B6B", "^", 1.6),
-         "aker": ("Aker", "#0072B2", "D", 1.6),
-         "qvcache": ("QVCache", "#009E73", "s", 1.6)}
-JITTER = {"ours": 1.0, "lru": 0.93, "aker": 1.07, "qvcache": 1.14}     # x offsets (log axis)
+         "aker": ("Aker, tuned by hand to the target", "#0072B2", "D", 1.6),
+         "qvcache": ("QVCache, tuned by hand to the target", "#009E73", "s", 1.6)}
+JITTER = {"ours": 1.0, "lru": 0.93, "aker": 1.07, "qvcache": 1.14, "aker_paper": 1.07, "qvcache_paper": 1.14}     # x offsets (log axis)
 # (title, prep, stream, uses real Aker?)
 LAYOUT = [
     [("SPACEV, Zipf 0.3", "spacev-aker-0.3", "trace", True),
@@ -120,6 +122,26 @@ def collect(prep, stream, budget, real_aker):
             if r:
                 cands.append(candidate(f.stem, [r]))
     out["aker"] = pick(cands)
+    # the papers' own settings (doc 9q): Aker's default (alpha_T .25, alpha_L 1.1, no reserve);
+    # QVCache's procedure for D (4 mini-indexes, PCA 16 x 8 buckets, alpha .9; D raised from 0
+    # until the hit ratio stops improving meaningfully, here: < 5% relative gain to the next D)
+    out["aker_paper"] = None
+    f = RES / "aker_real" / prep / f"trace_b{budget:g}" / "at0.25_d0.json"
+    if real_aker and f.exists():
+        sm = json.loads(f.read_text())["summary"]
+        out["aker_paper"] = pick([candidate("at0.25_d0", [(100 * sm["hit_rate"], sm["retention_vs_backend"])])])
+    qv = []
+    for f in d0.glob("qvcache_D*_m4_r16x8.json") if d0.exists() else []:
+        r = sim_stats(f)
+        if r:
+            qv.append((float(f.stem.split("_D")[1].split("_")[0]), f.stem, r))
+    qv.sort()
+    out["qvcache_paper"] = None
+    if qv:
+        i = 0
+        while i + 1 < len(qv) and qv[i + 1][2][0] >= 1.05 * max(qv[i][2][0], 1e-9):
+            i += 1
+        out["qvcache_paper"] = pick([candidate(qv[i][1], [qv[i][2]])])
     return out
 
 
@@ -127,16 +149,17 @@ def draw_panel(fig, outer, title, data, ymax_pad=1.18, speedup_axis=False, first
     inner = GridSpecFromSubplotSpec(2, 1, subplot_spec=outer, height_ratios=[3.3, 1], hspace=0.07)
     ax = fig.add_subplot(inner[0])
     st = fig.add_subplot(inner[1], sharex=ax)
-    for tech in ("lru", "qvcache", "aker", "ours"):
+    for tech in ("aker_paper", "qvcache_paper", "lru", "qvcache", "aker", "ours"):
         label, col, mk, lw = STYLE[tech]
+        paper = tech.endswith("_paper")
         pts = [(b * JITTER[tech], data[b][tech]) for b in BUDGETS if data[b].get(tech)]
         if not pts:
             continue
         for (x0, p0), (x1, p1) in zip(pts[:-1], pts[1:]):
             both = p0["ok"] and p1["ok"]
             ax.plot([x0, x1], [p0["hit"], p1["hit"]], color=col, lw=lw if both else 1.1,
-                    ls="-" if both else (0, (1.5, 2.5)), alpha=0.9 if both else 0.55,
-                    zorder=3 if tech == "ours" else 2)
+                    ls=(0, (5, 2.5)) if paper else ("-" if both else (0, (1.5, 2.5))),
+                    alpha=0.9 if both else 0.55, zorder=3 if tech == "ours" else 2)
             st.plot([x0, x1], [p0["ret"] - T, p1["ret"] - T], color=col, lw=0.8, alpha=0.5)
         for x, p in pts:
             face = col if p["ok"] else "white"
@@ -144,14 +167,14 @@ def draw_panel(fig, outer, title, data, ymax_pad=1.18, speedup_axis=False, first
             if p["n"] > 1:
                 ax.errorbar([x], [p["hit"]], yerr=[[p["hit"] - p["hit_lo"]], [p["hit_hi"] - p["hit"]]],
                             color=col, capsize=2, lw=1)
-            ax.plot([x], [p["hit"]], marker=mk, ms=ms, mfc=face, mec=col, mew=1.6, ls="none",
-                    zorder=5, alpha=1.0 if p["ok"] else 0.6)
+            ax.plot([x], [p["hit"]], marker=mk, ms=ms * (0.75 if paper else 1), mfc=face, mec=col,
+                    mew=1.6, ls="none", zorder=5, alpha=1.0 if p["ok"] else 0.6)
             st.plot([x], [p["ret"] - T], marker=mk, ms=5, mfc=face, mec=col, mew=1.2, ls="none")
             if not p["ok"]:
                 ax.annotate(f"recall {p['ret']:.2f}".replace("0.", "."), (x, p["hit"]), xytext=(8, -2),
                             textcoords="offset points", ha="left", fontsize=6.5, color=col)
     ax.set_xscale("log")
-    ax.set_xlim(0.0066, 0.17)
+    ax.set_xlim(BUDGETS[0] * 0.7, BUDGETS[-1] * 1.6)
     allhit = [data[b][t]["hit_hi"] for b in BUDGETS for t in STYLE if data[b].get(t)]
     ax.set_ylim(0, max(allhit + [1.0]) * ymax_pad)
     ax.set_title(title, fontsize=10, loc="left", fontweight="bold")
@@ -201,23 +224,27 @@ def main():
     # legend and notes in the free cell
     ax = fig.add_subplot(outer[2, 2])
     ax.axis("off")
-    handles = [plt.Line2D([], [], color=col, marker=mk, lw=lw, ms=7, label=lab)
-               for lab, col, mk, lw in STYLE.values()]
+    order = ["ours", "lru", "aker", "aker_paper", "qvcache", "qvcache_paper"]
+    handles = [plt.Line2D([], [], color=STYLE[t][1], marker=STYLE[t][2], lw=STYLE[t][3], ms=7, label=STYLE[t][0],
+                          ls=(0, (5, 2.5)) if t.endswith("_paper") else "-") for t in order if t in STYLE]
     handles += [plt.Line2D([], [], color="k", marker="o", ls="none", mfc="k", label="reaches recall 0.9 (within .01)"),
                 plt.Line2D([], [], color="k", marker="o", ls="none", mfc="white", mew=1.6,
                            label="no setting reaches it: faded, dotted line,\nbest-recall setting, its recall printed")]
-    ax.legend(handles=handles, loc="upper left", fontsize=9, frameon=False, title="technique", title_fontsize=9)
-    ax.text(0.0, 0.0,
+    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.0, 1.02), fontsize=8, frameon=False,
+              title="technique", title_fontsize=8.5, labelspacing=0.35)
+    ax.text(0.0, 0.27,
             "How to read: each point is the best hit rate a technique gets at the\n"
             "promised recall 0.9 (average over hits of the share of the exact top-10\n"
             "returned). Strips: recall - 0.9; green band = reached.\n"
             "Ours / LRU: mean of 2 seeds (bars: min-max); LRU: best of K 10/20.\n"
-            "Aker / QVCache: best of the tuned grid on seed 0 (selection and\n"
-            "measurement share the run; fresh-seed re-runs pending).\n"
-            "Aker = real code (ESCI: reimplementation); QVCache = reimplementation.",
-            fontsize=7.8, va="bottom", transform=ax.transAxes)
+            "Aker / QVCache tuned: best hit rate in a grid of settings among those\n"
+            "reaching 0.9, picked after the fact on the same run (seed 0).\n"
+            "Dashed: the papers' own settings (Aker default; QVCache's D procedure,\n"
+            "which raises D until hits stop improving). Neither paper tunes to a\n"
+            "recall target. Aker = real code (ESCI: reimplementation).",
+            fontsize=7, va="top", transform=ax.transAxes)
     fig.suptitle("DRAFT: hit rate at the same promised recall (0.9), exact backend, k = 10\n"
-                 "only two cache sizes exist so far (1% and 10% of the dataset); missing points are runs not finished yet",
+                 "ours reaches the target with no tuning; Aker / QVCache only when tuned by hand (solid) - not with their papers' settings (dashed)",
                  fontsize=11, y=0.985)
     fig.text(0.5, 0.025, "cache size (fraction of the dataset, cached vectors)", ha="center", fontsize=10)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
