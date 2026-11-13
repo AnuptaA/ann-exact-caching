@@ -45,16 +45,16 @@ jkey() {   # job class: prep folder, budget, method / script (from a command lin
     if (match($0, /--variant [a-z0-9]+/)) m = m "_" substr($0, RSTART + 10, RLENGTH - 10)
     print p "|" b "|" m }'
 }
-prior_of() {   # prior peak estimate (GB) for a class never seen
+prior_of() {   # prior peak estimate (GB) for a class never seen: modest, since an underestimate
+  # costs only a retry (memory kills are retried) and the learned peaks take over after one run;
+  # high only for classes known to be heavy (index builds / tuning, ours and LRU at 10%)
   printf '%s' "$1" | awk '
     /index_study.py|eval_real_backend.py/ { print 60; exit }
     /online_prepare/ { print 90; exit }
     /eval_aker_real.py/ { print (/triviaqa/ ? 6 : 3); exit }
-    /--budget 0\.1 / && /--method (static|greedy)/ { print (/triviaqa/ ? 36 : 18); exit }
-    /--budget 0\.1 / && /--method lru/ { print (/triviaqa/ ? 40 : 30); exit }
-    /--budget 0\.1 / { print (/triviaqa/ ? 24 : 12); exit }
-    /--budget 0\.03 / { print (/triviaqa/ ? 24 : 12); exit }
-    /triviaqa/ { print 12; exit }
+    /--budget 0\.1 / && /--method (static|greedy|lru)/ { print (/triviaqa/ ? 36 : 24); exit }
+    /--budget 0\.03 / && /--method (static|greedy|lru)/ { print (/triviaqa/ ? 16 : 10); exit }
+    /triviaqa/ { print 8; exit }
     { print 6 }'
 }
 est_key() {   # estimate (GB) of class $1 with prior $2

@@ -2688,6 +2688,9 @@ the pressure kept running.
 - Watchdog v4 kill order below 15 GB: registered adhoc, then unregistered python of ours >= 2 GB
   (ad hoc by definition), then registered plot (youngest first; the runner retries it); timing never.
   First use: 16:03 it killed the ad-hoc pq768 index build (7 GB available) instead of plot jobs.
+- 16:45: priors lowered to modest values (underestimates only cost a retry; learned peaks take over;
+  high only for index builds and ours / LRU at 10%); F decays every 15 min (was hourly), since
+  over-reservation by unseen classes held 200 GB idle.
 - Timing batches suspend every python process of ours except registered timing runs.
 - Jobs without a JSON output (index builds) also go through the runner (success = exit 0; kills
   retried); the index study runs fully managed (run_index_study_managed.sh), builds restarted from a

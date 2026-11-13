@@ -8,7 +8,7 @@
 #   3. a registered plot job, youngest first (the runner retries it later).
 # Processes registered with priority "timing" (the quiet timing runs) are never killed.
 # Admission control loop: each kill raises the growth-reservation factor (/tmp/mx/growth_factor)
-# by 0.25 (max 1); each hour without kills and with >= 60 GB available lowers it by 0.1 (min 0.2).
+# by 0.25 (max 1); each 15 min without kills and with >= 60 GB available lowers it by 0.1 (min 0.2).
 cd /local/home/jialind/ann-exact-caching || exit 1
 M=/tmp/mx
 REG=$M/registry
@@ -44,8 +44,8 @@ while :; do
       last_kill=$i
     fi
   fi
-  # an hour (360 x 10 s) without a kill and with >= 60 GB available: reserve less
-  if [ $(( i - ${last_kill:-0} )) -ge 360 ] && [ $((i % 360)) -eq 0 ] && [ "$avail" -ge 60 ]; then
+  # 15 min (90 x 10 s) without a kill and with >= 60 GB available: reserve less
+  if [ $(( i - ${last_kill:-0} )) -ge 90 ] && [ $((i % 90)) -eq 0 ] && [ "$avail" -ge 60 ]; then
     awk '{f = $1 - 0.1; if (f < 0.2) f = 0.2; printf "%.2f\n", f}' $M/growth_factor > $M/growth_factor.new 2>/dev/null &&
       mv $M/growth_factor.new $M/growth_factor
   fi
