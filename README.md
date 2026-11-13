@@ -27,5 +27,18 @@ The next phase is to extend the simulator and experiments to cache management po
 - How hit-policy guarantees interact with population and eviction choices.
 - How exact vector caching compares against existing approximate strategies, as well as how much performance benefit is provided in real systems.
 
+## Current work: calibrated approximate caching
+
+The current experiments relax exact hits to *approximate* hits with a calibrated guarantee: the
+mean retention of hits (share of the backend's top-10 the cache returns) stays at or above a
+target (0.9), with no per-workload tuning. It is compared against LRU, Aker (the authors' code) and
+QVCache, by hit rate at the target (headline plot) and by end-to-end latency in front of the same
+tuned DiskANN index (timing plot).
+
+- How to reproduce both plots: `simulations/approximate_hits/README.md`
+- Decisions, results and the full history: `docs/approximate_cache_hits_context.md`
+
 ## Getting Started
-Instructions coming soon!
+
+Exact-caching hit policies (CIG / HGG): see `utils/base/` and `tests/`
+(`python -m pytest tests/`). Approximate caching: `simulations/approximate_hits/README.md`.
