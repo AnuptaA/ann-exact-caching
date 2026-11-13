@@ -26,14 +26,16 @@ PYTHONPATH=. .venv/bin/python $S/timing_jobs.py --set $SET > $M/$NAME.txt || exi
 echo "$(date +%T) $(wc -l < $M/$NAME.txt) timing jobs ($SET)"
 
 [ -n "$HAVE_LOCK" ] || until mkdir $M/prep.lock 2>/dev/null; do sleep 120; done   # HAVE_LOCK=1: restart holding it
-# quiet machine by suspension (v5, 11-13): no queued job is admitted (HOLD), and every other job of
-# ours (simulator, real Aker, index tuning, preps) is suspended (SIGSTOP) for the batch and resumed
-# at the end; a job started meanwhile by another launcher is suspended too. The quiet-machine guard
-# of each timing run (--wait-quiet) then decides, by measurement, when the machine is quiet.
-JOBRE="^[^ ]*python[^ ]* -u [^ ]*(online_sim|eval_aker_real|online_prepare|online_prepare_data|eval_real_backend|reembed_triviaqa_queries)\.py"
+# quiet machine by suspension (v6, 11-13): no queued job is admitted (HOLD), and every other python
+# process of ours (registered or not) is suspended (SIGSTOP) for the batch and resumed at the end;
+# one started meanwhile is suspended within a minute. The timing runs register as priority
+# "timing" (never suspended or killed). The quiet-machine guard of each timing run (--wait-quiet)
+# then decides, by measurement, when the machine is quiet.
+REG=$M/registry; mkdir -p $REG
 : > $M/$NAME.stopped
-suspend_all() {
-  for p in $(pgrep -f "$JOBRE"); do
+suspend_all() {   # every python process of ours except the timing runs (registry priority timing)
+  for p in $(ps -u "$(id -u)" -o pid=,comm= | awk '$2 ~ /^python/ {print $1}'); do
+    [ -f $REG/$p ] && [ "$(awk '{print $2}' $REG/$p)" = timing ] && continue
     grep -qx "$p" $M/$NAME.stopped || { kill -STOP $p 2>/dev/null && echo $p >> $M/$NAME.stopped; }
   done
 }
@@ -43,7 +45,16 @@ suspend_all
 echo "$(date +%T) prep lock taken, HOLD set; suspended $(grep -c . $M/$NAME.stopped) jobs"
 while IFS= read -r line; do
   echo "$(date +%T) start: $(printf '%s' "$line" | grep -o -- '--out [^ ]*' | cut -d' ' -f2)"
-  sh -c "$line"
+  sh -c "$line" &
+  job=$!
+  # register the timing run before the keeper's next pass (it suspends any unregistered python)
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    for c in $(pgrep -P $job) $(for g in $(pgrep -P $job); do pgrep -P $g; done); do
+      case "$(cat /proc/$c/comm 2>/dev/null)" in python*) echo "timing timing 0" > $REG/$c; kill -CONT $c ;; esac
+    done
+    sleep 0.5
+  done
+  wait $job
 done < $M/$NAME.txt
 
 touch $M/$NAME.DONE

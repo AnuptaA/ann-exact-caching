@@ -2667,3 +2667,28 @@ the paper settings miss .9 almost everywhere (recall .13-.87). Timing "final" se
   width at the tuned search list with >= 99% identical results and recall within .005
   (timing_jobs.beam_for); runs at another width go to results/timing_v3_w<W> and every technique
   is re-timed there. Chain: probe batch (after the index study and ESCI states) -> final batch.
+
+### 9t. Queue v5: registry, machine-state admission, priorities, adaptive reservation (11-13)
+
+Problem (Jialin asked whether the fixes were ad hoc; they partly were): admission and suspension
+only saw processes they knew by name; work outside the queue (index builds, tuning, hand-run checks)
+was invisible, and the watchdog killed queued plot jobs while the exploratory builds that caused
+the pressure kept running.
+- Registry (/tmp/mx/registry/<pid>: class, priority, estimate), written by the runner for every
+  python process it starts. Priority via MX_PRIORITY: plot (default) or adhoc; timing runs are
+  registered by the timing batch as "timing". oom_score_adj plot 300, adhoc 1000.
+- Admission from the machine's state: used = MemTotal - MemAvailable (everything, ours or not) +
+  F x expected growth of registered jobs (class estimate - private memory); start only if
+  used + growth + estimate <= 345 GB and available - growth - estimate >= 20 GB.
+- Estimates learned per class: max(prior, 1.2 x largest finished peak, 1.1 x largest killed peak)
+  (1.6 x killed ratcheted estimates up under pressure: a kill follows a full machine, not this
+  job's need).
+- Adaptive reservation factor F (/tmp/mx/growth_factor, start .5): the watchdog adds .25 per memory
+  kill (max 1) and subtracts .1 per hour without kills with >= 60 GB available (min .2).
+- Watchdog v4 kill order below 15 GB: registered adhoc, then unregistered python of ours >= 2 GB
+  (ad hoc by definition), then registered plot (youngest first; the runner retries it); timing never.
+  First use: 16:03 it killed the ad-hoc pq768 index build (7 GB available) instead of plot jobs.
+- Timing batches suspend every python process of ours except registered timing runs.
+- Jobs without a JSON output (index builds) also go through the runner (success = exit 0; kills
+  retried); the index study runs fully managed (run_index_study_managed.sh), builds restarted from a
+  clean folder.
