@@ -59,14 +59,19 @@ priv_of() {   # private memory (GB, rounded up) of a pid
 committed() {   # GB committed by running jobs and prep steps
   # a job in its first 30 min counts at max(class estimate, private memory); later at 1.2 x its
   # private memory; a prep step at max(90, private). Private = Private_Clean + Private_Dirty.
-  ps -eo pid=,etimes=,args= | grep -E "^ *[0-9]+ +[0-9]+ [^ ]*python[^ ]* -u [^ ]*(online_sim|eval_aker_real|online_prepare|online_prepare_data)\.py" |
+  # also processes outside the queue (index builds / tuning, latency probes): at max(60, private)
+  # while young, as builds briefly reach their memory limit (11-13: two builds and a tuning run,
+  # not counted, drove MemAvailable to 0)
+  ps -eo pid=,etimes=,args= | grep -E "^ *[0-9]+ +[0-9]+ [^ ]*python[^ ]* -u [^ ]*(online_sim|eval_aker_real|online_prepare|online_prepare_data|eval_real_backend|index_study|latency_probe|eval_timing_online)\.py" |
   while read pid age args; do
     priv=$(priv_of $pid); [ -n "$priv" ] || continue
     case "$args" in
       *online_prepare*) e=90 ;;
+      *eval_real_backend*|*index_study*) e=60 ;;
+      *latency_probe*|*eval_timing_online*) e=12 ;;
       *) e=$(est_of "$args") ;;
     esac
-    if [ "$age" -ge 1800 ] && [ "$e" -ne 90 ]; then echo $(( priv + priv / 5 + 1 ))
+    if [ "$age" -ge 1800 ] && [ "$e" -ne 90 ] && [ "$e" -ne 60 ]; then echo $(( priv + priv / 5 + 1 ))
     elif [ "$priv" -gt "$e" ]; then echo "$priv"; else echo "$e"; fi
   done | awk '{s += $1} END {printf "%d\n", s}'
 }
