@@ -2695,3 +2695,29 @@ the pressure kept running.
 - Jobs without a JSON output (index builds) also go through the runner (success = exit 0; kills
   retried); the index study runs fully managed (run_index_study_managed.sh), builds restarted from a
   clean folder.
+
+### 9u. DiskANN tuned per workload (search list x beam width); Aker's DiskANN settings (11-13)
+
+Quiet probe (latency_probe.py, one search at a time, 100 queries; v1 in results/latency_probe_v1):
+beam width (reads in flight per round trip) was never tuned (2 everywhere) and dominates latency on
+this disk, at equal or slightly higher recall: SPACEV search list 160: 64 ms (beam 2) / 22 (8) /
+15 (16); search list 2000: 733 / 215 / 126 ms; ESCI 128: 50 / 17 / 11 ms; SPACEV real log 1250
+(.91): 466 / 135 / 79 ms; TriviaQA (current index) 512 (.86): 198 / 65 / 42 ms. All timing so far
+used beam 2, i.e. a backend ~4x slower than it needs to be: the final timing batch was stopped.
+Aker (paper; the released code has no DiskANN integration): DiskANN built with degree 64 / build
+list 100 and 1.1 GB in-memory PQ on SPACEV (~110 bytes per vector; ours 32), degree 96 / build
+list 100 and 5.1 GB PQ on SPHERE / TriviaQA (~512 bytes; ours 256); search parameters tuned to
+recall@10 0.9 without the cache; no beam width reported; 3.7 ms (SPACEV) and 21.1 ms (TriviaQA)
+per query on a local NVMe SSD.
+Redo (Jialin: go ahead), run_backend_redo.sh:
+- builds with the paper's settings (index_study variants spacev_pq110, aker_tqa; plot priority),
+  besides the TriviaQA study variants (pq768, r128, mem; ad hoc);
+- quiet probe of every candidate index: search list x beam width 2-32, recall on 5,000 queries
+  (batched) and single-query latency (100 queries);
+- select_backend.py: per workload the index / search list / beam width with the lowest mean
+  latency at recall@10 >= 0.95 (0.9 when 0.95 needs > 100 ms) -> backends/<prep>/choice.json;
+- stored answers regenerated at exactly that setting (eval_real_backend.py --fixed target:L --beam
+  W --index-dir; old files diskann_v1.*); the timing harness takes beam, index and target from them;
+- warm-up states and timing in results/timing_v4; final set (112 runs, ordered): SPACEV x3 (4 sizes
+  x ours / LRU / Aker / QVCache tuned, papers' settings at 1% / 10%), ESCI (same), TriviaQA x3
+  (1% / 10%, four techniques), SPACEV real log (1% / 10%); plot_timing: 8 panels in 2 rows.
