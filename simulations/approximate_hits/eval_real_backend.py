@@ -80,6 +80,7 @@ def recall(truth, ids, k):
 class Index:
     def __init__(self, kind, db, args, work):
         self.kind, self.threads = kind, args.threads
+        self.beam = getattr(args, "beam", 2)
         self.qdtype = db.dtype if db.dtype in (np.int8, np.uint8) else np.float32
         t0 = time.time()
         if kind == "hnsw":
@@ -96,7 +97,7 @@ class Index:
             self.ix.add(db)
         else:
             import diskannpy
-            d = work / "diskann"
+            d = Path(args.index_dir) if getattr(args, "index_dir", None) else work / "diskann"
             if not (d / "ann_disk.index").exists():
                 d.mkdir(parents=True, exist_ok=True)
                 gb = args.diskann_pq_bytes * len(db) / 1e9
@@ -119,7 +120,7 @@ class Index:
             return self.ix.search(q, k)[1]
         q = q.astype(self.qdtype)
         ids, _ = self.ix.batch_search(q, k_neighbors=k, complexity=max(effort, k),
-                                      beam_width=2, num_threads=self.threads)
+                                      beam_width=self.beam, num_threads=self.threads)
         return ids.astype(np.int64)
 
 
@@ -163,6 +164,11 @@ def main():
     ap.add_argument("--build-only", action="store_true",
                     help="build the index and report recall at --build-effort, no tuning")
     ap.add_argument("--build-effort", type=int, default=128)
+    ap.add_argument("--beam", type=int, default=2, help="DiskANN beam width")
+    ap.add_argument("--index-dir", type=str, default=None, help="DiskANN index directory (default <out>/diskann)")
+    ap.add_argument("--fixed", nargs="+", default=None,
+                    help="target:search_list pairs chosen by select_backend.py (no tuning curve): answers and "
+                         "deep lists at exactly that search list and --beam (doc 9u)")
     ap.add_argument("--efforts", type=int, nargs="+", default=None,
                     help="search efforts to try (default: the index's grid, GRIDS)")
     args = ap.parse_args()
@@ -179,6 +185,26 @@ def main():
                 "effort": args.build_effort, "recall_at_k": r, "n_db": len(db)}
         (out / f"{args.index}_build.json").write_text(json.dumps(info, indent=1))
         logger.info(f"built: {info}")
+        return
+    if args.fixed:          # chosen settings: no curve; answers at exactly these search lists
+        res = {"index": args.index, "index_dir": str(args.index_dir or out / "diskann"), "beam": args.beam,
+               "build_s": ix.build_s, "curve": {}, "targets": {}}
+        arrays = {}
+        for pair in args.fixed:
+            tgt, e = pair.split(":")
+            e = int(e)
+            ans = ix.search(q, args.answer_depth, e)
+            deep = ix.search(q, args.R, e)
+            stats = {"effort": e, "beam": args.beam, "recall_answer_at_k": recall(truth, ans, args.k),
+                     "recall_deep_at_k": recall(truth, deep, args.k),
+                     "recall_deep_at_R": recall(truth, deep, args.R)}
+            res["targets"][tgt] = stats
+            arrays[f"answer_{tgt}"] = ans.astype(np.int32)
+            arrays[f"deep_{tgt}"] = deep.astype(np.int32)
+            logger.info(f"target {tgt}: {stats}")
+        np.savez(out / f"{args.index}.npz", **arrays)
+        (out / f"{args.index}.json").write_text(json.dumps(res, indent=1))
+        logger.info(f"wrote {out / args.index}.npz")
         return
     curve = {}
     for e in args.efforts or GRIDS[args.index]:

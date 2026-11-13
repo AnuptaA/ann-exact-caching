@@ -29,7 +29,9 @@ def main():
     ap.add_argument("--index", required=True, help="DiskANN index directory (prefix ann)")
     ap.add_argument("--raw-768", action="store_true", help="queries without the appended 0 (native mips index)")
     ap.add_argument("--efforts", type=int, nargs="+", default=[64, 128, 200, 320, 512, 800, 1250, 2000])
-    ap.add_argument("--beams", type=int, nargs="+", default=[2, 4, 8, 16])
+    ap.add_argument("--beams", type=int, nargs="+", default=[2, 4, 8, 16, 32])
+    ap.add_argument("--n-recall", type=int, default=5000,
+                    help="queries for recall per (search list, beam width), batched (before the latency loop)")
     ap.add_argument("--n", type=int, default=100, help="queries per (search list, beam width)")
     ap.add_argument("--out", required=True)
     from simulations.approximate_hits.timing_env import add_args, make_guard
@@ -38,13 +40,14 @@ def main():
     guard = make_guard(args)
     guard.start()
     from simulations.approximate_hits.prep_io import load_prep
-    from simulations.approximate_hits.eval_timing import open_diskann
     db, q, top, _ = load_prep(Path(args.prep), native=True)
     xs = q.astype(db.dtype) if db.dtype != np.float32 else q
     if args.raw_768:
         xs = np.ascontiguousarray(xs[:, :-1])
     rows = np.random.default_rng(2).choice(len(xs), args.n, replace=False)
-    ix = open_diskann(args.index, 0)
+    import diskannpy                      # 24 thread contexts for the batched recall; no node cache
+    ix = diskannpy.StaticDiskIndex(index_directory=str(args.index), num_threads=24, num_nodes_to_cache=0,
+                                   cache_mechanism=0, index_prefix="ann")
     for i in rows[:20]:                                         # warm-up, untimed
         ix.search(xs[i], k_neighbors=10, complexity=128, beam_width=2)
     res = {"prep": args.prep, "index": args.index, "n": args.n, "grid": []}
@@ -63,11 +66,18 @@ def main():
                 same.append(bool(np.array_equal(ids, base[int(i)])))
             # same_as_beam2: share of queries whose top-10 equals the beam-2 result (the stored answers
             # that drive the timing replay are beam-2 searches)
-            row = {"L": L, "W": W, "recall": float(np.mean(rec)), "same_as_beam2": float(np.mean(same)),
+            rr = np.random.default_rng(1).choice(len(xs), min(args.n_recall, len(xs)), replace=False)
+            rb = ix.batch_search(np.ascontiguousarray(xs[rr]), k_neighbors=10, complexity=L, beam_width=W,
+                                 num_threads=24)
+            ib = np.asarray(rb.identifiers if hasattr(rb, "identifiers") else rb[0])
+            rec_b = float(np.mean([len(np.intersect1d(a, b)) / 10 for a, b in zip(ib, top[rr, :10])]))
+            row = {"L": L, "W": W, "recall": float(np.mean(rec)), "recall_5000": rec_b,
+                   "same_as_beam2": float(np.mean(same)),
                    "mean_ms": float(np.mean(lat) * 1e3),
                    "p50_ms": float(np.median(lat) * 1e3), "p99_ms": float(np.percentile(lat, 99) * 1e3)}
             res["grid"].append(row)
-            logger.info(f"L {L} W {W}: recall {row['recall']:.3f}, {row['mean_ms']:.1f} ms (p99 {row['p99_ms']:.1f})")
+            logger.info(f"L {L} W {W}: recall {row['recall_5000']:.4f} (5,000), {row['mean_ms']:.1f} ms "
+                        f"(p99 {row['p99_ms']:.1f})")
     guard.stop()
     res["environment"] = guard.report()
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

@@ -25,7 +25,9 @@ import matplotlib.pyplot as plt  # noqa: E402
 RES = Path("simulations/approximate_hits/results")
 T, TOL = 0.9, 0.01
 TRACES = [("Zipf 0.3", "spacev-aker-0.3"), ("Zipf 0.6", "spacev-aker-0.6"), ("Zipf 0.99", "spacev-aker-0.99"),
-          ("ESCI (no repeated queries)", "esci1m")]
+          ("ESCI (no repeated queries)", "esci1m"),
+          ("TriviaQA, Zipf 0.3", "triviaqa-ip-0.3"), ("TriviaQA, Zipf 0.6", "triviaqa-ip-0.6"),
+          ("TriviaQA, Zipf 0.99", "triviaqa-ip-0.99"), ("SPACEV real query log", "spacev-real")]
 BUDGETS = [0.003, 0.01, 0.03, 0.1]
 # LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
 # background work (decided with Jialin, 11-11); the sync runs stay in the table only
@@ -42,14 +44,12 @@ HEADLINE_KEY = {"ours": "ours", "lru_bg": "lru", "lru_sync": "lru", "aker": "ake
                 "aker_paper": "aker_paper", "qvcache_paper": "qvcache_paper"}
 
 
-VERSION, EVERY = "timing_v3", 20     # full-stream runs, 1 request in EVERY timed (doc 9m)
+VERSION, EVERY = "timing_v4", 20     # full-stream runs, 1 request in EVERY timed; tuned DiskANN (doc 9u)
 
 
 def load(prep, budget, every=None):
     every = EVERY if every is None else every
-    from simulations.approximate_hits.timing_jobs import beam_for
-    W = beam_for(prep)
-    d = RES / (VERSION if W == 2 else f"{VERSION}_w{W}") / prep      # the prep's chosen beam width
+    d = RES / VERSION / prep
     out = {}
     for f in sorted(d.glob(f"*_s{every}_b{budget:g}.json")) if d.exists() else []:
         if f.name.startswith(("greedy_state", "state_")):
@@ -75,13 +75,15 @@ def main():
     strip below: recall vs exact over all requests (grey: DiskANN alone)."""
     from matplotlib.gridspec import GridSpec
     from simulations.approximate_hits.plot_headline import STYLE, JITTER
-    fig = plt.figure(figsize=(5.0 * len(TRACES), 4.6))
-    gs = GridSpec(2, len(TRACES), height_ratios=[3.2, 1.2], hspace=0.08, wspace=0.28, figure=fig,
-                  top=0.84, bottom=0.2)
+    ncol = 4
+    nrow = (len(TRACES) + ncol - 1) // ncol
+    fig = plt.figure(figsize=(5.0 * ncol, 4.4 * nrow + 0.8))
+    gs = GridSpec(2 * nrow, ncol, height_ratios=[3.2, 1.2] * nrow, hspace=0.12, wspace=0.28, figure=fig,
+                  top=0.9, bottom=0.1)
     rows = []
     for j, (title, prep) in enumerate(TRACES):
-        ax = fig.add_subplot(gs[0, j])
-        st = fig.add_subplot(gs[1, j], sharex=ax)
+        ax = fig.add_subplot(gs[2 * (j // ncol), j % ncol])
+        st = fig.add_subplot(gs[2 * (j // ncol) + 1, j % ncol], sharex=ax)
         per_b = {b: load(prep, b) for b in BUDGETS}
         eq_pts = []
         for key, label, _, _ in TECHS:
@@ -124,9 +126,9 @@ def main():
                     lw=1.2, marker="x", ms=5, label="DiskANN, cache's memory as node cache" if j == 0 else None)
         ax.axhline(1.0, color="k", lw=0.8)
         ax.set_xscale("log")
-        ax.set_title(title if prep.startswith("esci") else f"SPACEV, {title}", fontsize=10, loc="left",
-                     fontweight="bold")
-        if j == 0:
+        ax.set_title(title if not prep.startswith("spacev-aker") else f"SPACEV, {title}", fontsize=10,
+                     loc="left", fontweight="bold")
+        if j % ncol == 0:
             ax.set_ylabel("speedup over DiskANN alone\n(mean latency, all requests)")
             st.set_ylabel("recall vs\nexact (all)", fontsize=8)
         ax.grid(alpha=0.3)
@@ -140,7 +142,7 @@ def main():
         st.set_xlim(BUDGETS[0] * 0.75, BUDGETS[-1] * 1.35)
         st.set_xlabel("cache size (fraction of the dataset)", fontsize=9)
     fig.legend(loc="lower center", ncol=5, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
-    fig.text(0.5, 0.9, "DiskANN tuned to recall@10 0.95, same index for every technique; whole stream after "
+    fig.text(0.5, 0.955, "DiskANN tuned per workload (search list x beam width, recall@10 0.95 or 0.9 if 0.95 > 100 ms), same index for every technique; whole stream after "
              "warm-up, 1 in 20 requests timed end to end; cache updates are background work.\n"
              "Filled: mean retention of hits (served answer vs DiskANN's top-10) >= 0.89 in this run; hollow: below. "
              "Strip: recall vs exact over all requests (grey dashed: DiskANN alone, .953).",

@@ -48,33 +48,38 @@ PROBE = f"{R}/latency_probe"
 
 
 def probe_lines():
-    """Quiet latency probe (latency_probe.py): search list x beam width per index (doc 9s)."""
-    import json as _json
+    """Quiet latency probe (latency_probe.py): search list x beam width per candidate index (doc 9u)."""
     import os
-    def tuned(prep, tgt="0.95"):
-        f = f"{R}/backends/{prep}/diskann.json"
-        try:
-            return int(_json.load(open(f))["targets"][tgt]["effort"])
-        except Exception:
-            return None
-    base = [64, 128, 200, 320, 512, 800, 1250, 2000]
-    jobs = [("spacev", "spacev-aker-0.6", f"{R}/backends/spacev10m/diskann", "", [160]),
-            ("spacev-real", "spacev-real", f"{R}/backends/spacev10m/diskann", "", []),
-            ("esci", "esci1m", f"{R}/backends/esci1m/diskann", "", [tuned("esci1m") or 128, tuned("esci1m", "0.9") or 64]),
-            ("triviaqa-base", "triviaqa-ip-0.6", f"{R}/backends/sphereip10m-pq256/diskann", "", []),
-            ("triviaqa-pq768", "triviaqa-ip-0.6", f"{R}/backends/index_study/pq768/index", "", []),
-            ("triviaqa-r128", "triviaqa-ip-0.6", f"{R}/backends/index_study/r128/index", "", []),
-            ("triviaqa-mips", "triviaqa-ip-0.6", f"{R}/backends/index_study/mips/index", "--raw-768", [])]
+    I = f"{R}/backends/index_study"
+    sp = [100, 128, 160, 200, 256, 320, 400, 512]
+    big = [128, 200, 320, 512, 800, 1000, 1250, 1600, 2000]
+    jobs = [("spacev", "spacev-aker-0.6", f"{R}/backends/spacev10m/diskann", sp),
+            ("spacev-pq110", "spacev-aker-0.6", f"{I}/spacev_pq110/index", sp),
+            ("spacev-real", "spacev-real", f"{R}/backends/spacev10m/diskann", big),
+            ("spacev-real-pq110", "spacev-real", f"{I}/spacev_pq110/index", big),
+            ("esci", "esci1m", f"{R}/backends/esci1m/diskann", [48, 64, 80, 100, 128, 160, 200]),
+            ("triviaqa-base", "triviaqa-ip-0.6", f"{R}/backends/sphereip10m-pq256/diskann", big),
+            ("triviaqa-pq768", "triviaqa-ip-0.6", f"{I}/pq768/index", big),
+            ("triviaqa-r128", "triviaqa-ip-0.6", f"{I}/r128/index", big),
+            ("triviaqa-aker", "triviaqa-ip-0.6", f"{I}/aker_tqa/index", big)]
     out = []
-    for name, prep, index, extra, more in jobs:
+    for name, prep, index, eff in jobs:
         if not os.path.exists(f"{index}/ann_disk.index"):
             continue
-        eff = " ".join(str(e) for e in sorted(set(base + [m for m in more if m])))
         js = f"{PROBE}/{name}.json"
         out.append(f"mkdir -p {PROBE}/logs && [ -f {js} ] || .venv-ann/bin/python -u {S}/latency_probe.py "
-                   f"--prep {R}/online/{prep} --index {index} {extra} --efforts {eff} --wait-quiet 30 "
+                   f"--prep {R}/online/{prep} --index {index} --efforts {' '.join(map(str, eff))} --wait-quiet 30 "
                    f"--out {js} > {PROBE}/logs/{name}.txt 2>&1")
     return out
+
+
+def target_of(prep):
+    """The recall target chosen for a workload (select_backend.py), 0.95 by default."""
+    import json as _json
+    try:
+        return f"{_json.load(open(f'{R}/backends/{prep}/choice.json'))['target']:g}"
+    except Exception:
+        return "0.95"
 
 
 def beam_for(prep, tgt="0.95"):
@@ -97,18 +102,16 @@ def beam_for(prep, tgt="0.95"):
     return min(ok, key=lambda g: g["mean_ms"])["W"] if ok else 2
 
 
-def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="timing_v3", stream="trace"):
+def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="timing_v4", stream="trace"):
     """Full-stream runs (doc 9m): the whole stream after warm-up, every `every`-th request timed
     live, cache updates as background work for every technique; ours static (no recalibration /
     audits), LRU recalibrating, seeded with the warm-up's labels."""
     pick = collect(prep, stream, b, True)
-    W = beam_for(prep)
     state = f"{R}/{out_root}/{prep}/state_b{b:g}.npz"
-    # runs at another beam width than 2 go to their own folder (doc 9s): every technique is re-timed
-    out = f"{R}/{out_root}/{prep}" if W == 2 else f"{R}/{out_root}_w{W}/{prep}"
+    out = f"{R}/{out_root}/{prep}"
     base = (f".venv-ann/bin/python -u {S}/eval_timing_online.py --prep {R}/online/{prep} "
             f"--budget {b:g} --sample-every {every} --maintenance background --wait-quiet 30 --stream {stream} "
-            f"--beam {W}")
+            f"--target-recall {target_of(prep)}")
     jobs = []
     if "ours" in techs:
         jobs.append((f"ours_s{every}_b{b:g}", f"--method ours --state {state}", ""))
@@ -165,17 +168,20 @@ def main():
     if a.set == "probe":
         print("\n".join(probe_lines()))
         return
-    if a.set == "final":        # after the fit-split start (doc 9p): ours / LRU at 1% and 10%,
-        out = []                # every technique at 0.3% and 3%
+    if a.set == "final":        # v4 (doc 9u): tuned DiskANN (search list x beam width); ordered so the
+        out = []                # plot fills in early
+        main = ("ours", "lru", "aker", "qvcache")
+        paper = ("aker_paper", "qvcache_paper")
+        for z in ("0.99", "0.6", "0.3"):
+            for b in (0.01, 0.1, 0.003, 0.03):
+                out += lines(f"spacev-aker-{z}", b, 20, techs=main + (paper if b in (0.01, 0.1) else ()))
+        for b in (0.01, 0.1, 0.003, 0.03):
+            out += lines("esci1m", b, 20, stream="random", techs=main + (paper if b in (0.01, 0.1) else ()))
         for z in ("0.99", "0.6", "0.3"):
             for b in (0.01, 0.1):
-                out += lines(f"spacev-aker-{z}", b, 20, techs=("ours", "lru", "aker_paper", "qvcache_paper"))
-            for b in (0.003, 0.03):
-                out += lines(f"spacev-aker-{z}", b, 20,
-                             techs=("ours", "lru", "aker", "qvcache", "aker_paper", "qvcache_paper"))
-        for b in (0.003, 0.01, 0.03, 0.1):           # ESCI (doc 9r): every technique, all four sizes
-            out += lines("esci1m", b, 20, stream="random",
-                         techs=("ours", "lru", "aker", "qvcache", "aker_paper", "qvcache_paper"))
+                out += lines(f"triviaqa-ip-{z}", b, 20, techs=main)
+        for b in (0.01, 0.1):
+            out += lines("spacev-real", b, 20, techs=main)
         print("\n".join(out))
         return
     if a.set == "sizes":

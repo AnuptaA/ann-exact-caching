@@ -31,12 +31,17 @@ logger = logging.getLogger(__name__)
 RES = Path("simulations/approximate_hits/results")
 DATA_IP = Path("datasets/aker/sphere-ip-10m-f32.npy")      # 769-d, inner-product transform
 DATA_RAW = Path("datasets/aker/sphere-10m-f32.npy")        # 768-d raw DPR_web passages
+DATA_SPACEV = Path("datasets/aker/spacev-10m.npy")         # 100-d int8
 VARIANTS = {
     "base": dict(kind="disk", data="ip", metric="l2", pq=256, R=64, L=100),
     "pq768": dict(kind="disk", data="ip", metric="l2", pq=768, R=64, L=100),
     "r128": dict(kind="disk", data="ip", metric="l2", pq=256, R=128, L=200),
     "mips": dict(kind="disk", data="raw", metric="mips", pq=256, R=64, L=100),
     "mem": dict(kind="memory", data="ip", metric="l2", pq=0, R=64, L=100),
+    # the Aker paper's DiskANN settings (doc 9u): TriviaQA degree 96, build list 100, 5.1 GB in-memory
+    # PQ (~512 bytes per vector); SPACEV degree 64, build list 100, 1.1 GB (~110 bytes per vector)
+    "aker_tqa": dict(kind="disk", data="ip", metric="l2", pq=512, R=96, L=100),
+    "spacev_pq110": dict(kind="disk", data="spacev", metric="l2", pq=110, R=64, L=100),
 }
 EFFORTS = [32, 64, 100, 128, 160, 200, 256, 320, 400, 512, 640, 800, 1000, 1250, 1600, 2000]
 
@@ -44,7 +49,7 @@ EFFORTS = [32, 64, 100, 128, 160, 200, 256, 320, 400, 512, 640, 800, 1000, 1250,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--variant", choices=list(VARIANTS), required=True)
-    ap.add_argument("--prep", default=str(RES / "online" / "triviaqa-ip-0.6"))
+    ap.add_argument("--prep", default=None, help="queries / truth (default: triviaqa-ip-0.6; SPACEV: spacev-aker-0.6)")
     ap.add_argument("--threads", type=int, default=24)
     ap.add_argument("--n-recall", type=int, default=2000)
     ap.add_argument("--n-latency", type=int, default=0,
@@ -57,7 +62,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     d = (RES / "backends" / "sphereip10m-pq256" / "diskann") if args.variant == "base" else (out / "index")
     d.mkdir(parents=True, exist_ok=True)
-    data_path = DATA_IP if v["data"] == "ip" else DATA_RAW
+    data_path = {"ip": DATA_IP, "raw": DATA_RAW, "spacev": DATA_SPACEV}[v["data"]]
     n_db = 10_000_000
     t0 = time.time()
     if not any(d.glob("ann*")):
@@ -74,8 +79,10 @@ def main():
                                          index_prefix="ann")
         del db
     build_s = time.time() - t0
-    prep = Path(args.prep)
+    prep = Path(args.prep or RES / "online" / ("spacev-aker-0.6" if v["data"] == "spacev" else "triviaqa-ip-0.6"))
     q = np.ascontiguousarray(np.load(prep / "q.npy"), dtype=np.float32)
+    if v["data"] == "spacev":
+        q = q.astype(np.int8)                      # the index stores int8 vectors (integer-valued queries)
     if v["data"] == "raw":
         assert np.allclose(q[:, -1], 0.0), "the ip queries carry a 0 in the appended dimension"
         q = np.ascontiguousarray(q[:, :-1])

@@ -651,7 +651,8 @@ def main():
     ap.add_argument("--diskann", default=None,
                     help="index directory (default: results/backends/<prep>/diskann, else spacev10m)")
     ap.add_argument("--stream", default="trace", help="request stream of the prep (ESCI: random)")
-    ap.add_argument("--beam", type=int, default=2, help="DiskANN beam width (reads in flight per round trip)")
+    ap.add_argument("--beam", type=int, default=None,
+                    help="DiskANN beam width (default: the backend file's, else 2)")
     ap.add_argument("--n", type=int, default=None,
                     help="requests after the warm-up (default: the rest of the stream, as the headline)")
     ap.add_argument("--sample-every", type=int, default=10,
@@ -699,11 +700,15 @@ def main():
     db_native = load_prep(prep, native=True)[0]               # what the DiskANN index takes (int8 / f32)
     db, q, top, kind = load_prep(prep)                        # float32 view for the caches
     stream = np.load(prep / "streams.npz")[args.stream]
+    bk = json.loads((RES / "backends" / prep.name / "diskann.json").read_text())
+    L = int(bk["targets"][args.target_recall]["effort"])
+    if args.beam is None:          # the setting the stored answers were produced with (doc 9u)
+        args.beam = int(bk["targets"][args.target_recall].get("beam", bk.get("beam", 2)))
+    if args.diskann is None and bk.get("index_dir"):           # the index the answers came from
+        args.diskann = bk["index_dir"]
     if args.diskann is None:                                  # the prep's own index (SPACEV: shared)
         own = RES / "backends" / prep.name / "diskann"
         args.diskann = str(own if (own / "ann_disk.index").exists() else RES / "backends" / "spacev10m" / "diskann")
-    bk = json.loads((RES / "backends" / prep.name / "diskann.json").read_text())
-    L = int(bk["targets"][args.target_recall]["effort"])
     ans = np.load(RES / "backends" / prep.name / "diskann.npz")[f"answer_{args.target_recall}"]
     st = dict(np.load(args.state, allow_pickle=False)) if args.state else None
     if st is not None:                  # ours / LRU: the requests after the state's warm-up
