@@ -2627,3 +2627,26 @@ the paper settings miss .9 almost everywhere (recall .13-.87). Timing "final" se
 (paper settings at all four sizes; ours / LRU at 1% / 10%; all at 0.3% / 3%).
 - TriviaQA DiskANN at recall .95 needs search list 2000: 3.3 s per query (one thread, loaded
   machine) vs 63 ms on SPACEV; full-stream timing at 1 in 20 would take 7-10 h per run.
+
+### 9r. Why DiskANN looked so slow: EBS; TriviaQA index study; ESCI timing (11-13)
+
+- Storage: the only disk is Amazon EBS (nvme0n1 "Amazon Elastic Block Store"; no local instance
+  store, no root for a RAM disk). DiskANN reads 4 KB sectors with O_DIRECT. A random 4 KB read
+  measured 6.5 ms (p50; p99 10 ms) while the TriviaQA tuning (24 threads) and two index builds ran:
+  the volume was saturated, so the 3.3 s per TriviaQA search (search list 2000) was mostly
+  contention. Quiet: the SPACEV timing runs imply ~0.7 ms per read (63 ms at search list 160,
+  beam 2), ~7x local NVMe. Latency is only meaningful on a quiet machine (the timing runs' guard
+  enforces it; ad-hoc measurements under load are not).
+- Even quiet, TriviaQA at search list 2000 would be ~0.7 s (0.9 at 800: ~0.3 s), so the index
+  itself is the problem: recall .752 at search list 128 (SPACEV: .95 at 160). Study
+  (index_study.py, recall vs search list on 2,000 queries, no latency): base (256-byte PQ, degree 64,
+  build list 100) vs pq768 (1 byte per dimension), r128 (degree 128, build list 200), mips (native
+  inner product on the raw 768-d vectors), mem (in-memory graph, no PQ: graph quality alone).
+  The tuning run on the old index (triviaqa-ip-0.3) was stopped (its answers would be obsolete).
+- SPACEV real log: .95 needs search list ~2,100 (quiet ~0.7 s); .9 ~1,250; .85 800; ~100 ms
+  allows search list ~280 (recall ~.72). Decision pending.
+- ESCI added: prep_io.load_prep (trace and ESCI preps) for eval_timing_online.py and
+  eval_aker_real.py; ESCI answers at .95 / .9 (eval_real_backend, index exists: .961 at search list
+  128); headline ESCI now with real Aker (stable grid + tuned, random stream) at all four sizes
+  (run_headline_esci.sh; plus 0.3% / 3% for ours / LRU / QVCache); timing states for ESCI and ESCI
+  in the final timing set and as a fourth panel.
