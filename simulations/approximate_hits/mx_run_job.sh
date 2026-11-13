@@ -10,7 +10,8 @@
 #    under a lock (flock) so two jobs cannot admit on the same reading; nothing starts while
 #    /tmp/mx/HOLD exists (a prep step is allocating). Commitment: see committed(); peak
 #    estimates (private GB, measured 11-10): ours at a 10% budget 18 (warm-up build), LRU at 10%
-#    10, other simulator jobs at 10% 12, at 1% 6, ESCI 5, real Aker 3 (TriviaQA 6), prep 90.
+#    10, other simulator jobs at 10% 12, at 1% 6, ESCI 5, real Aker 3 (TriviaQA 6), prep 90;
+#    11-13: 3% budget 12 (ours) / 8; TriviaQA simulator jobs x2 (769-d vectors; 3% runs were killed).
 #    Per-pool caps (xargs -P) only bound how many jobs a pool keeps waiting;
 #  - if it ends without its JSON (e.g. killed for memory, which leaves no traceback),
 #    waits and retries, at most 2 retries; a job that wrote a traceback is not retried.
@@ -25,9 +26,12 @@ LOCK=/tmp/mx/admit.lock
 est_of() {   # PEAK private memory estimate (GB) of a job class, from its command line
   printf '%s' "$1" | awk '
     /eval_aker_real.py/ { print (/triviaqa/ ? 6 : 3); exit }
-    /--budget 0\.1 / && /--method (static|greedy)/ { print 18; exit }
-    /--budget 0\.1 / && /--method lru/ { print 10; exit }
-    /--budget 0\.1 / { print 12; exit }
+    /--budget 0\.1 / && /--method (static|greedy)/ { print (/triviaqa/ ? 36 : 18); exit }
+    /--budget 0\.1 / && /--method lru/ { print (/triviaqa/ ? 20 : 10); exit }
+    /--budget 0\.1 / { print (/triviaqa/ ? 24 : 12); exit }
+    /--budget 0\.03 / && /--method (static|greedy)/ { print (/triviaqa/ ? 24 : 12); exit }
+    /--budget 0\.03 / { print (/triviaqa/ ? 16 : 8); exit }
+    /triviaqa/ { print 12; exit }
     /esci1m/ { print 5; exit }
     { print 6 }'
 }
@@ -43,8 +47,11 @@ committed() {   # GB committed by running jobs and prep steps
       else if (line ~ /--budget 0\.1 / && line ~ /--method (static|greedy)/) e = 18
       else if (line ~ /--budget 0\.1 / && line ~ /--method lru/) e = 10
       else if (line ~ /--budget 0\.1 /) e = 12
+      else if (line ~ /--budget 0\.03 / && line ~ /--method (static|greedy)/) e = 12
+      else if (line ~ /--budget 0\.03 /) e = 8
       else if (line ~ /esci1m/) e = 5
       else e = 6
+      if (line ~ /triviaqa/ && line !~ /eval_aker_real.py/) e = 2 * e     # 769-d vectors (11-13)
       print $1, $2, e }
     /^ *[0-9]+ +[0-9]+ [^ ]*python[^ ]* -u [^ ]*online_prepare(_data)?\.py/ { print $1, -1, 90 }' |
   while read pid age e; do

@@ -18,7 +18,7 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
 busy() {   # any running job that would disturb a timing run: python processes only (queued
   # mx_run_job.sh wrappers carry the same script names in their arguments but only wait on HOLD;
   # matching them deadlocked the first batch, 11-11)
-  pgrep -f "^[^ ]*python[^ ]* -u [^ ]*(online_sim|eval_aker_real|online_prepare|online_prepare_data|eval_real_backend|reembed_triviaqa_queries)\.py" > /dev/null
+  pgrep -f "^[^ ]*python[^ ]* -u [^ ]*(online_sim|eval_aker_real|online_prepare|online_prepare_data|reembed_triviaqa_queries)\.py" > /dev/null
 }
 
 echo "$(date +%T) waiting for the tuned-Aker runs and the warm-up states"
@@ -36,6 +36,10 @@ echo "$(date +%T) $(wc -l < $M/$NAME.txt) timing jobs ($SET)"
 keeper=$!
 echo "$(date +%T) prep lock taken, HOLD set; draining"
 while busy; do sleep 120; done
+# index tuning (eval_real_backend, hours, many threads) is suspended during timing, resumed after
+STOPPED=$(pgrep -f "^[^ ]*python[^ ]* -u [^ ]*eval_real_backend\.py")
+[ -n "$STOPPED" ] && kill -STOP $STOPPED && echo "$(date +%T) suspended index tuning: $STOPPED"
+sleep 10
 echo "$(date +%T) drained; timing"
 
 while IFS= read -r line; do
@@ -44,6 +48,7 @@ while IFS= read -r line; do
 done < $M/$NAME.txt
 
 touch $M/$NAME.DONE
+[ -n "$STOPPED" ] && kill -CONT $STOPPED && echo "$(date +%T) resumed index tuning: $STOPPED"
 kill $keeper 2>/dev/null
 rm -f $M/HOLD
 rmdir $M/prep.lock 2>/dev/null
