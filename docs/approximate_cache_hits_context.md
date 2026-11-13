@@ -2741,3 +2741,20 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   per-workload recall. Added to run_backend_redo.sh between the probe and the selection.
 - SPACEV with the Aker paper's 110-byte PQ (spacev_pq110): recall .9506 at search list 128, .9589
   at 160 (32-byte PQ: .943 / .953).
+
+### 9w. New workloads: MedRAG-Zipf and TripClick (11-13, started)
+
+- Authors: Proximity (arXiv 2503.05530, EuroMLSys '25) is EPFL SaCS (Kermarrec; Randl, de Vos,
+  Pires, Petrescu) with Huawei Zurich (Zhang Ji); QVCache (arXiv 2602.02057, Feb 2026) is EPFL DIAS
+  (Ailamaki; Goecer, Tsakalidou, Nicholson, Kim). Different groups; QVCache does not cite Proximity.
+  Proximity: one global similarity threshold tau, hand-set ("a hyperparameter to be optimized during
+  deployment"), flat or LSH lookup, in-memory FAISS backends (HNSW for wiki_dpr, Flat for PubMed).
+- MedRAG-Zipf (Proximity): PubMed corpus with MedCPT (768-d); PubMedQA questions drawn with Zipf 0.8,
+  each repeat reworded by an LLM. Corpus vectors exist: NCBI hosts MedCPT article embeddings of all
+  PubMed (ftp.ncbi.nlm.nih.gov/pub/lu/MedCPT/pubmed_embeddings/, 38 chunks x ~1M, float32, plus PMIDs);
+  MedRAG's own precomputed archive (UVA SharePoint) now returns 403. Downloading the NCBI chunks
+  (datasets/medrag/download_medcpt.sh, rate-limited to 15 MB/s for the quiet timing guard).
+  Queries: PubMedQA questions embedded with the MedCPT query encoder (cheap). Proximity did not
+  release its reworded queries (the repository holds only the cache code).
+- TripClick: text only (no vectors), access by a signed request form (non-commercial; data and
+  derived models may not be shared publicly).
