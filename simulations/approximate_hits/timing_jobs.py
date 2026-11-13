@@ -44,15 +44,71 @@ def qv_args(name):
     return f"--qv-D {m[1]} --qv-mini {m[2]} --qv-dims {m[3]} --qv-buckets {m[4]}"
 
 
+PROBE = f"{R}/latency_probe"
+
+
+def probe_lines():
+    """Quiet latency probe (latency_probe.py): search list x beam width per index (doc 9s)."""
+    import json as _json
+    import os
+    def tuned(prep, tgt="0.95"):
+        f = f"{R}/backends/{prep}/diskann.json"
+        try:
+            return int(_json.load(open(f))["targets"][tgt]["effort"])
+        except Exception:
+            return None
+    base = [64, 128, 200, 320, 512, 800, 1250, 2000]
+    jobs = [("spacev", "spacev-aker-0.6", f"{R}/backends/spacev10m/diskann", "", [160]),
+            ("spacev-real", "spacev-real", f"{R}/backends/spacev10m/diskann", "", []),
+            ("esci", "esci1m", f"{R}/backends/esci1m/diskann", "", [tuned("esci1m") or 128, tuned("esci1m", "0.9") or 64]),
+            ("triviaqa-base", "triviaqa-ip-0.6", f"{R}/backends/sphereip10m-pq256/diskann", "", []),
+            ("triviaqa-pq768", "triviaqa-ip-0.6", f"{R}/backends/index_study/pq768/index", "", []),
+            ("triviaqa-r128", "triviaqa-ip-0.6", f"{R}/backends/index_study/r128/index", "", []),
+            ("triviaqa-mips", "triviaqa-ip-0.6", f"{R}/backends/index_study/mips/index", "--raw-768", [])]
+    out = []
+    for name, prep, index, extra, more in jobs:
+        if not os.path.exists(f"{index}/ann_disk.index"):
+            continue
+        eff = " ".join(str(e) for e in sorted(set(base + [m for m in more if m])))
+        js = f"{PROBE}/{name}.json"
+        out.append(f"mkdir -p {PROBE}/logs && [ -f {js} ] || .venv-ann/bin/python -u {S}/latency_probe.py "
+                   f"--prep {R}/online/{prep} --index {index} {extra} --efforts {eff} --wait-quiet 30 "
+                   f"--out {js} > {PROBE}/logs/{name}.txt 2>&1")
+    return out
+
+
+def beam_for(prep, tgt="0.95"):
+    """Beam width for a prep's timing runs: at its tuned search list, the fastest beam width whose
+    results equal the beam-2 ones on >= 99% of the probe queries (the replay's stored answers are
+    beam-2 searches) and whose recall is within .005 of beam 2's; 2 without a probe."""
+    import json as _json
+    name = "esci" if prep.startswith("esci") else ("spacev-real" if prep == "spacev-real" else
+                                                   ("spacev" if prep.startswith("spacev") else None))
+    try:
+        L = int(_json.load(open(f"{R}/backends/{prep}/diskann.json"))["targets"][tgt]["effort"])
+        grid = _json.load(open(f"{PROBE}/{name}.json"))["grid"]
+    except Exception:
+        return 2
+    rows = [g for g in grid if g["L"] == L]
+    b2 = [g for g in rows if g["W"] == 2]
+    if not b2:
+        return 2
+    ok = [g for g in rows if g["same_as_beam2"] >= 0.99 and g["recall"] >= b2[0]["recall"] - 0.005]
+    return min(ok, key=lambda g: g["mean_ms"])["W"] if ok else 2
+
+
 def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="timing_v3", stream="trace"):
     """Full-stream runs (doc 9m): the whole stream after warm-up, every `every`-th request timed
     live, cache updates as background work for every technique; ours static (no recalibration /
     audits), LRU recalibrating, seeded with the warm-up's labels."""
     pick = collect(prep, stream, b, True)
-    out = f"{R}/{out_root}/{prep}"
-    state = f"{out}/state_b{b:g}.npz"
+    W = beam_for(prep)
+    state = f"{R}/{out_root}/{prep}/state_b{b:g}.npz"
+    # runs at another beam width than 2 go to their own folder (doc 9s): every technique is re-timed
+    out = f"{R}/{out_root}/{prep}" if W == 2 else f"{R}/{out_root}_w{W}/{prep}"
     base = (f".venv-ann/bin/python -u {S}/eval_timing_online.py --prep {R}/online/{prep} "
-            f"--budget {b:g} --sample-every {every} --maintenance background --wait-quiet 30 --stream {stream}")
+            f"--budget {b:g} --sample-every {every} --maintenance background --wait-quiet 30 --stream {stream} "
+            f"--beam {W}")
     jobs = []
     if "ours" in techs:
         jobs.append((f"ours_s{every}_b{b:g}", f"--method ours --state {state}", ""))
@@ -85,7 +141,7 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--v2", action="store_true", help="the first batch (2,000 requests after warm-up)")
-    ap.add_argument("--set", choices=["matrix", "lru_retime", "retime", "sizes", "final"], default="matrix",
+    ap.add_argument("--set", choices=["matrix", "lru_retime", "retime", "sizes", "final", "probe"], default="matrix",
                     help="lru_retime: LRU again after the empty-search fix (doc 9n); sizes: the extra "
                          "cache sizes 0.3% and 3%, every technique, 1 in 20")
     a = ap.parse_args()
@@ -105,6 +161,9 @@ def main():
             for b in (0.01, 0.1):
                 out += lines(f"spacev-aker-{z}", b, 20, techs=("ours", "lru"))
         print("\n".join(out))
+        return
+    if a.set == "probe":
+        print("\n".join(probe_lines()))
         return
     if a.set == "final":        # after the fit-split start (doc 9p): ours / LRU at 1% and 10%,
         out = []                # every technique at 0.3% and 3%

@@ -248,12 +248,12 @@ def open_diskann(path, nodes, init_threads=32):
                                      cache_mechanism=1 if nodes else 0, index_prefix="ann")
 
 
-def time_backend(ix, xs, k, L):
+def time_backend(ix, xs, k, L, beam=2):
     """Latency of one DiskANN search per query (xs already in the index's dtype)."""
     lat = np.empty(len(xs))
     for i, x in enumerate(xs):
         a = time.perf_counter()
-        ix.search(x, k_neighbors=k, complexity=L, beam_width=2)
+        ix.search(x, k_neighbors=k, complexity=L, beam_width=beam)
         lat[i] = time.perf_counter() - a
     return lat
 

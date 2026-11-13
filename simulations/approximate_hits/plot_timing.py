@@ -47,7 +47,9 @@ VERSION, EVERY = "timing_v3", 20     # full-stream runs, 1 request in EVERY time
 
 def load(prep, budget, every=None):
     every = EVERY if every is None else every
-    d = RES / VERSION / prep
+    from simulations.approximate_hits.timing_jobs import beam_for
+    W = beam_for(prep)
+    d = RES / (VERSION if W == 2 else f"{VERSION}_w{W}") / prep      # the prep's chosen beam width
     out = {}
     for f in sorted(d.glob(f"*_s{every}_b{budget:g}.json")) if d.exists() else []:
         if f.name.startswith(("greedy_state", "state_")):

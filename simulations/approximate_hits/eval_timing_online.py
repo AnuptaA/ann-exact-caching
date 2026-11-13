@@ -651,6 +651,7 @@ def main():
     ap.add_argument("--diskann", default=None,
                     help="index directory (default: results/backends/<prep>/diskann, else spacev10m)")
     ap.add_argument("--stream", default="trace", help="request stream of the prep (ESCI: random)")
+    ap.add_argument("--beam", type=int, default=2, help="DiskANN beam width (reads in flight per round trip)")
     ap.add_argument("--n", type=int, default=None,
                     help="requests after the warm-up (default: the rest of the stream, as the headline)")
     ap.add_argument("--sample-every", type=int, default=10,
@@ -747,7 +748,7 @@ def main():
     xs_native = q.astype(db_native.dtype) if db_native.dtype != np.float32 else q
 
     def live(qi, kk):
-        r = ix.search(xs_native[qi], k_neighbors=kk, complexity=max(L, kk), beam_width=2)
+        r = ix.search(xs_native[qi], k_neighbors=kk, complexity=max(L, kk), beam_width=args.beam)
         return np.asarray(r.identifiers if hasattr(r, "identifiers") else r[0], dtype=np.int64)
 
     def stored(qi, kk):
@@ -838,8 +839,8 @@ def main():
     # DiskANN alone, and with the cache's memory as its node cache
     from simulations.approximate_hits.eval_timing import time_backend
     xq = np.ascontiguousarray(xs_native[req])
-    time_backend(ix, xq[:args.warm], args.k, L)
-    lat = time_backend(ix, xq, args.k, L)
+    time_backend(ix, xq[:args.warm], args.k, L, args.beam)
+    lat = time_backend(ix, xq, args.k, L, args.beam)
     res["backend"] = summary(lat)
     lat_mem = None
     if not args.no_equal_memory:
@@ -847,8 +848,8 @@ def main():
         nodes = int(mem0 // node_bytes)
         del ix
         ix2 = open_diskann(args.diskann, nodes)
-        time_backend(ix2, xq[:args.warm], args.k, L)
-        lat_mem = time_backend(ix2, xq, args.k, L)
+        time_backend(ix2, xq[:args.warm], args.k, L, args.beam)
+        lat_mem = time_backend(ix2, xq, args.k, L, args.beam)
         res["backend_mem"] = dict(summary(lat_mem), nodes_cached=nodes)
     b0 = res["backend"]["mean_ms"]
     res["speedup"] = {"overall": b0 / res["cache"]["mean_ms"],
