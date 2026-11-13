@@ -22,6 +22,8 @@ CANDIDATES = {
     "esci1m": ["esci"],
     **{f"triviaqa-ip-{z}": ["triviaqa-base", "triviaqa-pq768", "triviaqa-r128", "triviaqa-aker"]
        for z in ("0.3", "0.6", "0.99")},
+    "tripclick-ip": ["tripclick"],
+    "medrag-ip": ["medrag"],
 }
 
 

@@ -1034,7 +1034,8 @@ def main():
     ap.add_argument("--R", type=int, default=500)
     ap.add_argument("--bits", type=int, default=4)
     ap.add_argument("--batch", type=int, default=1000)
-    ap.add_argument("--warmup", type=int, default=20000)
+    ap.add_argument("--warmup", type=int, default=None,
+                    help="warm-up requests (default: min(20000, a fifth of the full stream); 11-13: MedRAG-Zipf has 10k)")
     ap.add_argument("--audit-rate", type=float, default=0.1, help="share of hits audited")
     ap.add_argument("--cal-span", type=int, default=20000,
                     help="calibrate on the labeled queries among the last this many queries")
@@ -1103,6 +1104,8 @@ def main():
     args = ap.parse_args()
     K_LIMIT[0] = args.max_ball_k
     D, streams = load(args.prep, args)
+    if args.warmup is None:         # from the FULL stream (--max-queries truncates it for the states)
+        args.warmup = min(20000, len(streams[args.stream]) // 5)
     stream = streams[args.stream][:args.max_queries]
     out = Path(args.out or Path(args.prep) / f"sim_{args.stream}_b{args.budget:g}")
     out.mkdir(parents=True, exist_ok=True)

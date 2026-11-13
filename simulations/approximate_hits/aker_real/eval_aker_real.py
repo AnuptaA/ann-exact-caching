@@ -422,7 +422,8 @@ def main():
     ap.add_argument("--risk", type=float, default=0.35)
     ap.add_argument("--alpha-tighten", type=float, default=0.9)
     ap.add_argument("--alpha-loosen", type=float, default=1.1)
-    ap.add_argument("--warmup", type=int, default=20000)
+    ap.add_argument("--warmup", type=int, default=None,
+                    help="warm-up requests (default: min(20000, a fifth of the full stream); 11-13: MedRAG-Zipf has 10k)")
     ap.add_argument("--batch", type=int, default=1000)
     ap.add_argument("--max-requests", type=int, default=None)
     ap.add_argument("--progress", type=int, default=5000, help="log every this many requests")
@@ -453,6 +454,8 @@ def main():
     sys.path.append(str(HERE.parent.parent.parent))
     prep = Path(args.prep)
     db, q, top, stream = load(prep, args.stream, native=args.timing)
+    if args.warmup is None:
+        args.warmup = min(20000, len(stream) // 5)
     if args.prox_frac is not None:
         import os
         rows = np.random.default_rng(0).choice(len(q), min(5000, len(q)), replace=False)

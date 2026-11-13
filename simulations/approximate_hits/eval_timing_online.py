@@ -663,8 +663,9 @@ def main():
     ap.add_argument("--ours-recal", action="store_true",
                     help="ours: recalibrate (with audits) as the simulator; default static")
     ap.add_argument("--warm", type=int, default=200, help="untimed requests first (each arm)")
-    ap.add_argument("--warmup", type=int, default=20000,
-                    help="aker / qvcache: warm-up requests (ours / lru: the state's warm-up)")
+    ap.add_argument("--warmup", type=int, default=None,
+                    help="aker / qvcache: warm-up requests, default min(20000, a fifth of the stream) "
+                         "(ours / lru: the state's warm-up)")
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--target", type=float, default=0.9)
     ap.add_argument("--cal-delta", type=float, default=0.05, help="ours / lru: calibration delta")
@@ -700,6 +701,8 @@ def main():
     db_native = load_prep(prep, native=True)[0]               # what the DiskANN index takes (int8 / f32)
     db, q, top, kind = load_prep(prep)                        # float32 view for the caches
     stream = np.load(prep / "streams.npz")[args.stream]
+    if args.warmup is None:
+        args.warmup = min(20000, len(stream) // 5)
     bk = json.loads((RES / "backends" / prep.name / "diskann.json").read_text())
     L = int(bk["targets"][args.target_recall]["effort"])
     if args.beam is None:          # the setting the stored answers were produced with (doc 9u)

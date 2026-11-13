@@ -47,7 +47,9 @@ LAYOUT = [
      ("TriviaQA, Zipf 0.99", "triviaqa-ip-0.99", "trace", True)],
     [("ESCI (no repeated queries)", "esci1m", "random", True),
      ("SPACEV real query log", "spacev-real", "trace", True),
-     None],
+     ("TripClick real health-search log", "tripclick-ip", "trace", True)],
+    [("MedRAG-Zipf (Proximity; LLM-reworded repeats)", "medrag-ip", "trace", True),
+     None, None],
 ]
 OURS_NAMES = ["greedy_score_rebuild", "greedy_none", "static_default"]
 LRU_NAMES = ["lru_k10_none", "lru_k20_none", "lru_k20_all"]     # configurations kept at every budget
@@ -210,19 +212,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(RES / "summary" / "headline_draft.png"))
     args = ap.parse_args()
-    fig = plt.figure(figsize=(14.5, 12.2))
-    outer = fig.add_gridspec(3, 3, hspace=0.34, wspace=0.30, left=0.055, right=0.955, top=0.915,
-                             bottom=0.065)
+    fig = plt.figure(figsize=(14.5, 16.0))
+    outer = fig.add_gridspec(len(LAYOUT), 3, hspace=0.34, wspace=0.30, left=0.055, right=0.955, top=0.935,
+                             bottom=0.05)
     for r, row in enumerate(LAYOUT):
         for c, cell in enumerate(row):
             if cell is None:
                 continue
             title, prep, stream, real = cell
             data = {b: collect(prep, stream, b, real) for b in BUDGETS}
-            last = (c == 2) or (r == 2 and c == 1)
+            last = c == max(i for i, x in enumerate(row) if x is not None)
             draw_panel(fig, outer[r, c], title, data, speedup_axis=last, first_col=(c == 0))
     # legend and notes in the free cell
-    ax = fig.add_subplot(outer[2, 2])
+    ax = fig.add_subplot(outer[len(LAYOUT) - 1, 1:])
     ax.axis("off")
     order = ["ours", "lru", "aker", "aker_paper", "qvcache", "qvcache_paper"]
     handles = [plt.Line2D([], [], color=STYLE[t][1], marker=STYLE[t][2], lw=STYLE[t][3], ms=7, label=STYLE[t][0],
@@ -245,8 +247,8 @@ def main():
             fontsize=7, va="top", transform=ax.transAxes)
     fig.suptitle("DRAFT: hit rate at the same promised recall (0.9), exact backend, k = 10\n"
                  "ours reaches the target with no tuning; Aker / QVCache only when tuned by hand (solid) - not with their papers' settings (dashed)",
-                 fontsize=11, y=0.985)
-    fig.text(0.5, 0.025, "cache size (fraction of the dataset, cached vectors)", ha="center", fontsize=10)
+                 fontsize=11, y=0.99)
+    fig.text(0.5, 0.018, "cache size (fraction of the dataset, cached vectors)", ha="center", fontsize=10)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, dpi=130)
     print("wrote", args.out)

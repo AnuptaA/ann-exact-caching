@@ -61,7 +61,10 @@ def probe_lines():
             ("triviaqa-base", "triviaqa-ip-0.6", f"{R}/backends/sphereip10m-pq256/diskann", big),
             ("triviaqa-pq768", "triviaqa-ip-0.6", f"{I}/pq768/index", big),
             ("triviaqa-r128", "triviaqa-ip-0.6", f"{I}/r128/index", big),
-            ("triviaqa-aker", "triviaqa-ip-0.6", f"{I}/aker_tqa/index", big)]
+            ("triviaqa-aker", "triviaqa-ip-0.6", f"{I}/aker_tqa/index", big),
+            # new workloads (11-13, doc 9x / 9y): one DiskANN each (degree 64, build list 100, 256-byte PQ)
+            ("tripclick", "tripclick-ip", f"{R}/backends/tripclick-ip/diskann", big),
+            ("medrag", "medrag-ip", f"{R}/backends/medrag-ip/diskann", big)]
     out = []
     for name, prep, index, eff in jobs:
         if not os.path.exists(f"{index}/ann_disk.index"):
@@ -144,7 +147,7 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--v2", action="store_true", help="the first batch (2,000 requests after warm-up)")
-    ap.add_argument("--set", choices=["matrix", "lru_retime", "retime", "sizes", "final", "probe"], default="matrix",
+    ap.add_argument("--set", choices=["matrix", "lru_retime", "retime", "sizes", "final", "probe", "new"], default="matrix",
                     help="lru_retime: LRU again after the empty-search fix (doc 9n); sizes: the extra "
                          "cache sizes 0.3% and 3%, every technique, 1 in 20")
     a = ap.parse_args()
@@ -182,6 +185,17 @@ def main():
                 out += lines(f"triviaqa-ip-{z}", b, 20, techs=main)
         for b in (0.01, 0.1):
             out += lines("spacev-real", b, 20, techs=main)
+        print("\n".join(out))
+        return
+    if a.set == "new":          # new workloads (doc 9x / 9y), once their backend is chosen and states exist
+        import os
+        out = []
+        for prep in ("tripclick-ip", "medrag-ip"):
+            if not os.path.exists(f"{R}/backends/{prep}/choice.json"):
+                continue
+            for b in (0.01, 0.1, 0.003, 0.03):
+                if os.path.exists(f"{R}/timing_v4/{prep}/state_b{b:g}.npz"):
+                    out += lines(prep, b, 20, techs=("ours", "lru", "aker", "qvcache"))
         print("\n".join(out))
         return
     if a.set == "sizes":

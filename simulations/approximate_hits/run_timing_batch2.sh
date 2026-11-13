@@ -33,8 +33,10 @@ echo "$(date +%T) $(wc -l < $M/$NAME.txt) timing jobs ($SET)"
 # then decides, by measurement, when the machine is quiet.
 REG=$M/registry; mkdir -p $REG
 : > $M/$NAME.stopped
-suspend_all() {   # every python process of ours except the timing runs (registry priority timing)
-  for p in $(ps -u "$(id -u)" -o pid=,comm= | awk '$2 ~ /^python/ {print $1}'); do
+suspend_all() {   # every python process of ours except the timing runs (registry priority timing),
+  # and our other CPU / disk / network consumers (11-13: the llama.cpp paraphrasing server, curl
+  # downloads); their clients and download loops retry after the resume
+  for p in $(ps -u "$(id -u)" -o pid=,comm= | awk '$2 ~ /^(python|llama-server|curl)/ {print $1}'); do
     [ -f $REG/$p ] && [ "$(awk '{print $2}' $REG/$p)" = timing ] && continue
     grep -qx "$p" $M/$NAME.stopped || { kill -STOP $p 2>/dev/null && echo $p >> $M/$NAME.stopped; }
   done

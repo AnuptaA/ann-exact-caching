@@ -2784,3 +2784,50 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   at 512. build_workload.py: bf16 autocast, length-sorted batches (order restored), 20k-document shards
   written atomically, `--part i/N` workers. Run as 6 parts x 8 threads through the queue
   (/tmp/mx/tripclick.sh: TC_ENC -> assemble + queries -> online_prepare -> TC_PREP.DONE), ~7 h.
+- Encoder memory (11-13): the first 6 workers grew to ~36 GB each (216 GB). A 640-document test
+  stays at 3.7 GB, so the growth is in the number of distinct batch shapes (length-sorted batches:
+  hundreds), most likely per-shape state of the CPU bf16 kernels (e.g. a repacked weight copy).
+  Fix: pad every batch to a multiple of 64 tokens (`pad_multiple=64`, at most 8 shapes; speed
+  unchanged in the test). Restarted workers hold at ~7 GB. Shards of the first run (0-5) were kept.
+
+### 9y. MedRAG-Zipf workload (11-13)
+
+- Proximity's recipe (arXiv 2503.05530, 4.2): MIRAGE's 500 PubMedQA questions (`benchmark.json`,
+  MIRAGE GitHub), 10,000 independent draws with Zipf 0.8 (no temporal locality), every occurrence
+  reworded by GPT-4o, each version unique across the dataset (they checked the RAG answer is the same
+  for all rewordings); corpus MedRAG PubMed, 23.9M snippets, MedCPT, FAISS-Flat (exact).
+- Ours (decided with Jialin 11-13: local-LLM rewording): Qwen2.5-7B-Instruct, Q8_0 GGUF, served by
+  llama.cpp (built in ~/third_party/llama.cpp, CPU, `-DLLAMA_UI_GZIP=OFF` since the web-UI asset
+  step fails offline) on 127.0.0.1:18080, 64 parallel slots (`/tmp/mx/llama_server.sh`). Hugging Face
+  transformers bf16 generation on this CPU was ~0.11 rewordings/s (bf16 matmuls not faster than
+  fp32: no AMX path); llama.cpp batched: ~116 generated tokens/s at 64 parallel under load.
+- Draw (`datasets/medrag/build_workload.py draw`, seed 0): top question 771 occurrences (paper ~700),
+  median 10, min 1.
+- Rewordings (`datasets/medrag/paraphrase.py`): sampled (temperature 1, top-p 0.95) with one of 10
+  wording hints that all require the same meaning; for questions with >= 20 accepted versions, 15 of
+  them are shown with "worded differently from these"; unique after normalization (lowercase,
+  alphanumerics) against the original and all accepted versions; verified by the same model
+  (greedy, "do A and B ask exactly the same thing, same yes/no/maybe answer?"; only Yes accepted).
+  Stand-in for Proximity's same-answer check. Stats in `datasets/medrag/paraphrase_stats.json`.
+- Corpus: NCBI MedCPT article embeddings (all PubMed, 38 chunks) restricted to the PMIDs of MedRAG's
+  corpus (`medrag_pmids.py` streams the 70 GB MedRAG/pubmed JSONL and keeps only PMIDs), inner
+  product -> Euclidean (769-d) -> `datasets/aker/medrag-ip-docs.npy` (~74 GB). Requests: rewordings
+  in stream order (each question's versions shuffled), MedCPT query encoder, 0 appended.
+- Workload `medrag-ip` in run_e2e_oracle_trace.WORKLOADS. Stream length 10,000, so the simulators'
+  warm-up default became min(20000, a fifth of the FULL stream) (online_sim, eval_aker_real,
+  eval_timing_online; every existing stream has >= 88k requests, so nothing else changes).
+- Chain: `/tmp/mx/medrag.sh` (rewordings -> query vectors; downloads -> PMIDs -> base; prep ->
+  `run_headline_new_workload.sh medrag-ip`).
+
+### 9z. New workloads in the headline and timing plots (11-13)
+
+- `run_headline_new_workload.sh <prep>`: the full TriviaQA-ip-0.6 job set (every line that ran for it:
+  ours / LRU configurations, Aker / QVCache grids, real Aker paper and tuned settings, 0.3/1/3/10%),
+  latest line per output JSON, workload name substituted (292 simulator + 68 real-Aker jobs).
+- `run_timing_new_workload.sh <prep>`: DiskANN (degree 64, build list 100, 256-byte PQ) -> quiet
+  probe (after TIMING4) -> workload recall -> select_backend -> answers -> warm-up states (warm-up
+  min(20000, n/5), state run stops 1000 later) -> timing_jobs `--set new` -> plot_timing.
+- plot_headline: TripClick in the third row, MedRAG-Zipf in a fourth row (legend beside it);
+  plot_timing: two more panels.
+- Quiet timing batches now also suspend our `llama-server` and `curl` processes (run_timing_batch2.sh),
+  not only python: both would disturb latency (CPU; EBS / network).

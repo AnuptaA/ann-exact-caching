@@ -65,9 +65,13 @@ def searches():
 _MODELS = {}
 
 
-def encode(model_name, texts, max_len, batch, pairs=False):
+def encode(model_name, texts, max_len, batch, pairs=False, pad_multiple=None):
     """CLS embeddings, fp32 output. bf16 autocast on CPU (cosine to fp32 >= 0.99996 on a TripClick
-    sample, ~2x faster) and length-sorted batches (little padding; order restored)."""
+    sample, ~2x faster) and length-sorted batches (little padding; order restored).
+    pad_multiple: pad every batch to a multiple of this many tokens. Without it, length-sorted
+    batches have hundreds of distinct shapes, and the CPU bf16 kernels keep per-shape state (most
+    likely a repacked weight copy, ~220 MB for MedCPT): workers grew to ~36 GB each (11-13);
+    64 leaves at most 8 shapes for 512 tokens."""
     import torch
     from transformers import AutoModel, AutoTokenizer
     if model_name not in _MODELS:
@@ -84,9 +88,10 @@ def encode(model_name, texts, max_len, batch, pairs=False):
         for b in range(0, len(texts), batch):
             sel = order[b:b + batch]
             chunk = [texts[i] for i in sel]
-            enc = tok(chunk, truncation=True, padding=True, return_tensors="pt", max_length=max_len) if not pairs \
+            enc = tok(chunk, truncation=True, padding=True, return_tensors="pt", max_length=max_len,
+                      pad_to_multiple_of=pad_multiple) if not pairs \
                 else tok([t for t, _ in chunk], [a for _, a in chunk], truncation=True, padding=True,
-                         return_tensors="pt", max_length=max_len)
+                         return_tensors="pt", max_length=max_len, pad_to_multiple_of=pad_multiple)
             out[sel] = model(**enc).last_hidden_state[:, 0, :].float().numpy()
     return out
 
@@ -141,7 +146,7 @@ def main():
             f = shard_dir / f"docs_{s0 // args.shard:04d}.npy"
             if f.exists() or (s0 // args.shard) % pn != pi:
                 continue
-            x = encode("ncbi/MedCPT-Article-Encoder", pairs[s0:s0 + args.shard], 512, 32, pairs=True)
+            x = encode("ncbi/MedCPT-Article-Encoder", pairs[s0:s0 + args.shard], 512, 32, pairs=True, pad_multiple=64)
             np.save(str(f) + ".tmp.npy", x)
             Path(str(f) + ".tmp.npy").rename(f)   # atomic: a killed worker leaves no partial shard
             logger.info(f"documents shard {s0 // args.shard} ({min(s0 + args.shard, len(pairs))} / {len(pairs)})")

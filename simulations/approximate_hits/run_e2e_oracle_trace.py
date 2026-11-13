@@ -74,6 +74,10 @@ WORKLOADS = {
     # datasets/tripclick/build_workload.py (context doc 9x; data must not be shared)
     "tripclick-ip": {"base": "tripclick-ip-docs.npy",
                      "trace": ["tripclick-ip-requests-2018-01-01.npy"]},
+    # MedRAG-Zipf (Proximity): 10k Zipf-0.8 draws of the 500 PubMedQA questions, every occurrence
+    # reworded by a local LLM, over MedRAG's PubMed (NCBI MedCPT embeddings), inner product ->
+    # Euclidean (769-d); datasets/medrag/build_workload.py (context doc 9y)
+    "medrag-ip": {"base": "medrag-ip-docs.npy", "trace": ["medrag-ip-requests.npy"]},
 }
 
 #-------------------------------------------------------------------------------
