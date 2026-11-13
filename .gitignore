@@ -258,3 +258,11 @@ simulations/synthetic/processed/
 datasets/aker/
 # Built shim over the real Aker library (simulations/approximate_hits/aker_real/build.sh)
 simulations/approximate_hits/aker_real/libakershim.so
+# TripClick data: terms forbid sharing any part
+# TripClick: its terms forbid sharing any data or derived data; only the scripts are tracked
+datasets/tripclick/*
+!datasets/tripclick/*.py
+# MedRAG / PubMed MedCPT embeddings (NCBI download, ~110 GB) and derived files
+datasets/medrag/*
+!datasets/medrag/*.sh
+!datasets/medrag/*.py

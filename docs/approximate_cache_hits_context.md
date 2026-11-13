@@ -2758,3 +2758,29 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   release its reworded queries (the repository holds only the cache code).
 - TripClick: text only (no vectors), access by a signed request form (non-commercial; data and
   derived models may not be shared publicly).
+
+### 9x. TripClick workload: data, log profile, encoding (11-13)
+
+- Access: Hugging Face dataset `TripClick/tripclick` (gated; token in ~/.cache/huggingface/token,
+  mode 600). The TripClick-trained encoder (Navid/tripclick-bert-base-dot) is not found, so documents
+  and queries use MedCPT (ncbi/MedCPT-Article-Encoder, [title, abstract], 512 tokens;
+  ncbi/MedCPT-Query-Encoder, 64 tokens; CLS; inner product), the encoder family of the PubMed
+  embeddings used for MedRAG. Downloaded by datasets/tripclick/download.py into datasets/tripclick/raw.
+- Not shareable: everything under datasets/tripclick/ except the .py scripts is git-ignored, as are
+  datasets/aker/ (vectors) and results/ except summary plots. Never commit TripClick-derived files.
+- Log: 5,317,350 clicks -> 2,457,146 searches (one per run of consecutive same-query clicks in a
+  session; query lowercased, whitespace-normalized), 1,671,169 distinct; 32% of all searches repeat
+  an earlier query; top 1000 queries cover 7.3%; 2013-2020 at ~290-360k searches / year.
+  Exact-repeat share of a window grows with its length (2018-01-01: 50k 13.2%, 100k 16.6%, 200k 19.9%,
+  400k 22.1%; similar for 2016 and 2019 starts).
+- Window used: 100k consecutive searches from 2018-01-01 (2018-01-01 to 2018-04-12, 83,367 distinct,
+  16.6% exact repeats), matching the 100k requests of the other traces. Approximate hits can exceed
+  the exact-repeat share (near-duplicate queries); workload name `tripclick-ip` in
+  run_e2e_oracle_trace.WORKLOADS (base tripclick-ip-docs.npy, 1,523,878 x 769).
+- Inner product -> Euclidean as for TriviaQA ip: documents get sqrt(M^2 - |x|^2) appended, queries 0.
+- Encoding speed (CPU): fp32 48 threads 6.9 docs/s (61 h for 1.52M). bf16 autocast at 8 threads per
+  process ~12.7 docs/s per process on a quiet machine (8.4 under load ~56), cosine to fp32 >= 0.99995
+  (checked on 96 documents; inner-product relative error <= 1.3e-3). Mean 340 tokens, 11% truncated
+  at 512. build_workload.py: bf16 autocast, length-sorted batches (order restored), 20k-document shards
+  written atomically, `--part i/N` workers. Run as 6 parts x 8 threads through the queue
+  (/tmp/mx/tripclick.sh: TC_ENC -> assemble + queries -> online_prepare -> TC_PREP.DONE), ~7 h.

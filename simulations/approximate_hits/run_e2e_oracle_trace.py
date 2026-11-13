@@ -69,6 +69,11 @@ WORKLOADS = {
        for s in ("0.3", "0.6", "0.99")},
     "spacev-real": {"base": "spacev-10m.npy",
                     "trace": ["spacev1b/query_log.bin", "spacev1b/query.bin"]},
+    # TripClick health search log (100k consecutive searches from 2018-01-01) over its 1.52M
+    # MEDLINE documents, MedCPT encoders, inner product -> Euclidean (769-d); built by
+    # datasets/tripclick/build_workload.py (context doc 9x; data must not be shared)
+    "tripclick-ip": {"base": "tripclick-ip-docs.npy",
+                     "trace": ["tripclick-ip-requests-2018-01-01.npy"]},
 }
 
 #-------------------------------------------------------------------------------
