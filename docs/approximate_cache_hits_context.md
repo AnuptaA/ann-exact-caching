@@ -2650,3 +2650,20 @@ the paper settings miss .9 almost everywhere (recall .13-.87). Timing "final" se
   128); headline ESCI now with real Aker (stable grid + tuned, random stream) at all four sizes
   (run_headline_esci.sh; plus 0.3% / 3% for ours / LRU / QVCache); timing states for ESCI and ESCI
   in the final timing set and as a fourth panel.
+
+### 9s. Disk = EBS by design; beam width; quiet latency probe (11-13)
+
+- Jialin: EBS counts as the disk (any slower layer below the cache); not an issue to discuss.
+- The 3.3 s TriviaQA figure was an ad-hoc check run outside the harness while the queue was busy
+  (no quiet guard); every timing run uses the guard (other processes <= 1 core and <= 50 MB/s,
+  verdict recorded) and the batch suspends our other jobs; the SPACEV numbers are quiet.
+- Why search list 2000 is slow on disk while cheap in memory: each expanded node is one random
+  4 KB read (~0.7 ms quiet here); with beam width W, W reads per round trip, so latency ~
+  (expanded nodes / W) x read latency (compute negligible). W = 2 (DiskANN default) was never tuned.
+- latency_probe.py: on the quiet machine, recall and single-query latency per (search list,
+  beam width 2 / 4 / 8 / 16) for SPACEV, SPACEV real log, ESCI, TriviaQA (current index and the
+  study's disk variants); also the share of queries whose top-10 equals the beam-2 result (the
+  replay's stored answers are beam-2 searches). Timing runs then use, per index, the fastest beam
+  width at the tuned search list with >= 99% identical results and recall within .005
+  (timing_jobs.beam_for); runs at another width go to results/timing_v3_w<W> and every technique
+  is re-timed there. Chain: probe batch (after the index study and ESCI states) -> final batch.
