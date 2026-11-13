@@ -2721,3 +2721,23 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
 - warm-up states and timing in results/timing_v4; final set (112 runs, ordered): SPACEV x3 (4 sizes
   x ours / LRU / Aker / QVCache tuned, papers' settings at 1% / 10%), ESCI (same), TriviaQA x3
   (1% / 10%, four techniques), SPACEV real log (1% / 10%); plot_timing: 8 panels in 2 rows.
+
+### 9v. Other workloads with repetition; per-workload backend tuning (11-13)
+
+- Real or near-repeated query workloads in related work:
+  - Proximity (EPFL; arXiv 2503.05530) MedRAG-Zipf: PubMed 23.9M snippets (MedCPT, 768-d),
+    PubMedQA's 500 questions drawn 10,000 times with Zipf 0.8, each repeat reworded by an LLM
+    (synthetic repetition, near-duplicates in space); also MMLU over wiki_dpr (21M passages), each
+    question 4 times with small textual prefixes.
+  - TripClick (arXiv 2103.07901): real click logs of the Trip Database health search engine,
+    ~5.2M interactions 2013-2020 over ~1.5M MEDLINE articles; head / torso / tail test sets by real
+    query frequency; text only (we would embed documents and queries).
+  - Not verified here: ORCAS (MS MARCO clicks with query counts), LMSYS-Chat-1M (LLM prompts).
+  Not added yet (asked Jialin).
+- DiskANN selection was per dataset (recall from one trace's queries applied to all three Zipf
+  traces). Now per workload: workload_recall.py measures recall@10 over each workload's own
+  REQUESTS (5,000 sampled from the stream after warm-up, repeats included) for every probed
+  (search list, beam width); latency stays per index (quiet probe); select_backend.py uses the
+  per-workload recall. Added to run_backend_redo.sh between the probe and the selection.
+- SPACEV with the Aker paper's 110-byte PQ (spacev_pq110): recall .9506 at search list 128, .9589
+  at 160 (32-byte PQ: .943 / .953).
