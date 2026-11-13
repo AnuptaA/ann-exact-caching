@@ -16,6 +16,22 @@ while [ ! -f $M/INDEX_AKER.DONE ]; do sleep 300; done
 log "Aker-style builds done; quiet probe"
 [ -f $M/TIMING_PROBE_V2.DONE ] || sh $S/run_timing_batch2.sh probe TIMING_PROBE_V2 INDEX_AKER.DONE > $M/timing_probe_v2.log 2>&1
 
+# recall over each workload's own requests, per candidate index (doc 9v; latency stays per index)
+.venv/bin/python - > $M/workload_recall.txt <<'PY'
+import os
+from simulations.approximate_hits.select_backend import CANDIDATES
+R = "simulations/approximate_hits/results"
+for prep, probes in CANDIDATES.items():
+    for p in probes:
+        if os.path.exists(f"{R}/latency_probe/{p}.json"):
+            out = f"{R}/backends/{prep}/recall_{p}.json"
+            print(f"mkdir -p {R}/backends/{prep}/logs && [ -f {out} ] || OMP_NUM_THREADS=24 .venv-ann/bin/python -u "
+                  f"simulations/approximate_hits/workload_recall.py --prep {R}/online/{prep} --probe {p} "
+                  f"> {R}/backends/{prep}/logs/recall_{p}.txt 2>&1")
+PY
+log "$(grep -c . $M/workload_recall.txt) workload-recall jobs"
+sh $S/mx_complete.sh $M/workload_recall.txt $M/WORKLOAD_RECALL.DONE 3
+
 log "selection"
 .venv/bin/python $S/select_backend.py > $M/select_backend.log 2>&1
 cat $M/select_backend.log

@@ -2,7 +2,8 @@
 """
 Choose each workload's DiskANN setting from the quiet latency probes (doc 9u): over the candidate
 indexes of its database, every (search list, beam width) probed, the one with the lowest mean
-single-query latency whose recall@10 (5,000 queries) reaches the target (0.95; 0.9 when 0.95 would
+single-query latency whose recall@10 over the workload's own requests (workload_recall.py; else
+the probe's 5,000 queries) reaches the target (0.95; 0.9 when 0.95 would
 exceed --max-ms). Writes results/backends/<prep>/choice.json.
 
   .venv/bin/python simulations/approximate_hits/select_backend.py
@@ -36,20 +37,28 @@ def main():
             if not f.exists():
                 continue
             d = json.loads(f.read_text())
+            # recall over THIS workload's requests (workload_recall.py), when measured (doc 9v)
+            wr = RES / "backends" / prep / f"recall_{name}.json"
+            per = ({(g["L"], g["W"]): g["recall_requests"] for g in json.loads(wr.read_text())["grid"]}
+                   if wr.exists() else {})
             for g in d["grid"]:
                 if "recall_5000" in g:
-                    rows.append(dict(g, probe=name, index=d["index"]))
+                    r = dict(g, probe=name, index=d["index"])
+                    r["recall_used"] = per.get((g["L"], g["W"]), g["recall_5000"])
+                    r["recall_source"] = "workload requests" if (g["L"], g["W"]) in per else "probe queries"
+                    rows.append(r)
         if not rows:
             print(f"{prep}: no probe yet")
             continue
         choice = None
         for tgt in args.targets:
-            ok = [r for r in rows if r["recall_5000"] >= tgt]
+            ok = [r for r in rows if r["recall_used"] >= tgt]
             if not ok:
                 continue
             best = min(ok, key=lambda r: r["mean_ms"])
             choice = dict(target=tgt, index_dir=best["index"], probe=best["probe"], L=best["L"], W=best["W"],
-                          recall_5000=best["recall_5000"], mean_ms=best["mean_ms"], p99_ms=best["p99_ms"])
+                          recall=best["recall_used"], recall_source=best["recall_source"],
+                          recall_probe_queries=best["recall_5000"], mean_ms=best["mean_ms"], p99_ms=best["p99_ms"])
             if best["mean_ms"] <= args.max_ms:
                 break
         if choice is None:
