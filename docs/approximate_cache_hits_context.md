@@ -2901,3 +2901,13 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   Beam width 32 everywhere: v1 used beam 2 (TriviaQA 0.95 needed L 2000, ~740 ms).
 - AIO lock (11-14): the first diskann_aio held the lock while waiting; a waiter suspended by a quiet
   batch would have blocked every timing run on the lock. Now the lock is held only to check and open.
+- Reboot (11-14 ~19:56): /tmp (RAM) was wiped, with all of /tmp/mx (queue registry, learned peaks,
+  growth factor, completion flags, job lists, ad-hoc chain scripts); no results were lost (all on
+  disk). Recovery 20:19: /tmp/mx is now a symlink to ~/mx-state (on disk; after a reboot only the
+  symlink must be recreated: `ln -sfn /home/jialind/mx-state /tmp/mx`, and the registry cleared);
+  flags of finished steps restored by hand (INDEX_AKER, TIMING_PROBE_V2, REQ, HE, TSTATES_ESCI,
+  TIMING3C, HEADLINE_tripclick-ip, HEADLINE_medrag-ip); chain scripts that only lived in /tmp/mx are
+  now in the repository (run_medrag_small_states.sh). Relaunched: mx_watchdog4.sh, run_backend_redo.sh
+  (probe and workload recall skip as done; selection unchanged; answers restarted from scratch:
+  in progress at the reboot), run_timing_new_workload.sh for both new workloads,
+  run_medrag_small_states.sh. Learned memory peaks start again from the priors.
