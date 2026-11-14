@@ -18,6 +18,9 @@ export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
 echo "$(date +%T) waiting for the tuned-Aker runs and the warm-up states"
 SET=$1; NAME=$2; shift 2
 for f in "$@"; do while [ ! -f $M/$f ]; do sleep 300; done; done
+# gate (11-13): while /tmp/mx/TIMING_GATE exists, no timing batch starts (a quiet batch suspends
+# everything else; /tmp/mx/timing_gate.sh opens it when the CPU-only pipelines are done or at a deadline)
+while [ -f $M/TIMING_GATE ]; do sleep 300; done
 # LRU runs that started before the empty-search fix (doc 9n) are redone
 for f in $S/results/timing_v3/*/lru_s*.json; do
   [ -f "$f" ] && [ "$f" -ot $M/LRU_FIX.marker ] && mkdir -p $S/results/timing_v3/old_lru_before_fix && mv "$f" "${f%.json}_lat.npz" $S/results/timing_v3/old_lru_before_fix/ 2>/dev/null

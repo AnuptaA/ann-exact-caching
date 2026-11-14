@@ -172,19 +172,23 @@ def main():
         print("\n".join(probe_lines()))
         return
     if a.set == "final":        # v4 (doc 9u): tuned DiskANN (search list x beam width); ordered so the
-        out = []                # plot fills in early
-        main = ("ours", "lru", "aker", "qvcache")
+        out = []                # plot fills in early: (11-14) every workload's 1% / 10% main cells
+        main = ("ours", "lru", "aker", "qvcache")   # first, then the papers' settings, then 0.3% / 3%
         paper = ("aker_paper", "qvcache_paper")
-        for z in ("0.99", "0.6", "0.3"):
-            for b in (0.01, 0.1, 0.003, 0.03):
-                out += lines(f"spacev-aker-{z}", b, 20, techs=main + (paper if b in (0.01, 0.1) else ()))
-        for b in (0.01, 0.1, 0.003, 0.03):
-            out += lines("esci1m", b, 20, stream="random", techs=main + (paper if b in (0.01, 0.1) else ()))
-        for z in ("0.99", "0.6", "0.3"):
+        work = [(f"spacev-aker-{z}", "trace", True) for z in ("0.99", "0.6", "0.3")] + \
+            [("esci1m", "random", True)] + [(f"triviaqa-ip-{z}", "trace", False) for z in ("0.99", "0.6", "0.3")] + \
+            [("spacev-real", "trace", False)]
+        for prep, stream, _ in work:
             for b in (0.01, 0.1):
-                out += lines(f"triviaqa-ip-{z}", b, 20, techs=main)
-        for b in (0.01, 0.1):
-            out += lines("spacev-real", b, 20, techs=main)
+                out += lines(prep, b, 20, stream=stream, techs=main)
+        for prep, stream, extra in work:
+            if extra:
+                for b in (0.01, 0.1):
+                    out += lines(prep, b, 20, stream=stream, techs=paper)
+        for prep, stream, extra in work:
+            if extra:
+                for b in (0.003, 0.03):
+                    out += lines(prep, b, 20, stream=stream, techs=main)
         print("\n".join(out))
         return
     if a.set == "new":          # new workloads (doc 9x / 9y), once their backend is chosen and states exist

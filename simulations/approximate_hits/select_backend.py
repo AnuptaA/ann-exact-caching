@@ -44,10 +44,13 @@ def main():
             per = ({(g["L"], g["W"]): g["recall_requests"] for g in json.loads(wr.read_text())["grid"]}
                    if wr.exists() else {})
             for g in d["grid"]:
-                if "recall_5000" in g:
+                # workload recall when measured; else the probe's batched recall (probes before 11-13
+                # only: the quiet probe now measures latency alone, recall is workload_recall.py's)
+                key = (g["L"], g["W"])
+                if key in per or g.get("recall_5000") is not None:
                     r = dict(g, probe=name, index=d["index"])
-                    r["recall_used"] = per.get((g["L"], g["W"]), g["recall_5000"])
-                    r["recall_source"] = "workload requests" if (g["L"], g["W"]) in per else "probe queries"
+                    r["recall_used"] = per[key] if key in per else g["recall_5000"]
+                    r["recall_source"] = "workload requests" if key in per else "probe queries"
                     rows.append(r)
         if not rows:
             print(f"{prep}: no probe yet")
@@ -60,7 +63,7 @@ def main():
             best = min(ok, key=lambda r: r["mean_ms"])
             choice = dict(target=tgt, index_dir=best["index"], probe=best["probe"], L=best["L"], W=best["W"],
                           recall=best["recall_used"], recall_source=best["recall_source"],
-                          recall_probe_queries=best["recall_5000"], mean_ms=best["mean_ms"], p99_ms=best["p99_ms"])
+                          recall_probe_queries=best.get("recall_5000"), mean_ms=best["mean_ms"], p99_ms=best["p99_ms"])
             if best["mean_ms"] <= args.max_ms:
                 break
         if choice is None:
