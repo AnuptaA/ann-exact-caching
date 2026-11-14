@@ -36,6 +36,10 @@ between batches):
   lru      every miss becomes an entry with K = K_lru (top-R fetched for the
            shell); least recently used entries are evicted to fit M; lambda
            recalibrated every batch
+  ogreedy  continuous greedy (11-14): every batch, greedy on the recent misses
+           (fully labeled) adds new entries (any K) and grows existing ones,
+           evicting by credit per vector or LRU (see ogreedy_update); lambda
+           recalibrated every batch
   aker, qvcache   external baselines (online_baselines.py)
 
 Detection (greedy, lru; --detect, any subset), after every batch, each test
@@ -759,6 +763,141 @@ class Sim:
             i += n_ev
             mem = cache.memory()
 
+    # -- continuous greedy (ogreedy, 11-14) --------------------------------
+
+    def ogreedy_update(self, qb, serve, near, t):
+        """Continuous utility-driven maintenance (doc 9ac). After each batch:
+          scoring set   the misses of the last --og-span requests BEFORE this batch (fully
+                        labeled: the backend answered them; no audited-hit up-weighting), with
+                        multiplicities; this batch's misses are the candidates, so scoring them on
+                        themselves would make every miss serve itself (a first version did: ~90% of
+                        the entries replaced every batch);
+          candidates    this batch's misses as new entries at every K of K_VALUES, and every
+                        current entry grown to each larger K;
+          credits       per entry: served answer vectors it supplied over the last --og-span
+                        requests / k (hits attributable to it);
+          exchange      greedy picks the candidate with the most marginal scoring hits per new
+                        vector (the offline greedy's rule, starting from the current cache);
+                        when it does not fit, victims are evicted, in order of credit per vector
+                        (--og-evict utility; only while the victim's credit per vector is below the
+                        candidate's gain per vector) or least recently used first (--og-evict lru;
+                        whenever room is needed). Entries added this batch are not victims.
+        The populator still counts victims' vectors as cached within the batch (a slightly
+        optimistic gain for candidates sharing them); the next batch scores the real cache."""
+        a, cache, k = self.a, self.cache, self.k
+        span = a.og_span or a.cal_span
+        if not getattr(self, "og_seeded", False):
+            # seed both windows with the warm-up requests (all labeled), served by the warm-up cache
+            # and cutoff: otherwise the first batches would see ~1,000 requests of credit and evict
+            # most warm-up entries as "unused" (a first version evicted 582 of 826 in batch one)
+            self.og_seeded = True
+            w = np.asarray(self.stream[:a.warmup], dtype=np.int64)
+            Xw, nw = cache.features(w)
+            sw_ = (self.model(Xw) >= self.lam) if self.lam is not None else np.zeros(len(w), bool)
+            hv0 = np.bincount(np.asarray(nw[sw_]).ravel(), minlength=cache.n_db) if sw_.any() else None
+            cred0 = {}
+            if hv0 is not None:
+                for c in cache.entries:
+                    v = hv0[cache.members(c)].sum()
+                    if v:
+                        cred0[c] = v / k
+            self.og_credit = [(a.warmup, cred0)]
+            self.og_miss = [(a.warmup, w[~sw_])]
+        cache.mark_used(near[serve], t)
+        # credits of this batch
+        hv = np.bincount(np.asarray(near[serve]).ravel(), minlength=cache.n_db) if serve.any() else None
+        cred = {}
+        if hv is not None:
+            for c in cache.entries:
+                v = hv[cache.members(c)].sum()
+                if v:
+                    cred[c] = v / k
+        self.og_credit.append((t, cred))
+        self.og_credit = [x for x in self.og_credit if x[0] > t - span]
+        miss = qb[~serve]
+        self.og_miss = [x for x in self.og_miss if x[0] > t - span]
+        past = [x[1] for x in self.og_miss]        # misses of earlier batches only
+        self.og_miss.append((t, miss))
+        new = [int(q) for q in np.unique(miss) if int(q) not in cache.entries]
+        self.cost["topR"] += len(new)
+        if not past:
+            return
+        sq, sw = np.unique(np.concatenate(past), return_counts=True)
+        kvals = tuple(K for K in K_VALUES if K <= (K_LIMIT[0] or max(K_VALUES)))
+        pairs = [(c, K) for c in new for K in kvals]
+        pairs += [(c, K) for c, K0 in cache.entries.items() for K in kvals if K > K0]
+        if not pairs or not len(sq):
+            return
+        D = db_view(self.D)
+        cs = np.array(sorted({c for c, _ in pairs}), dtype=np.int64)
+        tops = topk_present(D, cs, max(kvals))
+        row = {int(c): i for i, c in enumerate(cs)}
+        pop = GreedyPopulator([tops[row[c], :K] for c, K in pairs], topk_present(D, sq, k, key="answer"),
+                              cache.n_db, k, self.T, score_weights=sw.astype(np.int64))
+        cache.prepare()
+        pop._cache_vectors(np.asarray(cache.cached_ids, dtype=np.int64))
+        # vector budget for cached vectors: what is left of M after the shell sample, at the current
+        # ratio of memory to cached vectors
+        n_c = max(cache.n_cached(), 1)
+        per = cache.memory() / n_c
+        cap = int(self.M / per)
+        credit = {}
+        for _, cr in self.og_credit:
+            for c, v in cr.items():
+                credit[c] = credit.get(c, 0.0) + v
+        size = {c: max(len(cache.members(c)), 1) for c in cache.entries}
+        if a.og_evict == "lru":
+            order = sorted(cache.entries, key=lambda c: cache.last_used.get(c, 0))
+        else:
+            order = sorted(cache.entries, key=lambda c: credit.get(c, 0.0) / size[c])
+        vi, freed, victims, chosen = 0, 0, [], []
+        while True:
+            alive = (pop.new_vectors > 0)
+            if not alive.any():
+                break
+            d_hits, _, _ = pop._evaluate_candidates(alive)
+            ratio = np.where(alive, d_hits / np.maximum(pop.new_vectors, 1), -1.0)
+            j = int(np.argmax(ratio))
+            if ratio[j] <= 0:
+                break
+            need = pop.cache_size + int(pop.new_vectors[j]) - (cap + freed)
+            while need > 0 and vi < len(order):
+                v = order[vi]
+                if v in chosen:
+                    vi += 1
+                    continue
+                if a.og_evict == "utility" and credit.get(v, 0.0) / size[v] >= ratio[j]:
+                    break
+                victims.append(v)
+                freed += size[v]
+                need -= size[v]
+                vi += 1
+            if need > 0:
+                break
+            res = pop.step(cap + freed)
+            if res is None:
+                break
+            chosen.append(pairs[res["candidate"]][0])
+        for v in victims:
+            if v in cache.entries:
+                cache.remove(v)
+        for jj in pop.selected:
+            c, K = pairs[jj]
+            if cache.entries.get(c, 0) < K:
+                cache.add(c, K)
+                cache.last_used[c] = t
+        mem = cache.memory()
+        if mem > self.M:            # shell growth: trim old entries by the victim order, then the
+            # latest additions (lowest gain per vector first, i.e. last chosen first)
+            for v in [v for v in order if v not in chosen] + chosen[::-1]:
+                if mem <= self.M or len(cache.entries) <= 1:
+                    break
+                if v in cache.entries:
+                    cache.remove(v)
+                    mem = cache.memory()
+        self.og_log.append({"t": t, "added": len(pop.selected), "evicted": len(victims),
+                            "entries": len(cache.entries), "cached": cache.n_cached()})
+
     # -- database events ---------------------------------------------------
 
     def apply_events(self, s):
@@ -833,6 +972,7 @@ class Sim:
         if getattr(a, "save_state", None):
             self.save_state(a.save_state)
         p_lru = cache.p
+        self.og_credit, self.og_miss, self.og_log = [], [], []
         last_alarm = None
         last_check = a.warmup
         pending = []                # scheduled post-alarm rebuild checks (times)
@@ -904,6 +1044,9 @@ class Sim:
                 if method == "lru":
                     self.lru_update(qb, serve, near, t, p_lru)
                     self.cal_stale = True
+                elif method == "ogreedy":
+                    self.ogreedy_update(qb, serve, near, t)
+                    self.cal_stale = True
                 kind = self.detect(t)
                 if kind:
                     self.events.append({"t": t, "event": "alarm", "kind": kind})
@@ -925,6 +1068,7 @@ class Sim:
                             f"ret {done['served_retention_sum'] / max(done['served'], 1):.3f} "
                             f"lambda {self.lam} entries {len(cache.entries)} mem {done['memory']:.0f}")
         return {"method": method, "args": vars(a), "log": self.log, "events": self.events,
+                "og_log": self.og_log,
                 "cost": dict(self.cost, vectors_fetched=cache.vectors_fetched,
                              warmup_topR=a.warmup, short_rows=self.D["short"][0])}
 
@@ -1009,7 +1153,13 @@ def make_parser():
     runs this simulator's controller live)."""
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--prep", type=str, default="simulations/approximate_hits/results/online/esci1m")
-    ap.add_argument("--method", choices=["static", "greedy", "lru", "aker", "qvcache"],
+    ap.add_argument("--og-evict", choices=["utility", "lru"], default="utility",
+                    help="ogreedy: victims by credit per vector (only when below the candidate's gain "
+                         "per vector) or least recently used")
+    ap.add_argument("--og-span", type=int, default=0,
+                    help="ogreedy: requests whose misses score candidates and whose hits credit entries "
+                         "(0 = --cal-span)")
+    ap.add_argument("--method", choices=["static", "greedy", "lru", "ogreedy", "aker", "qvcache"],
                     required=True)
     ap.add_argument("--detect", nargs="*", choices=["score", "retention", "hitrate"],
                     default=["score", "retention", "hitrate"],
@@ -1144,7 +1294,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     if args.alarm_audit_rate is None:
         args.alarm_audit_rate = args.audit_rate
-    if args.method == "lru":
+    if args.method in ("lru", "ogreedy"):
         args.response = "recal"
     if args.method in ("aker", "qvcache"):
         from simulations.approximate_hits import online_baselines as ob

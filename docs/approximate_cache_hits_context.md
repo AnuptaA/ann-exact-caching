@@ -2991,3 +2991,14 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   ours_drift only on the SPACEV real log; "new" set: TripClick ours_drift only, MedRAG both.
   plot_timing shows ours_drift as its own line. TIMING_GATE removed (22:30): the batch starts when
   the backend answers and warm-up states are done.
+- Continuous variant `online_sim --method ogreedy [--og-evict utility|lru] [--og-span N]` (11-14):
+  after each batch, greedy (the offline rule: marginal hits per new vector, from the current
+  cache) over candidates = this batch's misses at every K plus current entries grown to larger K;
+  scoring = misses of the previous --og-span requests (default cal-span 20k; fully labeled);
+  victims by credit per vector (served answer vectors supplied / k over the span) only while below
+  the candidate's gain per vector, or LRU whenever room is needed; both windows seeded from the
+  warm-up requests; memory trimmed to M. Bugs found in smoke tests and fixed: scoring candidates on
+  their own misses (every miss served itself: ~90% of entries replaced per batch); unseeded credit
+  window (582 of 826 warm-up entries evicted in batch one). TripClick 1%, requests 20k-30k:
+  ogreedy-utility 8.0% / 0.907 vs ours 7.0% / 0.902, LRU K10 7.1% / 0.894. Full runs queued:
+  /tmp/mx/ogreedy.txt (6 workloads x 1%, 10% x 2 eviction rules, seed 0).
