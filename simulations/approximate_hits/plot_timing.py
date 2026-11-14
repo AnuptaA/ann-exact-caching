@@ -9,7 +9,7 @@ arm, right after its cache arm). Marks: the limit 1 / (1 - h + audited share) a 
 reach (black tick), and DiskANN with its node cache given the technique's memory (grey diamond).
 Under each bar: hit rate, recall vs exact over all requests; a hollow bar = the technique missed
 the target (mean retention of hits < T - 0.01, the simulator's definition where available).
-Also writes a table (results/summary/timing_table.md) with per-hit / per-miss cost and p99.
+Also writes a table (results/latest/timing_table.md) with per-hit / per-miss cost and p99.
 
   PYTHONPATH=. .venv/bin/python simulations/approximate_hits/plot_timing.py
 """
@@ -150,7 +150,7 @@ def main():
              "Filled: mean retention of hits (served answer vs DiskANN's top-10) >= 0.89 in this run; hollow: below. "
              "Strip: recall vs exact over all requests (grey dashed: DiskANN alone, .953).",
              ha="center", fontsize=7.5)
-    out = RES / "summary" / "timing_draft_v3.png"
+    out = RES / "latest" / "timing.png"          # latest plots only (11-14)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150, bbox_inches="tight")
     hdr = ("| trace | budget | technique | hit % | ret. hits | recall all | DiskANN ms | cache+DiskANN ms | "
@@ -169,7 +169,7 @@ def main():
                              f"{r['cache']['mean_ms']:.2f} / {r['backend']['mean_ms']:.2f} / "
                              f"{r['speedup']['overall']:.3f} (h {100 * r['hit_rate']:.1f}%, n {r['n_timed']})"))
             lines.append(f"- Zipf {z}, {100 * b:g}%, {label}: " + "; ".join(cells))
-    (RES / "summary" / "timing_table.md").write_text("\n".join(lines) + "\n")
+    (RES / "latest" / "timing_table.md").write_text("\n".join(lines) + "\n")
     print(f"wrote {out} and timing_table.md ({len(rows)} runs)")
 
 

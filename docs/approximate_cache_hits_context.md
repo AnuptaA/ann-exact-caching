@@ -2911,3 +2911,13 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   (probe and workload recall skip as done; selection unchanged; answers restarted from scratch:
   in progress at the reboot), run_timing_new_workload.sh for both new workloads,
   run_medrag_small_states.sh. Learned memory peaks start again from the priors.
+- Plot locations (11-14): plot_headline.py / plot_timing.py now write only the latest versions to
+  `simulations/approximate_hits/results/latest/` (headline.png, timing.png, timing_table.md; not in
+  git, as everything under results/ except summary/: the plots include TripClick-derived results).
+  Old drafts moved to results/summary/old_drafts/; results/summary/ keeps the earlier curated figures.
+- Drift diagnostics (11-14, Jialin's questions): the headline's "ours" is already the drift-handling
+  form (greedy_score_rebuild: score-drift detection + rebuild); on TripClick 1% it rebuilt 8 times and
+  still reached 4.2%. Queued (/tmp/mx/diag_drift.txt, ad-hoc priority, 80 runs, 1% and 10%, seeds 0
+  and 1, TripClick and SPACEV real log): (a) the other detection / response forms on the natural
+  order (greedy_all_rebuild, greedy_all_recal, greedy_retention_rebuild, greedy_hitrate_rebuild,
+  greedy_score_recal); (b) ours and LRU on a random reordering of the same requests (stream random).

@@ -213,7 +213,7 @@ def draw_panel(fig, outer, title, data, ymax_pad=1.18, speedup_axis=False, first
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(RES / "summary" / "headline_draft.png"))
+    ap.add_argument("--out", default=str(RES / "latest" / "headline.png"))   # latest plots only (11-14)
     args = ap.parse_args()
     fig = plt.figure(figsize=(14.5, 16.0))
     outer = fig.add_gridspec(len(LAYOUT), 3, hspace=0.34, wspace=0.30, left=0.055, right=0.955, top=0.935,

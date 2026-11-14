@@ -86,7 +86,7 @@ S=simulations/approximate_hits
 .venv/bin/python $S/aker_real/aker_real_jobs.py --preps spacev-aker-0.6 --only stable --budgets 0.003 0.01 0.03 0.1
 .venv/bin/python $S/aker_real/aker_real_jobs.py --preps spacev-aker-0.6 --tuned --budgets 0.003 0.01 0.03 0.1
 # then
-.venv/bin/python $S/plot_headline.py --out $S/results/summary/headline_draft_v4.png
+.venv/bin/python $S/plot_headline.py        # -> $S/results/latest/headline.png
 ```
 
 - Only the configurations the plot reads need to run. The launchers filter the generator's output
@@ -130,8 +130,8 @@ outputs:
    background`. They run through `run_timing_batch2.sh final ...`, which holds the queue,
    suspends every other job and runs one timing job at a time. Each run checks for a quiet
    machine (`timing_env.py`: other processes <= 1 core and <= 50 MB/s) and records a verdict.
-7. **Plot.** `.venv/bin/python $S/plot_timing.py` writes `results/summary/timing_draft_v3.png`
-   and `timing_table.md`.
+7. **Plot.** `PYTHONPATH=. .venv/bin/python $S/plot_timing.py` writes `results/latest/timing.png`
+   and `results/latest/timing_table.md`.
 
 Fidelity notes:
 - In the harness, ours is static after warm-up (stationary workloads: no recalibration, no
