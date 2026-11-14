@@ -33,10 +33,11 @@ BUDGETS = [0.003, 0.01, 0.03, 0.1]
 STYLE = {"aker_paper": ("Aker, paper default (a_T .25, a_L 1.1)", "#0072B2", "D", 1.1),
          "qvcache_paper": ("QVCache, paper's D procedure", "#009E73", "s", 1.1),
          "ours": ("Ours (calibrated)", "#D55E00", "o", 2.6),
+         "ours_drift": ("Ours, drift handling (timing)", "#CC79A7", "o", 1.8),
          "lru": ("LRU", "#6B6B6B", "^", 1.6),
          "aker": ("Aker, tuned by hand to the target", "#0072B2", "D", 1.6),
          "qvcache": ("QVCache, tuned by hand to the target", "#009E73", "s", 1.6)}
-JITTER = {"ours": 1.0, "lru": 0.93, "aker": 1.07, "qvcache": 1.14, "aker_paper": 1.07, "qvcache_paper": 1.14}     # x offsets (log axis)
+JITTER = {"ours": 1.0, "ours_drift": 1.04, "lru": 0.93, "aker": 1.07, "qvcache": 1.14, "aker_paper": 1.07, "qvcache_paper": 1.14}     # x offsets (log axis)
 # (title, prep, stream, uses real Aker?)
 LAYOUT = [
     [("SPACEV, Zipf 0.3", "spacev-aker-0.3", "trace", True),

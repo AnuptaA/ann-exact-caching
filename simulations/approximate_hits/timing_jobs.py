@@ -118,6 +118,8 @@ def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="ti
     jobs = []
     if "ours" in techs:
         jobs.append((f"ours_s{every}_b{b:g}", f"--method ours --state {state}", ""))
+    if "ours_drift" in techs:   # drift detection + shadow rebuild, run live (doc 9ac)
+        jobs.append((f"oursdrift_s{every}_b{b:g}", f"--method ours_drift --state {state}", ""))
     if "lru" in techs:      # CAL_DEBUG: dump the labels if the cutoff is ever lost (doc 9o)
         jobs.append((f"lru_s{every}_b{b:g}", f"--method lru --state {state}", "",
                      f"CAL_DEBUG={out}/lru_s{every}_b{b:g}_caldbg.npz "))
@@ -173,14 +175,15 @@ def main():
         return
     if a.set == "final":        # v4 (doc 9u): tuned DiskANN (search list x beam width); ordered so the
         out = []                # plot fills in early: (11-14) every workload's 1% / 10% main cells
-        main = ("ours", "lru", "aker", "qvcache")   # first, then the papers' settings, then 0.3% / 3%
-        paper = ("aker_paper", "qvcache_paper")
+        main = ("ours", "ours_drift", "lru", "aker", "qvcache")   # first, then the papers' settings,
+        paper = ("aker_paper", "qvcache_paper")                     # then 0.3% / 3%
+        real_log = ("ours_drift", "lru", "aker", "qvcache")   # real logs: drift handling only (11-14)
         work = [(f"spacev-aker-{z}", "trace", True) for z in ("0.99", "0.6", "0.3")] + \
             [("esci1m", "random", True)] + [(f"triviaqa-ip-{z}", "trace", False) for z in ("0.99", "0.6", "0.3")] + \
             [("spacev-real", "trace", False)]
         for prep, stream, _ in work:
             for b in (0.01, 0.1):
-                out += lines(prep, b, 20, stream=stream, techs=main)
+                out += lines(prep, b, 20, stream=stream, techs=real_log if prep == "spacev-real" else main)
         for prep, stream, extra in work:
             if extra:
                 for b in (0.01, 0.1):
@@ -201,7 +204,8 @@ def main():
                 continue
             for b in sizes[prep]:
                 if os.path.exists(f"{R}/timing_v4/{prep}/state_b{b:g}.npz"):
-                    out += lines(prep, b, 20, techs=("ours", "lru", "aker", "qvcache"))
+                    out += lines(prep, b, 20, techs=("ours_drift", "lru", "aker", "qvcache") if prep == "tripclick-ip"
+                                 else ("ours", "ours_drift", "lru", "aker", "qvcache"))
         print("\n".join(out))
         return
     if a.set == "sizes":

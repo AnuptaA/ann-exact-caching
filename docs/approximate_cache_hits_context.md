@@ -2987,3 +2987,7 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   29k rebuild, then a few thousand requests apart (the harness scores through its HNSW hit path,
   the simulator exactly), 4 rebuilds installed, 22.5 s background. Hit rate 2.8% vs 3.6%, retention
   0.927 vs 0.917. The harness needs scikit-learn in .venv-ann (installed 1.6.1, numpy 1.25.0 kept).
+- Timing sets (11-14): final = 134 jobs: ours (static) and ours_drift on every stationary workload,
+  ours_drift only on the SPACEV real log; "new" set: TripClick ours_drift only, MedRAG both.
+  plot_timing shows ours_drift as its own line. TIMING_GATE removed (22:30): the batch starts when
+  the backend answers and warm-up states are done.

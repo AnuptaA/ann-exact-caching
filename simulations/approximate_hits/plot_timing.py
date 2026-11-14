@@ -34,6 +34,7 @@ SIZES = {"medrag-ip": [0.0001, 0.0003, 0.001, 0.003]}   # 0.3% already holds Med
 # LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
 # background work (decided with Jialin, 11-11); the sync runs stay in the table only
 TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
+         ("ours_drift", "Ours (drift handling)", "C0", lambda n: n.startswith("oursdrift_")),
          ("lru_bg", "LRU", "C1", lambda n: n.startswith(("lru_bg_", "lru_s"))),
          ("aker", "Aker", "C2", lambda n: n.startswith("aker_")),
          ("aker_paper", "Aker (paper default)", "C2", lambda n: n.startswith("akerpaper_")),
@@ -42,7 +43,7 @@ TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
 
 
 TABLE_ONLY = [("lru_sync", "LRU (sync update)", lambda n: n.startswith("lru_sync_"))]
-HEADLINE_KEY = {"ours": "ours", "lru_bg": "lru", "lru_sync": "lru", "aker": "aker", "qvcache": "qvcache",
+HEADLINE_KEY = {"ours": "ours", "ours_drift": "ours_drift", "lru_bg": "lru", "lru_sync": "lru", "aker": "aker", "qvcache": "qvcache",
                 "aker_paper": "aker_paper", "qvcache_paper": "qvcache_paper"}
 
 
