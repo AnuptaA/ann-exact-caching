@@ -579,8 +579,8 @@ class Sim:
             cut = [0] + [int(round(x * len(w))) for x in np.cumsum(a.warm_split)]
             cut[-1] = len(w)
             cand, score, fit, cal = (perm[cut[i]:cut[i + 1]] for i in range(4))
-        entries, _ = greedy_entries(self.D, [(int(c), a.R) for c in cand], score,
-                                    np.ones(len(score)), a.f * self.M, self.k, self.T)
+        entries, score_hits = greedy_entries(self.D, [(int(c), a.R) for c in cand], score,
+                                             np.ones(len(score)), a.f * self.M, self.k, self.T)
         self.cache.replace(entries)
         self.cache.set_p_to_fill()
         X, nf = self.cache.features(fit)
@@ -595,6 +595,22 @@ class Sim:
         self.cal = [(a.warmup, s, self.y(cal, nc), np.ones(len(cal)), cal)]
         self.ref = [(a.warmup, s)]
         self.calibrate(a.warmup)
+        # in-sample check (11-14): the warm-up cache on the scoring requests greedy optimized for:
+        # greedy's oracle hits (any retention-T admission), the cache's oracle hits with the shell
+        # sample, and the calibrated policy (model score >= lambda) with its mean retention
+        Xs, ns = self.cache.features(score)
+        ss = self.model(Xs)
+        ys = self.y(score, ns)
+        srv = ss >= self.lam if self.lam is not None else np.zeros(len(score), bool)
+        self.insample = {"n_score": int(len(score)), "n_cand": int(len(cand)),
+                         "distinct_cand": int(len(np.unique(cand))),
+                         "greedy_oracle_hit_rate": float(score_hits / max(len(score), 1)),
+                         "cache_oracle_hit_rate": float(oracle_hits(self.cache, score, np.ones(len(score)),
+                                                                    self.k, self.T) / max(len(score), 1)),
+                         "calibrated_hit_rate": float(srv.mean()),
+                         "calibrated_retention": float(ys[srv].mean()) if srv.any() else None,
+                         "entries": int(len(entries)), "cached_vectors": int(self.cache.n_cached())}
+        logger.info(f"in-sample (scoring split): {self.insample}")
         logger.info(f"warm-up: {len(entries)} entries, {self.cache.n_cached()} cached vectors, "
                     f"p = {self.cache.p:.3f}, memory {self.cache.memory():.0f} / {self.M:.0f}, "
                     f"lambda {self.lam}")
