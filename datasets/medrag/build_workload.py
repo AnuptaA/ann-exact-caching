@@ -72,22 +72,24 @@ def base(args):
     n = sum(len(k) for _, k, _ in sel)
     pmids = np.concatenate([p for _, _, p in sel])
     logger.info(f"{tot} NCBI articles in {len(sel)} chunks; {n} of the {len(want)} MedRAG PMIDs have an embedding")
-    norms = []                                                  # pass 1: norms (M)
-    for i, keep, _ in sel:
-        x = np.load(EMB / f"embeds_chunk_{i}.npy", mmap_mode="r")
-        norms.append(np.linalg.norm(np.asarray(x[keep], np.float32), axis=1))
-    norms = np.concatenate(norms)
-    M = float(norms.max())
+    norms = np.empty(n, np.float32)
     out = AKER / "medrag-ip-docs.npy"
     tmp = AKER / "medrag-ip-docs.tmp.npy"
     y = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.float32, shape=(n, 769))
     o = 0
-    for i, keep, _ in sel:                                      # pass 2: write
-        x = np.asarray(np.load(EMB / f"embeds_chunk_{i}.npy", mmap_mode="r")[keep], np.float32)
+    # one SEQUENTIAL read per chunk (11-14: memory-mapped fancy indexing faulted 4 KB pages at
+    # ~10 MB/s on the busy EBS volume); rows and norms written, the appended column after M is known
+    for i, keep, _ in sel:
+        x = np.load(EMB / f"embeds_chunk_{i}.npy")[keep].astype(np.float32, copy=False)
         y[o:o + len(x), :768] = x
-        y[o:o + len(x), 768] = np.sqrt(np.maximum(M * M - norms[o:o + len(x)] ** 2, 0.0))
+        norms[o:o + len(x)] = np.linalg.norm(x, axis=1)
         o += len(x)
+        del x
         logger.info(f"chunk {i}: {o} / {n}")
+    M = float(norms.max())
+    for s0 in range(0, n, 1 << 22):
+        nb = norms[s0:s0 + (1 << 22)].astype(np.float64)
+        y[s0:s0 + len(nb), 768] = np.sqrt(np.maximum(M * M - nb * nb, 0.0))
     y.flush()
     del y
     tmp.rename(out)

@@ -33,7 +33,6 @@ def main():
     ap.add_argument("--n", type=int, default=5000, help="requests sampled from the stream after the warm-up")
     ap.add_argument("--threads", type=int, default=24)
     args = ap.parse_args()
-    import diskannpy
     from simulations.approximate_hits.prep_io import load_prep
     prep = Path(args.prep)
     probe = json.loads((RES / "latency_probe" / f"{args.probe}.json").read_text())
@@ -42,7 +41,8 @@ def main():
     stream = np.load(prep / "streams.npz")[args.stream or ("random" if kind == "esci" else "trace")]
     rng = np.random.default_rng(3)
     req = rng.choice(np.asarray(stream[args.warmup:], dtype=np.int64), args.n, replace=True)
-    ix = diskannpy.StaticDiskIndex(index_directory=probe["index"], num_threads=args.threads, num_nodes_to_cache=0,
+    from simulations.approximate_hits.diskann_aio import open_disk_index
+    ix = open_disk_index(index_directory=probe["index"], num_threads=args.threads, num_nodes_to_cache=0,
                                    cache_mechanism=0, index_prefix="ann")
     xq = np.ascontiguousarray(xs[req])
     grid = []

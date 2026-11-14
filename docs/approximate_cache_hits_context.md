@@ -2831,3 +2831,32 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   plot_timing: two more panels.
 - Quiet timing batches now also suspend our `llama-server` and `curl` processes (run_timing_batch2.sh),
   not only python: both would disturb latency (CPU; EBS / network).
+
+### 9aa. Quiet-window budget (11-14, Jialin away ~24 h)
+
+- The quiet latency probe's batched 5,000-query recall per (search list, beam width) dominated the
+  quiet window (~2.5 min per cell on SPACEV, far more at TriviaQA's search lists; projected 16-25 h
+  with everything suspended). Removed (`latency_probe.py --n-recall 0` default): workload_recall.py
+  already measures recall over each workload's requests for every probed (L, W) without a quiet
+  machine, and select_backend.py uses it (the probe's batched recall only as a fallback for old
+  probes). The re-run probe of all 7 indexes took 56 min (SPACEV: 3 min instead of ~100). TriviaQA
+  candidates are base and aker_tqa only (pq768 / r128 side studies were killed for memory, never built).
+- TIMING4 (main timing batch): 112 jobs x ~26 min (timing3b: 12 jobs in 5 h 10 min) ~ 48 h with
+  everything else suspended. Same total either way, so it waits behind a gate (`/tmp/mx/TIMING_GATE`,
+  checked by run_timing_batch2.sh; `/tmp/mx/timing_gate.sh`) until both new workloads' headline runs
+  and DiskANN builds are done, or 14:00 UTC 11-14. The final set is reordered (same 112 jobs):
+  every workload's 1% / 10% main cells first, then the papers' settings, then 0.3% / 3%.
+- Open question for Jialin: whether CPU-only background jobs pinned away from the timing core
+  disturb EBS-bound DiskANN latency measurably; if not, the quiet window need not suspend them.
+- AIO contexts (11-14): DiskANN's reader calls io_setup(1024) per search thread at index open
+  (measured: +2048 in /proc/sys/fs/aio-nr for 2 threads); aio-max-nr is 65536 and cannot be raised
+  (no root), i.e. 64 thread contexts for all DiskANN processes together. A workload-recall job
+  aborted with "io_setup() failed with EAGAIN" (3 x 24-thread recall jobs + 2 x 16-thread index
+  studies). Fix: `diskann_aio.open_disk_index` (all five open sites) waits under a file lock until
+  enough events are free; timing runs wait at most 30 min (paused jobs keep their contexts during a
+  quiet batch). The ad-hoc index studies pq768 / r128 (killed for memory and retried for ~10 h; the
+  probe had already run without them) were stopped; their directories are kept for a later rerun.
+- MedRAG base build: memory-mapped fancy indexing faulted 4 KB pages at ~10 MB/s on the busy EBS
+  volume; rewritten as one sequential read per chunk (~1 chunk / min), checked on chunk 0 (rows equal
+  to the source, every row norm M, only MedRAG PMIDs). Coverage: 23,888,832 of MedRAG's 23,895,135
+  PMIDs have an NCBI embedding (99.97%; 35.9M NCBI articles in total).

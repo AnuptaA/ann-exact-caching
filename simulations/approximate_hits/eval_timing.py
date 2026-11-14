@@ -241,8 +241,9 @@ def open_diskann(path, nodes, init_threads=32):
     init_threads). diskannpy hangs when an index is opened with 1 thread, so
     2 contexts are opened; each timed search is still one query, issued
     one at a time from one thread."""
-    import diskannpy
-    return diskannpy.StaticDiskIndex(index_directory=str(path),
+    from simulations.approximate_hits.diskann_aio import open_disk_index
+    # timing runs: paused jobs keep their AIO contexts during a quiet batch, so wait at most 30 min
+    return open_disk_index(max_wait=1800, index_directory=str(path),
                                      num_threads=init_threads if nodes else 2,
                                      num_nodes_to_cache=int(nodes),
                                      cache_mechanism=1 if nodes else 0, index_prefix="ann")

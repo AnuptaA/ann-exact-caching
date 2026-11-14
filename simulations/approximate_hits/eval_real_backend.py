@@ -105,7 +105,8 @@ class Index:
                     data=db, distance_metric="l2", index_directory=str(d), complexity=100,
                     graph_degree=64, search_memory_maximum=gb, build_memory_maximum=args.build_gb,
                     num_threads=args.threads, pq_disk_bytes=0, index_prefix="ann")
-            self.ix = diskannpy.StaticDiskIndex(
+            from simulations.approximate_hits.diskann_aio import open_disk_index
+            self.ix = open_disk_index(
                 index_directory=str(d), num_threads=args.threads, num_nodes_to_cache=0,
                 index_prefix="ann")
         self.build_s = time.time() - t0

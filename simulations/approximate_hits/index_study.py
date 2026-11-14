@@ -90,7 +90,8 @@ def main():
     rng = np.random.default_rng(1)
     rows = rng.choice(len(q), args.n_recall, replace=False)
     if v["kind"] == "disk":
-        ix = diskannpy.StaticDiskIndex(index_directory=str(d), num_threads=args.threads, num_nodes_to_cache=0,
+        from simulations.approximate_hits.diskann_aio import open_disk_index
+        ix = open_disk_index(index_directory=str(d), num_threads=args.threads, num_nodes_to_cache=0,
                                        cache_mechanism=0, index_prefix="ann")
     else:
         ix = diskannpy.StaticMemoryIndex(index_directory=str(d), num_threads=args.threads,

@@ -48,8 +48,9 @@ def main():
     if args.raw_768:
         xs = np.ascontiguousarray(xs[:, :-1])
     rows = np.random.default_rng(2).choice(len(xs), args.n, replace=False)
-    import diskannpy                      # 24 thread contexts for the batched recall; no node cache
-    ix = diskannpy.StaticDiskIndex(index_directory=str(args.index), num_threads=24, num_nodes_to_cache=0,
+    # 24 thread contexts (as in the earlier probes); no node cache
+    from simulations.approximate_hits.diskann_aio import open_disk_index
+    ix = open_disk_index(index_directory=str(args.index), num_threads=24, num_nodes_to_cache=0,
                                    cache_mechanism=0, index_prefix="ann")
     for i in rows[:20]:                                         # warm-up, untimed
         ix.search(xs[i], k_neighbors=10, complexity=128, beam_width=2)
