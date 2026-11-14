@@ -48,7 +48,9 @@ LAYOUT = [
     [("ESCI (no repeated queries)", "esci1m", "random", True),
      ("SPACEV real query log", "spacev-real", "trace", True),
      ("TripClick real health-search log", "tripclick-ip", "trace", True)],
-    [("MedRAG-Zipf (Proximity; LLM-reworded repeats)", "medrag-ip", "trace", True),
+    # MedRAG-Zipf: 500 questions; already 0.3% of the 23.9M corpus (~143 top-500 entries) holds the
+    # working set, so smaller caches (0.01% ~ 5 entries ... 0.3%)
+    [("MedRAG-Zipf (Proximity; LLM-reworded repeats)", "medrag-ip", "trace", True, [0.0001, 0.0003, 0.001, 0.003]),
      None, None],
 ]
 OURS_NAMES = ["greedy_score_rebuild", "greedy_none", "static_default"]
@@ -154,7 +156,7 @@ def draw_panel(fig, outer, title, data, ymax_pad=1.18, speedup_axis=False, first
     for tech in ("aker_paper", "qvcache_paper", "lru", "qvcache", "aker", "ours"):
         label, col, mk, lw = STYLE[tech]
         paper = tech.endswith("_paper")
-        pts = [(b * JITTER[tech], data[b][tech]) for b in BUDGETS if data[b].get(tech)]
+        pts = [(b * JITTER[tech], data[b][tech]) for b in sorted(data) if data[b].get(tech)]
         if not pts:
             continue
         for (x0, p0), (x1, p1) in zip(pts[:-1], pts[1:]):
@@ -176,8 +178,9 @@ def draw_panel(fig, outer, title, data, ymax_pad=1.18, speedup_axis=False, first
                 ax.annotate(f"recall {p['ret']:.2f}".replace("0.", "."), (x, p["hit"]), xytext=(8, -2),
                             textcoords="offset points", ha="left", fontsize=6.5, color=col)
     ax.set_xscale("log")
-    ax.set_xlim(BUDGETS[0] * 0.7, BUDGETS[-1] * 1.6)
-    allhit = [data[b][t]["hit_hi"] for b in BUDGETS for t in STYLE if data[b].get(t)]
+    bs = sorted(data)                   # the panel's cache sizes (MedRAG-Zipf: smaller ones)
+    ax.set_xlim(bs[0] * 0.7, bs[-1] * 1.6)
+    allhit = [data[b][t]["hit_hi"] for b in bs for t in STYLE if data[b].get(t)]
     ax.set_ylim(0, max(allhit + [1.0]) * ymax_pad)
     ax.set_title(title, fontsize=10, loc="left", fontweight="bold")
     ax.tick_params(labelbottom=False, labelsize=8)
@@ -199,8 +202,8 @@ def draw_panel(fig, outer, title, data, ymax_pad=1.18, speedup_axis=False, first
     st.set_yticks([-0.3, -0.15, 0.0])
     st.set_yticklabels(["-.30", "-.15", "0"])
     st.tick_params(labelsize=7)
-    st.set_xticks(BUDGETS)
-    st.set_xticklabels([f"{b * 100:g}%" for b in BUDGETS], fontsize=8)
+    st.set_xticks(bs)
+    st.set_xticklabels([f"{b * 100:g}%" for b in bs], fontsize=8)
     st.minorticks_off()
     st.grid(alpha=0.25, lw=0.5)
     if first_col:
@@ -219,8 +222,8 @@ def main():
         for c, cell in enumerate(row):
             if cell is None:
                 continue
-            title, prep, stream, real = cell
-            data = {b: collect(prep, stream, b, real) for b in BUDGETS}
+            title, prep, stream, real = cell[:4]
+            data = {b: collect(prep, stream, b, real) for b in (cell[4] if len(cell) > 4 else BUDGETS)}
             last = c == max(i for i, x in enumerate(row) if x is not None)
             draw_panel(fig, outer[r, c], title, data, speedup_axis=last, first_col=(c == 0))
     # legend and notes in the free cell

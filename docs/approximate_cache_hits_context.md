@@ -2881,3 +2881,12 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   log drifts; recency follows it), not the hit policy; calibration is also conservative here (0.93
   realized vs 0.9 target). Same pattern on the SPACEV real log at 10%. Not acted on: a cache
   population question (the project's next phase), Jialin's call.
+- MedRAG-Zipf headline (11-14): with 500 questions, 0.3% of the 23.9M corpus (~143 top-500
+  entries) already holds the working set, so the standard sizes are flat. Smaller sizes run with
+  the 0.3% job set (budget substituted, `/tmp/mx/medrag_small.sh`); the panel shows 0.01 / 0.03 /
+  0.1 / 0.3% (per-panel sizes in plot_headline LAYOUT). Hit rate / retention, seed 0:
+  ours (greedy_score_rebuild) 0.441/0.918, 0.577/0.915, 0.636/0.928, 0.658/0.919;
+  LRU K10 0.208/0.885, 0.407/0.884, 0.681/0.892, 0.879/0.900; LRU K20 0.229/0.922, 0.412/0.903,
+  0.717/0.904, 0.919/0.910. Ours wins clearly under tight memory; LRU once the working set fits
+  (greedy fills from the 2,000-request warm-up only: 39k of 239k vectors used at 1%).
+  Real Aker paper default ~46% at retention 0.76 (every request is a unique rewording: no exact hits).
