@@ -236,6 +236,7 @@ datasets/sift/raw_siftsmall/
 # Generated experiment outputs (keep the curated summary figures)
 simulations/approximate_hits/results/*
 !simulations/approximate_hits/results/summary/
+!simulations/approximate_hits/results/latest/
 simulations/radius_estimation/results/
 simulations/radius_estimation/results_sift/
 simulations/radius_estimation/results_sift1m/
