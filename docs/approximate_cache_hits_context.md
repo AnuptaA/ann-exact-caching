@@ -2860,3 +2860,16 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   volume; rewritten as one sequential read per chunk (~1 chunk / min), checked on chunk 0 (rows equal
   to the source, every row norm M, only MedRAG PMIDs). Coverage: 23,888,832 of MedRAG's 23,895,135
   PMIDs have an NCBI embedding (99.97%; 35.9M NCBI articles in total).
+- MedRAG rewordings done (11-14 07:00): 10,000 unique verified rewordings; 24,475 candidates
+  generated, 12,024 duplicates (49%), 1,169 rejected by the same-meaning check, 14 malformed.
+  Problems found and fixed on the way: (1) Qwen switched partly to Chinese in 50 accepted
+  rewordings (one also appended a "(Note: ...)"): candidates with characters of another script or
+  model chatter are now rejected, and accepted ones re-filtered on resume; (2) a short, generic
+  16-occurrence question stayed 2 short after 120 rounds: the "worded differently from these" list
+  only started at 20 accepted versions; now stalled questions (no gain in a round) always get it,
+  plus +0.1 temperature per stalled round (max 1.5); (3) long example lists exceeded a slot's
+  1024-token context (HTTP 400, retried pointlessly): lists capped at ~1800 characters, 400s are
+  failed candidates. MedCPT cosine between rewordings of the same question 0.951 on average,
+  between different questions 0.443.
+- TripClick: assembled 11-14 05:14 (1,523,878 docs, M 10.203), prep 05:31, headline runs done 06:21
+  (292 simulator + 68 real-Aker jobs; 1.5M base, so fast).

@@ -28,6 +28,8 @@ import time
 import random
 import logging
 import argparse
+import unicodedata
+import urllib.error
 import urllib.request
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -59,6 +61,11 @@ def chat(server, prompt, temperature, max_tokens, seed):
             req = urllib.request.Request(server + "/v1/chat/completions", body, {"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=1800) as r:
                 return json.loads(r.read())["choices"][0]["message"]["content"]
+        except urllib.error.HTTPError as e:
+            if e.code == 400:                        # request rejected (e.g. too long): a failed candidate
+                logger.warning(f"request rejected: {e!r}")
+                return ""
+            time.sleep(min(300, 5 * (attempt + 1)))
         except Exception as e:                       # server busy / restarting / suspended: retry
             if attempt % 10 == 9:
                 logger.warning(f"request failed {attempt + 1}x: {e!r}")
@@ -66,10 +73,22 @@ def chat(server, prompt, temperature, max_tokens, seed):
     raise RuntimeError("server unreachable")
 
 
+FOREIGN = ("CJK", "HIRAGANA", "KATAKANA", "HANGUL", "CYRILLIC", "ARABIC", "HEBREW", "THAI", "DEVANAGARI")
+
+
+def foreign(t):
+    """A character of another script (11-14: an accepted rewording ended in Chinese characters);
+    Latin with accents and Greek letters (alpha, beta, ...) are fine."""
+    return any(any(w in unicodedata.name(ch, "") for w in FOREIGN) for ch in t if ord(ch) > 127)
+
+
+CHATTER = re.compile(r"\(note|\bnote:|please|let me know|translat", re.I)    # the model talking
+
+
 def clean(text, q):
     t = text.strip().split("\n")[0].strip().strip('"').strip("“”").strip()
     t = re.sub(r"^(rephrased question|question|rephrased)\s*:\s*", "", t, flags=re.I).strip().strip('"')
-    if not t or len(t) > 3 * len(q) + 40 or len(t) < 8:
+    if not t or len(t) > 3 * len(q) + 40 or len(t) < 8 or foreign(t) or CHATTER.search(t):
         return None
     return t
 
@@ -89,10 +108,17 @@ def main():
                                                                      "rejected": 0, "accepted": 0}
     for i in range(len(qs)):
         acc.setdefault(i, [])
+        acc[i] = [p for p in acc[i] if not foreign(p) and not CHATTER.search(p)]   # resume: re-filter
     seen = {norm(q) for q in qs} | {norm(p) for v in acc.values() for p in v}
     rng = random.Random(args.seed + sum(len(v) for v in acc.values()))
     pool = ThreadPoolExecutor(args.workers)
+    # adaptive diversity (11-14): a question that gained nothing in a round is "stalled"; it then gets
+    # its accepted versions shown ("worded differently from these") even below 20 of them, and a
+    # temperature 0.1 higher per stalled round (up to 1.5) (a 16-occurrence question ended 2 short
+    # after 120 rounds at temperature 1 without the list)
+    stall = {i: 0 for i in range(len(qs))}
     for rnd in range(args.rounds):
+        before = {i: len(acc[i]) for i in range(len(qs))}
         need = {i: counts[i] - len(acc[i]) for i in range(len(qs)) if counts[i] > len(acc[i])}
         if not need:
             break
@@ -101,13 +127,16 @@ def main():
         for i, n in need.items():
             for _ in range(max(2, int(1.5 * n) + 1)):
                 avoid = ""
-                if len(acc[i]) >= 20:
-                    ex = rng.sample(acc[i], min(15, len(acc[i])))
+                if len(acc[i]) >= 20 or (stall[i] and acc[i]):
+                    ex = rng.sample(acc[i], min(15 if not stall[i] else 40, len(acc[i])))
+                    while len(ex) > 3 and sum(len(e) + 3 for e in ex) > 1800:   # fits a slot's 1024-token context
+                        ex.pop()
                     avoid = " It must be worded differently from all of these earlier versions:\n" + \
                             "\n".join(f"- {e}" for e in ex)
-                tasks.append((i, GEN.format(hint=rng.choice(HINTS), avoid=avoid, q=qs[i]), rng.randrange(1 << 30)))
+                tasks.append((i, GEN.format(hint=rng.choice(HINTS), avoid=avoid, q=qs[i]), rng.randrange(1 << 30),
+                              min(1.5, 1.0 + 0.1 * stall[i])))
         rng.shuffle(tasks)
-        gens = list(pool.map(lambda t: (t[0], chat(args.server, t[1], 1.0, 96, t[2])), tasks))
+        gens = list(pool.map(lambda t: (t[0], chat(args.server, t[1], t[3], 96, t[2])), tasks))
         stats["generated"] += len(gens)
         cand = []
         for i, g in gens:
@@ -131,6 +160,8 @@ def main():
                 stats["accepted"] += 1
             else:
                 seen.discard(norm(c))
+        for i in need:
+            stall[i] = stall[i] + 1 if len(acc[i]) == before[i] else 0
         out_f.write_text(json.dumps(acc))
         stats_f.write_text(json.dumps(stats))
         logger.info(f"round {rnd}: {stats}")
