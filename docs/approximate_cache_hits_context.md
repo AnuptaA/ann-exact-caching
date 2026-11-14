@@ -2921,3 +2921,29 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   and 1, TripClick and SPACEV real log): (a) the other detection / response forms on the natural
   order (greedy_all_rebuild, greedy_all_recal, greedy_retention_rebuild, greedy_hitrate_rebuild,
   greedy_score_recal); (b) ours and LRU on a random reordering of the same requests (stream random).
+
+### 9ab. Why LRU beats ours (11-14 evening; decided: real logs always use the drift-handling form)
+
+- Checked: the headline's "ours" is greedy_score_rebuild (drift detection + rebuild) on every
+  workload (plot_headline.collect: first available of OURS_NAMES). "LRU" is LRU population with our
+  calibrated hit test (lambda recalibrated every batch), so the comparison is greedy vs LRU
+  POPULATION under the same guarantee.
+- Not only real logs: LRU also wins at 10% on the stationary Zipf traces (SPACEV 0.6: 36.7 vs 24.1;
+  TriviaQA 0.6: 71 vs 51); ours wins at small caches.
+- Cause 1, candidate cap: the greedy cache picks entries only from the candidate share of the
+  warm-up (20% of 20,000 requests = 4,000) and never admits new queries; at 10% it holds ~3,000
+  entries of ~280 vectors (top-K + shell), LRU ~50,000 entries of K 20. On the SPACEV Zipf traces
+  only 2-7% of post-warm-up requests repeat any earlier request, so LRU's lead there comes from
+  approximate hits of its many entries. Rebuilds draw candidates from 20% of a window: even fewer
+  entries (TripClick 10%: 764 after rebuilds vs 1,705 at warm-up), so rebuild HURTS at 10%
+  (TripClick 13.8% vs 20.4% without detection).
+- Cause 2, temporal locality on real logs: TripClick in random order, 1%: ours 10.1% vs LRU 4.4%
+  (seeds 0 and 1 agree); natural order: ours 4.6% vs LRU 7.0%. No detection / response form fixes
+  the natural order (score / retention / hitrate / all, recal / rebuild: 3.5-6.2%); the drift is
+  gradual, the KS-type alarms fire, rebuilds have small candidate pools. SPACEV real log: ours wins
+  at 1% (4.5 vs 3.2-3.7), LRU at 10% (10.2 vs 7.7: cause 1).
+- Test of cause 1 running: --warm-split 0.6 0.2 0.1 0.1 and 0.4 0.3 0.15 0.15 (12k / 8k candidates),
+  SPACEV 0.6, TriviaQA 0.6, TripClick, 1% and 10% (/tmp/mx/warm_split.txt). TripClick 1% unchanged
+  (4.5-5.0%: cap not binding at 1%, 826 entries).
+- Timing harness: ours is static or `--ours-recal` (recalibration + audits); detection and cache
+  rebuilds are NOT implemented there. Main timing batch held (/tmp/mx/TIMING_GATE) until decided.
