@@ -2873,3 +2873,11 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   between different questions 0.443.
 - TripClick: assembled 11-14 05:14 (1,523,878 docs, M 10.203), prep 05:31, headline runs done 06:21
   (292 simulator + 68 real-Aker jobs; 1.5M base, so fast).
+- TripClick headline finding (11-14, for discussion): at 1%, ours (greedy_none) hits 4.6% at
+  retention 0.932, LRU (our hit policy, K 10) 7.0% at 0.930, real Aker tuned ~11% (Aker paper default:
+  19% at retention 0.70; its exact-repeat hits alone are 6.2%). The ceiling of the cached contents
+  ("oracle" in online_summary: best hit rate the contents allow at the target) is 7.2% for greedy vs
+  8.8% for LRU: the gap is population (greedy fills the cache once from the warm-up; a 3-month real
+  log drifts; recency follows it), not the hit policy; calibration is also conservative here (0.93
+  realized vs 0.9 target). Same pattern on the SPACEV real log at 10%. Not acted on: a cache
+  population question (the project's next phase), Jialin's call.
