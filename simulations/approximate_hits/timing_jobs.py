@@ -194,10 +194,12 @@ def main():
     if a.set == "new":          # new workloads (doc 9x / 9y), once their backend is chosen and states exist
         import os
         out = []
+        sizes = {"tripclick-ip": (0.01, 0.1, 0.003, 0.03),
+                 "medrag-ip": (0.001, 0.0001, 0.0003, 0.003)}   # MedRAG: 0.3% already holds the working set
         for prep in ("tripclick-ip", "medrag-ip"):
             if not os.path.exists(f"{R}/backends/{prep}/choice.json"):
                 continue
-            for b in (0.01, 0.1, 0.003, 0.03):
+            for b in sizes[prep]:
                 if os.path.exists(f"{R}/timing_v4/{prep}/state_b{b:g}.npz"):
                     out += lines(prep, b, 20, techs=("ours", "lru", "aker", "qvcache"))
         print("\n".join(out))
