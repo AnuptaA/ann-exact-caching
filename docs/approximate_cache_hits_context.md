@@ -2947,3 +2947,43 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   (4.5-5.0%: cap not binding at 1%, 826 entries).
 - Timing harness: ours is static or `--ours-recal` (recalibration + audits); detection and cache
   rebuilds are NOT implemented there. Main timing batch held (/tmp/mx/TIMING_GATE) until decided.
+
+### 9ac. Decisions and plan (11-14 night, Jialin away ~24 h)
+
+- Variants kept side by side; which one is called "ours" is decided later from multiple scenarios:
+  ours-static, ours-drift (detection + shadow rebuild), LRU (our warm-up cache + calibrated hit test,
+  every miss admitted at fixed K, least-recently-used eviction), and a new continuous variant
+  (below). Real logs (TripClick, SPACEV real log) always use the drift-handling forms.
+- Timing: drift handling must run its own logic live in the timing harness (no replay of
+  simulator installs). Time both ours-static and ours-drift (plus LRU, Aker, QVCache).
+- Periodic re-selection was tried before (5p-5q) and dropped; its problem was partly labeled rebuild
+  data (hits labeled only when audited, up-weighted 1/a: unbiased but noisy exactly on the hot
+  queries; and only labeled queries can be candidate centers). New continuous variant to prototype:
+  every miss (fully labeled by the backend) becomes a candidate entry; entry size chosen by
+  estimated utility (hits per vector); eviction by lowest estimated utility AND by LRU (Jialin
+  expects these to be similar; test both).
+- Plan: (1) drift handling in eval_timing_online; (2) release TIMING_GATE after checking it;
+  (3) prototype the continuous variant in online_sim; (4) analyze capped-K (/tmp/mx/maxk.txt) and
+  warm-up-length (/tmp/mx/warmup_len.txt) tests; check every 30 min.
+- Entry size (11-14, `--max-ball-k 20`: the same greedy selection limited to top-20 entries, LRU's
+  size; seed 0, hit % / retention): ESCI 10% 30.3 -> 16.4 (LRU 25.6), ESCI 1% 10.1 -> 7.2 (LRU 0.4),
+  SPACEV Zipf 0.6 1% 13.2 -> 10.6 (LRU 11.6), Zipf 0.99 1% 50.6 -> 46.4 (LRU 47.3), TripClick 1%
+  4.6 -> 4.3 (LRU 5.2). Larger entries are genuinely better when chosen by utility; on ESCI (no
+  repeats) capped greedy falls below LRU at 10%. Greedy's average entry grows with the budget
+  (SPACEV Zipf 0.6: ~30 / 76 / 134 / 275 distinct vectors per entry at 0.3 / 1 / 3 / 10%).
+- Simulator fixes for the timing harness (11-14): `make_parser()` (parser shared with the harness),
+  `Sim.cache_state()` (hit-path state of the current cache), `Sim.last_hold` (held-out calibration
+  requests of an installed rebuild); with --backend-file the exact truth falls back to the prep's
+  top500.npy when topU1000.npy is missing (TriviaQA / TripClick / MedRAG warm-up states would
+  otherwise have crashed).
+- Timing harness `--method ours_drift` (class OursDrift): the simulator's controller (Sim: label
+  window, detect, alarm reset, post-alarm shadow-rebuild checks, calibrate) runs live on the run's
+  own scores (harness hit path) and labels (backend answers); installs build a new hit path
+  (background work), held-out calibration requests re-scored on it. Validation: tc-test (TripClick
+  alias, exact answers as "backend"), harness vs simulator on the same 40k requests
+  (results/timing_test/tc-test).
+- ours_drift validation (tc-test, 1%, 40k requests after the 20k warm-up): simulator events
+  alarm 21k, 24k, rebuild 29k, then alarms / rebuilds at 31k-60k; harness: identical through the
+  29k rebuild, then a few thousand requests apart (the harness scores through its HNSW hit path,
+  the simulator exactly), 4 rebuilds installed, 22.5 s background. Hit rate 2.8% vs 3.6%, retention
+  0.927 vs 0.917. The harness needs scikit-learn in .venv-ann (installed 1.6.1, numpy 1.25.0 kept).

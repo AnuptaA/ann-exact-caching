@@ -724,6 +724,7 @@ class Sim:
         s = self.model(X)
         self.reset_detection()
         hl = lab[hold]
+        self.last_hold = (hq, hl, 1 / pi[hold])   # for callers that re-score them (timing harness)
         self.cal = [(t, s[hl], self.y(hq, nh)[hl], 1 / pi[hold][hl], hq[hl])]
         self.ref = [(t, s)]
         self.calibrate(t)
@@ -789,25 +790,32 @@ class Sim:
 
     # -- main loop ---------------------------------------------------------
 
+    def cache_state(self):
+        """The current cache as the timing harness's hit path takes it (eval_timing.FastHitPath):
+        cached vector ids, entry centers and radii, the shell sample (ids and the b-bit vectors as
+        used), model coefficients, lambda, k, sampling rate, budget."""
+        c = self.cache
+        c.prepare()
+        mp = self.model.params
+        return dict(cached_ids=c.cached_ids, centers=c.centers, radius=c.radius,
+                    samp_ids=c.samp_ids, sv=c.sv, mu=mp["mu"], sd=mp["sd"], coef=mp["coef"],
+                    intercept=mp["intercept"], lam=np.nan if self.lam is None else self.lam,
+                    k=self.k, p=c.p, bits=c.bits, budget=self.M, memory=c.memory(),
+                    entry_samp=np.concatenate(c.entry_samp) if c.entry_samp else np.empty(0, int),
+                    entry_samp_off=np.cumsum([0] + [len(x) for x in c.entry_samp]),
+                    shell_scope=c.shell_scope)
+
     def save_state(self, path):
         """Cache state after warm-up for eval_timing.py: cached vector ids,
         entry centers and radii, the shell sample (ids and the b-bit vectors
         as used), model coefficients, lambda, k; plus the warm-up length."""
         c = self.cache
-        c.prepare()
-        mp = self.model.params
         # the simulator's own scores for the next queries, to validate the
         # per-query re-implementation in eval_timing.py
         test_q = self.stream[self.a.warmup:self.a.warmup + 3000]
+        st = self.cache_state()
         test_scores = self.model(c.features(test_q)[0])
-        np.savez(path, cached_ids=c.cached_ids, centers=c.centers, radius=c.radius,
-                 samp_ids=c.samp_ids, sv=c.sv, mu=mp["mu"], sd=mp["sd"], coef=mp["coef"],
-                 intercept=mp["intercept"], lam=np.nan if self.lam is None else self.lam,
-                 k=self.k, warmup=self.a.warmup, p=c.p, bits=c.bits, budget=self.M,
-                 memory=c.memory(), test_q=test_q, test_scores=test_scores,
-                 entry_samp=np.concatenate(c.entry_samp) if c.entry_samp else np.empty(0, int),
-                 entry_samp_off=np.cumsum([0] + [len(x) for x in c.entry_samp]),
-                 shell_scope=c.shell_scope,
+        np.savez(path, **st, warmup=self.a.warmup, test_q=test_q, test_scores=test_scores,
                  # calibration labels at save time (the warm-up's calibration set): the timing
                  # harness seeds its recalibration with them, as the simulator keeps them
                  cal_t=np.concatenate([np.full(len(x[1]), x[0]) for x in self.cal]) if self.cal else np.empty(0),
@@ -984,7 +992,10 @@ def load(prep, args):
         if kind != "none":
             raise SystemExit("real-index backends support a fixed database only")
         z = np.load(bfile)
-        D["truth"] = np.load(Path(prep) / "topU1000.npy")
+        # exact truth: the union ranking where it exists (ESCI, SPACEV preps), else the prep's own
+        # exact top-R (TriviaQA, TripClick, MedRAG: only top500.npy; the truth needs only top-k)
+        wide = Path(prep) / "topU1000.npy"
+        D["truth"] = np.load(wide) if wide.exists() else np.load(Path(prep) / f"top{args.R}.npy")
         D["rank"] = D["top"] = z[f"deep_{args.backend_target}"]
         D["answer"] = z[f"answer_{args.backend_target}"]
         D["backend_recall_measured"] = {
@@ -993,7 +1004,9 @@ def load(prep, args):
     return D, streams
 
 
-def main():
+def make_parser():
+    """The simulator's options (also used by eval_timing_online.py's drift-handling ours, which
+    runs this simulator's controller live)."""
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--prep", type=str, default="simulations/approximate_hits/results/online/esci1m")
     ap.add_argument("--method", choices=["static", "greedy", "lru", "aker", "qvcache"],
@@ -1117,7 +1130,11 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-queries", type=int, default=None, help="truncate the stream")
     ap.add_argument("--out", type=str, default=None)
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = make_parser().parse_args()
     K_LIMIT[0] = args.max_ball_k
     D, streams = load(args.prep, args)
     if args.warmup is None:         # from the FULL stream (--max-queries truncates it for the states)

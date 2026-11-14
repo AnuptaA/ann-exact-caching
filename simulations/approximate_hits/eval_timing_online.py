@@ -200,6 +200,141 @@ class Ours:
             self.cal.maybe(t)
 
 
+# -- ours with drift handling: the simulator's controller, running live -------------------------
+
+class OursDrift(Ours):
+    """Ours with drift handling (decided with Jialin 11-14: always on the real logs, and timed next to
+    the static form everywhere). The simulator's own controller (online_sim.Sim: label window, drift
+    tests, alarm resets, post-alarm shadow-rebuild checks, recalibration) runs LIVE inside this run:
+    every request's score comes from this harness's hit path, every label from this run's backend
+    answers (misses; audited hits, weight 1 / audit rate), in batches of the simulator's size. When
+    the controller installs a rebuilt cache, a new hit path is built from it and the held-out
+    calibration requests are re-scored on it. All of that is background work (greedy selection, the
+    top-500 lists of new candidates, the HNSW build), its time reported as background_rebuild_s and
+    not charged to a request. Nothing is replayed from a simulator run."""
+
+    def __init__(self, args, db, q, st, prep):
+        from simulations.approximate_hits import online_sim as osim
+        from simulations.approximate_hits.eval_timing import FastHitPath
+        self._FastHitPath, self._db, self._q = FastHitPath, db, q
+        bf = RES / "backends" / Path(prep).name / "diskann.npz"
+        sargs = osim.make_parser().parse_args(
+            ["--prep", str(prep), "--method", "greedy", "--budget", f"{args.budget:g}", "--stream", args.stream,
+             "--seed", "0", "--detect", *args.detect, "--response", "rebuild", "--shell-scope", "balls",
+             "--shell-balls", str(SHELL_BALLS), "--backend-file", str(bf), "--backend-target", args.target_recall,
+             "--warmup", str(int(st["warmup"])), "--k", str(args.k), "--target", str(args.target),
+             "--delta", str(args.cal_delta), "--audit-rate", str(args.audit_rate), "--cal-span", str(args.cal_span),
+             "--batch", str(args.cal_every)])
+        if sargs.alarm_audit_rate is None:
+            sargs.alarm_audit_rate = sargs.audit_rate
+        osim.K_LIMIT[0] = sargs.max_ball_k
+        D, streams = osim.load(str(prep), sargs)
+        self.sim = osim.Sim(D, streams[args.stream], sargs)
+        self.sim.warmup()                      # same data, seed and options as the state's run
+        c_sim = set(map(int, self.sim.cache_state()["centers"]))
+        if c_sim != set(map(int, st["centers"])):
+            raise SystemExit(f"controller warm-up cache differs from the state ({len(c_sim)} vs "
+                             f"{len(st['centers'])} entries): state built with other options?")
+        self.ans = args._answers
+        self.live = False
+        args.ours_recal = True                 # audits and labels on
+        super().__init__(args, db, q, st)      # hit path from the state; warm-up labels on this path
+        # the warm-up calibration set, scored on this hit path, is the controller's calibration
+        lab = list(self.cal.lab)
+        cq = np.asarray(st["cal_q"], dtype=np.int64)
+        t0 = int(st["warmup"])
+        if len(lab) == len(cq) and len(cq):
+            s_ = np.array([x[1] for x in lab])
+            self.sim.cal = [(t0, s_, np.array([x[2] for x in lab]), np.array([x[3] for x in lab]), cq)]
+            self.sim.ref = [(t0, s_)]
+        self.sim.lam_start = self.cal.start
+        self.sim.calibrate(t0)
+        self.warmup, self.batch = t0, sargs.batch
+        self.pending, self.buf = [], []
+        self.background = self.rebuild_s = 0.0
+        self.rebuilds = 0
+        self.live = True
+        logger.info(f"ours (drift: {' '.join(args.detect)} + shadow rebuild): controller cutoff {self.sim.lam}")
+
+    def lookup(self, qi, x):
+        if self.live:
+            self.cal.lam = self.sim.lam        # the controller's cutoff
+        hit, near = super().lookup(qi, x)
+        self._qi, self._hit, self._y = int(qi), hit, np.nan
+        return hit, near
+
+    def label(self, t, answer, w):
+        if not self.live:                      # warm-up calibration on the serving path
+            return super().label(t, answer, w)
+        self._y = served_overlap(self._near, answer, self.k)
+
+    def after(self, t):
+        self.buf.append((self._qi, self._s, self._hit, bool(self._hit and np.isfinite(self._y)), self._y))
+        if (t + 1 - self.warmup) % self.batch == 0:
+            self._batch_end(t + 1)
+
+    def _batch_end(self, tt):
+        """One simulator batch step (online_sim.Sim.run, greedy, response rebuild) on this run's data."""
+        sim, a = self.sim, self.sim.a
+        b = self.buf
+        self.buf = []
+        qb = np.array([x[0] for x in b], dtype=np.int64)
+        s = np.array([x[1] for x in b], dtype=float)
+        serve = np.array([x[2] for x in b], dtype=bool)
+        aud = np.array([x[3] for x in b], dtype=bool)
+        y = np.array([x[4] for x in b], dtype=float)
+        rate = a.audit_rate
+        lab = ~serve | aud
+        wt = np.where(serve, 1 / rate, 1.0)
+        sim.cal.append((tt, s[lab], y[lab], wt[lab], qb[lab]))
+        sim.ref.append((tt, s))
+        sim.audits.append((tt, y[aud], np.full(int(aud.sum()), 1 / rate)))
+        sim.window = (sim.window + [(int(q_), bool(v), bool(u), rate)
+                                    for q_, v, u in zip(qb, serve, aud)])[-a.window:]
+        kind = sim.detect(tt)
+        if kind:
+            sim.events.append({"t": tt, "event": "alarm", "kind": kind})
+            sim.reset_detection()
+            sim.window = []
+            self.pending = [tt + d for d in a.alarm_checks]
+            logger.info(f"t={tt}: {kind} alarm, rebuild checks at {self.pending}")
+        elif self.pending and tt >= self.pending[0]:
+            while self.pending and tt >= self.pending[0]:
+                self.pending.pop(0)
+            b0 = time.perf_counter()
+            if sim.try_rebuild(tt):
+                self._install(tt)
+            dt = time.perf_counter() - b0
+            self.background += dt
+            self.rebuild_s += dt
+        sim.calibrate(tt)
+
+    def _install(self, tt):
+        """A rebuilt cache from the controller: new hit path; held-out labels re-scored on it."""
+        sim = self.sim
+        st2 = sim.cache_state()
+        self.hp = self._FastHitPath(self._db, self._q, st2, f"hnsw{KNN_EF}", "balls10")
+        self.cached = np.zeros(len(self._db), dtype=bool)
+        self.cached[st2["cached_ids"]] = True
+        hq, hl, w = sim.last_hold
+        t_save, live = dict(self.t), self.live
+        self.live = False
+        self.cal.lam = None                    # score only
+        sc, yy = [], []
+        for qi in hq.tolist():
+            super().lookup(int(qi), np.asarray(self._q[qi], dtype=np.float32))
+            sc.append(self._s)
+            yy.append(served_overlap(self._near, self.ans[qi], self.k))
+        self.t, self.live = t_save, live
+        sc, yy = np.array(sc), np.array(yy)
+        sim.cal = [(tt, sc[hl], yy[hl], w[hl], hq[hl])]
+        sim.ref = [(tt, sc)]
+        sim.calibrate(tt)
+        self.rebuilds += 1
+        logger.info(f"t={tt}: rebuilt cache installed ({len(st2['centers'])} entries, "
+                    f"{len(st2['cached_ids'])} vectors), cutoff {sim.lam}")
+
+
 # -- LRU: our hit rule + LRU population, maintained incrementally -------------------------------
 
 class LRU(Ours):
@@ -643,7 +778,9 @@ class QVCacheFast:
 
 def main():
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--method", choices=["ours", "lru", "aker", "qvcache"], required=True)
+    ap.add_argument("--method", choices=["ours", "ours_drift", "lru", "aker", "qvcache"], required=True)
+    ap.add_argument("--detect", nargs="+", default=["score"],
+                    help="ours_drift: the simulator's drift tests (headline form: score)")
     ap.add_argument("--prep", required=True)
     ap.add_argument("--budget", type=float, required=True)
     ap.add_argument("--state", default=None, help="ours / lru: online_sim --save-state file")
@@ -729,9 +866,11 @@ def main():
                 f"{len(req)} requests, {int(timed_mask.sum())} timed (1 in {args.sample_every})")
     deep = None
     args._answers = ans                     # for the serving-path warm-up calibration
-    if args.method in ("ours", "lru"):
+    if args.method in ("ours", "ours_drift", "lru"):
         if args.method == "ours":
             m = Ours(args, db, q, st)
+        elif args.method == "ours_drift":
+            m = OursDrift(args, db, q, st, prep)
         else:
             deep = np.load(RES / "backends" / prep.name / "diskann.npz")[f"deep_{args.target_recall}"]
             m = LRU(args, db, q, st, deep)
@@ -839,7 +978,9 @@ def main():
            "cache": dict(summary(total), hits_ms=summary(total[th]), misses_ms=summary(total[~th])),
            "stage_ms": {s_: v / n * 1e3 for s_, v in getattr(m, "t", {}).items()},
            "replay_s": time.time() - t0, "trace": trace,
-           "knn_fallbacks": int(getattr(m, "fallbacks", 0))}
+           "knn_fallbacks": int(getattr(m, "fallbacks", 0)),
+           "controller_events": getattr(getattr(m, "sim", None), "events", None),
+           "rebuilds_installed": int(getattr(m, "rebuilds", 0))}
     logger.info(f"hit rate {res['hit_rate']:.3f} (timed sample {res['hit_rate_timed']:.3f}); recall vs "
                 f"exact {res['recall_vs_exact_all']:.3f}; cache + DiskANN {res['cache']['mean_ms']:.2f} ms")
     req_all = req
