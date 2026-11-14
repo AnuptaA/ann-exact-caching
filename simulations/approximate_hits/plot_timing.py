@@ -30,6 +30,7 @@ TRACES = [("Zipf 0.3", "spacev-aker-0.3"), ("Zipf 0.6", "spacev-aker-0.6"), ("Zi
           ("TriviaQA, Zipf 0.99", "triviaqa-ip-0.99"), ("SPACEV real query log", "spacev-real"),
           ("TripClick real health-search log", "tripclick-ip"), ("MedRAG-Zipf (Proximity)", "medrag-ip")]
 BUDGETS = [0.003, 0.01, 0.03, 0.1]
+SIZES = {"medrag-ip": [0.0001, 0.0003, 0.001, 0.003]}   # 0.3% already holds MedRAG-Zipf's working set
 # LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
 # background work (decided with Jialin, 11-11); the sync runs stay in the table only
 TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
@@ -85,13 +86,14 @@ def main():
     for j, (title, prep) in enumerate(TRACES):
         ax = fig.add_subplot(gs[2 * (j // ncol), j % ncol])
         st = fig.add_subplot(gs[2 * (j // ncol) + 1, j % ncol], sharex=ax)
-        per_b = {b: load(prep, b) for b in BUDGETS}
+        bs = SIZES.get(prep, BUDGETS)
+        per_b = {b: load(prep, b) for b in bs}
         eq_pts = []
         for key, label, _, _ in TECHS:
             hk = HEADLINE_KEY[key]
             name, color, marker, lw = STYLE[hk]
             pts = []
-            for b in BUDGETS:
+            for b in bs:
                 r = per_b[b].get(key)
                 if r is None:
                     continue
@@ -137,10 +139,10 @@ def main():
         st.axhline(0.953, color="grey", lw=1, ls="--")
         st.set_ylim(0.70, 0.98)
         st.grid(alpha=0.3)
-        st.set_xticks(BUDGETS)
-        st.set_xticklabels([f"{100 * b:g}%" for b in BUDGETS], fontsize=8)
+        st.set_xticks(bs)
+        st.set_xticklabels([f"{100 * b:g}%" for b in bs], fontsize=8)
         st.minorticks_off()
-        st.set_xlim(BUDGETS[0] * 0.75, BUDGETS[-1] * 1.35)
+        st.set_xlim(bs[0] * 0.75, bs[-1] * 1.35)
         st.set_xlabel("cache size (fraction of the dataset)", fontsize=9)
     fig.legend(loc="lower center", ncol=5, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
     fig.text(0.5, 0.955, "DiskANN tuned per workload (search list x beam width, recall@10 0.95 or 0.9 if 0.95 > 100 ms), same index for every technique; whole stream after "
