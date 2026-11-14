@@ -171,7 +171,7 @@ def main():
     # 2b. queries -> request vectors
     req_npy = AKER / f"tripclick-ip-requests-{tag}.npy"
     if not req_npy.exists():
-        qv = encode("ncbi/MedCPT-Query-Encoder", info["texts"], 64, 256)
+        qv = encode("ncbi/MedCPT-Query-Encoder", info["texts"], 64, 256, pad_multiple=16)
         qv = np.hstack([qv, np.zeros((len(qv), 1), np.float32)])
         np.save(req_npy, qv[np.asarray(info["seq"])].astype(np.float32))
         logger.info(f"wrote {req_npy} ({len(info['seq'])} requests)")

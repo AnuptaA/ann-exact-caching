@@ -122,7 +122,7 @@ def queries(args):
         texts.append(par[q][nxt[q]])
         nxt[q] += 1
     assert len(set(texts)) == len(texts), "rewordings must be unique"
-    v = encode("ncbi/MedCPT-Query-Encoder", texts, 64, 256)
+    v = encode("ncbi/MedCPT-Query-Encoder", texts, 64, 256, pad_multiple=16)
     v = np.hstack([v, np.zeros((len(v), 1), np.float32)]).astype(np.float32)
     np.save(AKER / "medrag-ip-requests.npy", v)
     (D / "requests.json").write_text(json.dumps({"texts": texts, "question": draw_["seq"]}))
