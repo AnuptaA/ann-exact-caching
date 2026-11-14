@@ -2890,3 +2890,14 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   0.717/0.904, 0.919/0.910. Ours wins clearly under tight memory; LRU once the working set fits
   (greedy fills from the 2,000-request warm-up only: 39k of 239k vectors used at 1%).
   Real Aker paper default ~46% at retention 0.76 (every request is a unique rewording: no exact hits).
+- Backend selection v2 (11-14 17:37; recall over each workload's requests, latency from the quiet
+  probe, single query, EBS):
+  esci1m 0.95: esci L 100 W 32, recall 0.9549, 8.6 ms (p99 11.7);
+  spacev-aker-0.3 0.95: spacev-pq110 L 100 W 32, 0.9545, 10.2 ms; -0.6 / -0.99: spacev L 100 W 32,
+  0.9509 / 0.9612, 9.9 ms (p99 14.2);
+  spacev-real 0.9 (0.95 not reached by any setting): spacev-real-pq110 L 1000 W 32, 0.9091, 66.9 ms;
+  triviaqa-ip-0.3 / 0.6 / 0.99 0.95: aker_tqa (degree 96, 512-byte PQ) L 1000 W 32, 0.953, 75.9 ms
+  (p99 85.9); the 256-byte-PQ base index tops out at 0.947 (L 2000) on the 0.99 trace.
+  Beam width 32 everywhere: v1 used beam 2 (TriviaQA 0.95 needed L 2000, ~740 ms).
+- AIO lock (11-14): the first diskann_aio held the lock while waiting; a waiter suspended by a quiet
+  batch would have blocked every timing run on the lock. Now the lock is held only to check and open.
