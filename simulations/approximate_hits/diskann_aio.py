@@ -27,25 +27,26 @@ def _read(p):
 
 
 def open_disk_index(max_wait=None, **kwargs):
-    """diskannpy.StaticDiskIndex(**kwargs) once enough AIO events are free (or after max_wait s)."""
+    """diskannpy.StaticDiskIndex(**kwargs) once enough AIO events are free (or after max_wait s).
+    The lock is held only to check and open, never while sleeping (11-14: a waiter that holds it
+    and is then suspended by a quiet timing batch would block every timing run)."""
     import diskannpy
     need = EVENTS_PER_THREAD * int(kwargs.get("num_threads", 1))
-    with open(LOCK, "a") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
-        try:
-            t0 = last = time.time()
-            while True:
+    t0 = last = time.time()
+    while True:
+        with open(LOCK, "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            try:
                 try:
                     used, cap = _read("/proc/sys/fs/aio-nr"), _read("/proc/sys/fs/aio-max-nr")
                 except OSError:
-                    break
+                    used, cap = 0, need
                 if used + need <= cap or need > cap or (max_wait is not None and time.time() - t0 > max_wait):
-                    break
-                if time.time() - last > 600:
-                    logger.info(f"waiting for AIO contexts: need {need}, {cap - used} free "
-                                f"({(time.time() - t0) / 60:.0f} min)")
-                    last = time.time()
-                time.sleep(20)
-            return diskannpy.StaticDiskIndex(**kwargs)
-        finally:
-            fcntl.flock(lk, fcntl.LOCK_UN)
+                    return diskannpy.StaticDiskIndex(**kwargs)
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
+        if time.time() - last > 600:
+            logger.info(f"waiting for AIO contexts: need {need}, {cap - used} free "
+                        f"({(time.time() - t0) / 60:.0f} min)")
+            last = time.time()
+        time.sleep(20)
