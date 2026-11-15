@@ -3059,3 +3059,11 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   large-cache gap on SPACEV / TriviaQA Zipf 0.3-0.6 is open.
 - --og-span (window of misses and credits): 40k >= 20k (default) > 10k slightly (SPACEV 0.6 1%:
   17.4 / 17.0 / 14.3; TripClick 1%: 8.8 / 7.4 / 6.4; ESCI 10%: 33.0 / 32.8 / 33.2): not sensitive.
+- Honesty fix (11-15 04:30): rho used every request's retention (log ret_hist), including
+  unaudited hits, which a real cache cannot know. Now: served hits (known) / oracle hit rate
+  estimated from the labeled requests of the span (misses weight 1, audited hits 1 / rate) x
+  requests. Other ogreedy inputs checked (credits: served answers; scoring: misses' backend
+  answers; candidates: backend top-R, counted; seed: warm-up, all labeled). TripClick 10% check:
+  27.3% / 0.912 (rho 0.84-0.86) vs 27.3% / 0.913 before. All ogreedy headline runs (80) and the
+  LRU-eviction runs (12) rerun with the fixed code; previous outputs archived as *_v3.json. The
+  og-span / og-fresh / og-split diagnostics above used the previous rho (difference ~0).

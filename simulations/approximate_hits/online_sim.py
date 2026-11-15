@@ -867,13 +867,23 @@ class Sim:
         # warm-up's in-sample rates as a prior worth its scoring split); without it candidates
         # always outrank incumbents (TripClick 10%: ~1,400 changes per batch, retention 0.892 < T)
         from simulations.approximate_hits.greedy_population import hits_from_histograms
-        recent = [b for b in self.log if b["t"] > t - span and "ret_hist" in b]
+        # online information only (11-15): served hits are known; the oracle hit rate is
+        # estimated from the LABELED requests (misses, weight 1; audited hits, weight 1 / audit
+        # rate), never from unaudited hits' retention (a first version used every request's
+        # retention from the log: unavailable to a real cache)
+        recent = [b for b in self.log if b["t"] > t - span]
+        labs = [c for c in self.cal if c[0] > t - span]
         ins = getattr(self, "insample", None) or {}
         n0 = ins.get("n_score", 0)
+        n_req = sum(b["n"] for b in recent)
         srv = sum(b["served"] for b in recent) + n0 * ins.get("calibrated_hit_rate", 0.0)
-        hist = np.sum([b["ret_hist"] for b in recent], axis=0) if recent else np.zeros(k + 1)
-        orc = float(hits_from_histograms(np.asarray(hist, dtype=np.int64), self.T, k)[0]) \
-            + n0 * ins.get("cache_oracle_hit_rate", 0.0)
+        orc = n0 * ins.get("cache_oracle_hit_rate", 0.0)
+        if labs and n_req:
+            yy = np.concatenate([c[2] for c in labs])
+            ww = np.concatenate([c[3] for c in labs])
+            hist = np.bincount(np.rint(yy * k).astype(int), weights=ww, minlength=k + 1)
+            hi = np.rint(hist * 1000.0 / max(ww.sum(), 1e-9)).astype(np.int64)   # ~1,000 units
+            orc += float(hits_from_histograms(hi, self.T, k)[0]) / max(hi.sum(), 1) * n_req
         rho = float(np.clip(srv / orc, 0.0, 1.0)) if orc > 0 else 1.0
         # vectors an eviction actually frees: those no other remaining entry holds
         cache._update_members()
