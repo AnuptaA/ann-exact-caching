@@ -34,10 +34,11 @@ STYLE = {"aker_paper": ("Aker, paper default (a_T .25, a_L 1.1)", "#0072B2", "D"
          "qvcache_paper": ("QVCache, paper's D procedure", "#009E73", "s", 1.1),
          "ours": ("Ours (calibrated)", "#D55E00", "o", 2.6),
          "ours_drift": ("Ours, drift handling (timing)", "#CC79A7", "o", 1.8),
+         "ours_online": ("Ours, continuous greedy (prototype)", "#7F3F00", "P", 1.8),
          "lru": ("LRU", "#6B6B6B", "^", 1.6),
          "aker": ("Aker, tuned by hand to the target", "#0072B2", "D", 1.6),
          "qvcache": ("QVCache, tuned by hand to the target", "#009E73", "s", 1.6)}
-JITTER = {"ours": 1.0, "ours_drift": 1.04, "lru": 0.93, "aker": 1.07, "qvcache": 1.14, "aker_paper": 1.07, "qvcache_paper": 1.14}     # x offsets (log axis)
+JITTER = {"ours": 1.0, "ours_drift": 1.04, "ours_online": 0.97, "lru": 0.93, "aker": 1.07, "qvcache": 1.14, "aker_paper": 1.07, "qvcache_paper": 1.14}     # x offsets (log axis)
 # (title, prep, stream, uses real Aker?)
 LAYOUT = [
     [("SPACEV, Zipf 0.3", "spacev-aker-0.3", "trace", True),
@@ -96,7 +97,7 @@ def pick(cands):
 def collect(prep, stream, budget, real_aker):
     out = {}
     # ours and LRU: seeds 0 and 1
-    for tech, names in (("ours", OURS_NAMES), ("lru", LRU_NAMES)):
+    for tech, names in (("ours", OURS_NAMES), ("lru", LRU_NAMES), ("ours_online", ["ogreedy_utility"])):
         cands = []
         for name in names:
             runs = [sim_stats(sim_dir(prep, stream, budget, s) / f"{name}.json") for s in (0, 1)]
@@ -154,7 +155,7 @@ def draw_panel(fig, outer, title, data, ymax_pad=1.18, speedup_axis=False, first
     inner = GridSpecFromSubplotSpec(2, 1, subplot_spec=outer, height_ratios=[3.3, 1], hspace=0.07)
     ax = fig.add_subplot(inner[0])
     st = fig.add_subplot(inner[1], sharex=ax)
-    for tech in ("aker_paper", "qvcache_paper", "lru", "qvcache", "aker", "ours"):
+    for tech in ("aker_paper", "qvcache_paper", "lru", "qvcache", "aker", "ours_online", "ours"):
         label, col, mk, lw = STYLE[tech]
         paper = tech.endswith("_paper")
         pts = [(b * JITTER[tech], data[b][tech]) for b in sorted(data) if data[b].get(tech)]
@@ -230,7 +231,7 @@ def main():
     # legend and notes in the free cell
     ax = fig.add_subplot(outer[len(LAYOUT) - 1, 1:])
     ax.axis("off")
-    order = ["ours", "lru", "aker", "aker_paper", "qvcache", "qvcache_paper"]
+    order = ["ours", "ours_online", "lru", "aker", "aker_paper", "qvcache", "qvcache_paper"]
     handles = [plt.Line2D([], [], color=STYLE[t][1], marker=STYLE[t][2], lw=STYLE[t][3], ms=7, label=STYLE[t][0],
                           ls=(0, (5, 2.5)) if t.endswith("_paper") else "-") for t in order if t in STYLE]
     handles += [plt.Line2D([], [], color="k", marker="o", ls="none", mfc="k", label="reaches recall 0.9 (within .01)"),
