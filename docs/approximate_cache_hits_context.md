@@ -3034,3 +3034,16 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   ~70k-80k, then recover): a property of that log period. --og-split with maintained labels (fresh
   calibration against the current cache, build / calibration halves) did not reduce them (1%: 7 of
   16 windows below, 9.5% / 0.907); kept as an option, not the default.
+
+- Headline values, continuous greedy (og, ogreedy_utility, seeds 0 and 1) vs ours vs LRU (hit %, retention), 11-15 03:00:
+  spacev-aker-0.3 0.3%: og (3.4, 0.938) ours (3.0, 0.92) lru (1.6, 0.931) | 1%: og (6.1, 0.926) ours (4.4, 0.932) lru (4.6, 0.926) | 3%: og (10.1, 0.918) ours (8.0, 0.921) lru (10.6, 0.917) | 10%: og (19.7, 0.914) ours (14.3, 0.92) lru (27.3, 0.917)
+  spacev-aker-0.6 0.3%: og (12.7, 0.92) ours (10.3, 0.922) lru (5.9, 0.925) | 1%: og (17.0, 0.919) ours (13.3, 0.92) lru (11.6, 0.919) | 3%: og (21.3, 0.92) ours (17.3, 0.919) lru (18.7, 0.917) | 10%: og (31.3, 0.919) ours (24.1, 0.917) lru (36.7, 0.914)
+  spacev-aker-0.99 0.3%: og (49.6, 0.915) ours (47.4, 0.913) lru (42.6, 0.911) | 1%: og (53.7, 0.914) ours (50.5, 0.913) lru (47.3, 0.914) | 3%: og (58.2, 0.911) ours (54.7, 0.913) lru (53.9, 0.916) | 10%: og (66.1, 0.911) ours (59.6, 0.912) lru (67.0, 0.915)
+  triviaqa-ip-0.3 0.3%: og (2.5, 0.922) ours (2.9, 0.916) lru (1.0, 0.931) | 1%: og (12.5, 0.917) ours (8.7, 0.916) lru (6.1, 0.908) | 3%: og (26.3, 0.918) ours (19.4, 0.914) lru (19.0, 0.916) | 10%: og (60.1, 0.909) ours (38.2, 0.909) lru (62.9, 0.908)
+  triviaqa-ip-0.6 0.3%: og (10.7, 0.918) ours (11.7, 0.912) lru (6.2, 0.91) | 1%: og (25.5, 0.913) ours (19.9, 0.912) lru (17.7, 0.91) | 3%: og (38.7, 0.915) ours (31.9, 0.913) lru (29.9, 0.917) | 10%: og (68.4, 0.91) ours (50.8, 0.909) lru (71.3, 0.907)
+  triviaqa-ip-0.99 0.3%: og (58.7, 0.913) ours (57.0, 0.912) lru (53.2, 0.912) | 1%: og (66.5, 0.912) ours (64.0, 0.914) lru (62.4, 0.911) | 3%: og (75.0, 0.91) ours (71.8, 0.909) lru (71.1, 0.911) | 10%: og (91.4, 0.913) ours (81.3, 0.908) lru (91.3, 0.913)
+  esci1m 0.3%: og (6.8, 0.926) ours (6.1, 0.924) lru (0.1, 0.885) | 1%: og (10.9, 0.919) ours (9.8, 0.917) lru (0.1, 0.851) | 3%: og (17.4, 0.916) ours (15.4, 0.914) lru (10.0, 0.919) | 10%: og (33.0, 0.913) ours (29.8, 0.912) lru (25.0, 0.91)
+  spacev-real 0.3%: og (4.5, 0.947) ours None lru None | 1%: og (5.7, 0.936) ours (4.6, 0.939) lru (3.5, 0.95) | 3%: og (7.4, 0.924) ours None lru None | 10%: og (10.5, 0.907) ours (7.6, 0.918) lru (10.1, 0.925)
+  tripclick-ip 0.3%: og (5.4, 0.934) ours (2.2, 0.937) lru (2.4, 0.931) | 1%: og (7.9, 0.927) ours (4.4, 0.921) lru (7.0, 0.929) | 3%: og (13.8, 0.919) ours (7.3, 0.92) lru (12.4, 0.919) | 10%: og (28.1, 0.913) ours (14.1, 0.911) lru (25.0, 0.916)
+  medrag-ip 0.01%: og (50.4, 0.918) ours (44.3, 0.921) lru (23.7, 0.918) | 0.03%: og (67.3, 0.913) ours (57.2, 0.919) lru (40.9, 0.904) | 0.1%: og (73.8, 0.912) ours (59.7, 0.923) lru (70.5, 0.909) | 0.3%: og (88.9, 0.919) ours (66.4, 0.919) lru (91.8, 0.91)
+  og >= ours at every cell except TriviaQA 0.3% (0.3 / 0.6 Zipf: 2.5 vs 2.9, 10.7 vs 11.7); og >= LRU except the 10% cells of SPACEV 0.3 / 0.6 (19.7 vs 27.3, 31.3 vs 36.7), TriviaQA 0.3 / 0.6 10% (60.1 vs 62.9, 68.4 vs 71.3), SPACEV 0.99 10% (66.1 vs 67.0), SPACEV 0.3 3% (10.1 vs 10.6), MedRAG 0.3% (88.9 vs 91.8). Every og cell meets T.
