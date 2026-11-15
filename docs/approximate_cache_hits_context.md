@@ -3011,3 +3011,10 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   entry, and victims are valued per such vector. Check, requests 20k-45k, 10%: TripClick 27.3% /
   0.913 (ours 22.5 / 0.907, LRU K20 23.5 / 0.918, v1 22.3 / 0.858); ESCI 32.4% / 0.906 (ours 30.2 /
   0.910, LRU K20 26.1 / 0.906, v1 26.6 / 0.874). Full set rerun with the fixed code.
+- ogreedy (fixed) results, seed 0, hit % / retention / 5k windows below T (of 16), vs ours
+  (greedy_none), ours-drift, LRU best: ESCI 1% 10.8/0.920/0 (ours 10.1, LRU 0.4); ESCI 10%
+  32.8/0.914/0 (30.3, 25.6); SPACEV Zipf 0.6 1% 17.0/0.919/1 (13.2, 11.6); Zipf 0.99 1%
+  53.3/0.918/0 (50.6, 47.3); SPACEV real 1% 5.7/0.935/1 (4.5, 3.2); TripClick 1% 7.4/0.927/5 (4.6,
+  7.0); TripClick 10% 28.4/0.909/5 (20.4, 24.3); TriviaQA Zipf 0.6 1% 25.1/0.914/1 (19.8, 17.5).
+  Utility eviction >> LRU eviction (og-lru: Zipf 0.99 1% 33.0, Zipf 0.6 1% 6.2). Caveat: windows
+  below T on TripClick (5 of 16; LRU 1-4): the cache changes every batch, calibration lags.
