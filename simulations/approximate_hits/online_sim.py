@@ -626,6 +626,36 @@ class Sim:
                     f"p = {self.cache.p:.3f}, memory {self.cache.memory():.0f} / {self.M:.0f}, "
                     f"lambda {self.lam}")
 
+    # -- warm-up product (shared by timing runs of the same cell, doc 9ad) -------
+
+    WARM_KEYS = ("budget", "seed", "warmup", "stream", "target", "delta", "k", "f", "R", "bits", "warm_split",
+                 "oracle_score", "backend_file", "backend_target", "shell_scope", "shell_balls", "max_ball_k",
+                 "start", "label", "audit_rate", "cal_span")
+
+    def warm_key(self):
+        return {k: getattr(self.a, k, None) for k in self.WARM_KEYS}
+
+    def warm_product(self):
+        """Everything warmup() produced, picklable (the scorer as its coefficients)."""
+        return dict(key=self.warm_key(), entries=dict(self.cache.entries), params=self.model.params, lam=self.lam,
+                    lam_start=getattr(self, "lam_start", None), fit_q=self.fit_q, cal=self.cal, ref=self.ref,
+                    insample=self.insample, rng=self.rng.bit_generator.state, cost=dict(self.cost))
+
+    def restore_warm(self, prod):
+        """Install a warm_product() instead of running warmup(): the same cache, model, cutoff,
+        calibration set and random state, without the greedy selection (minutes at 10%)."""
+        if prod["key"] != self.warm_key():
+            raise ValueError("warm-up product made with other options")
+        self.cache.replace(prod["entries"])
+        self.cache.set_p_to_fill()
+        mp = prod["params"]
+        self.model = (lambda A, mp=mp: ((A - mp["mu"]) / mp["sd"]) @ mp["coef"] + mp["intercept"])
+        self.model.params = mp
+        self.lam, self.lam_start, self.fit_q = prod["lam"], prod["lam_start"], prod["fit_q"]
+        self.cal, self.ref, self.insample = prod["cal"], prod["ref"], prod["insample"]
+        self.rng.bit_generator.state = prod["rng"]
+        self.cost = prod["cost"]
+
     # -- drift tests -------------------------------------------------------
 
     def retention_alarm(self, t, level):

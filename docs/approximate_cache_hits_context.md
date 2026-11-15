@@ -3130,3 +3130,20 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   cache-only time + the request's DiskANN time measured once (technique runs would no longer hit the
   disk while timed); build the shared warm-up cache once instead of per technique; static ours'
   untimed decisions outside the quiet window.
+- Batch status 11-15 21:30 (TIMING4, 172 jobs, started 16:38): the 10 DiskANN-arm jobs took ~3.4 h
+  (~21 min each: the equal-memory arm opens DiskANN with 4 node-cache sizes); per-technique jobs
+  (SPACEV): ours ~2-3 min, drift 2-6, continuous 5-14 (controller work 3-9 min is wall time, counted
+  as background), LRU 6-11, Aker / QVCache 1-2. One cell ran "contended" (my own commands during the
+  batch): oursdrift SPACEV 0.6 1%, moved to timing_v4/contended_old and rerun. Batch loop stopped
+  at 21:30 after job ~29 (done jobs kept; the rest skip on restart) to edit the harness and run the
+  composed-timing check on a quiet machine.
+- Cost items (Jialin 11-15): (2) warm-up product shared: Sim.warm_product / restore_warm, the first
+  drift / continuous run of a cell stores timing_v4/<prep>/warm_b<b>.pkl, later ones load it (the
+  simulator's warm-up before replay took ~4 min per drift / online run; ~1.6 h over the batch).
+  (3) static ours untimed pass outside the quiet window: dropped as small (ours jobs are 2-3 min;
+  ~35 min in total) and superseded by item 1 if composed timing validates (then no technique run
+  needs a quiet machine). (1) composed timing: `--compose-backend backend_s50_lat.npy`: timed
+  requests use stored answers; a request that needs the backend (miss, audited hit) is charged that
+  request's DiskANN-alone latency measured by eval_timing_backend.py. Check on a quiet machine:
+  run_compose_check.sh (SPACEV Zipf 0.99 1% and TriviaQA Zipf 0.6 1%, six techniques): live vs
+  composed sequential vs composed with 12 jobs at once, 4 cores each.

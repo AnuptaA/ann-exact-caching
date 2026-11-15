@@ -202,6 +202,27 @@ class Ours:
 
 # -- ours with drift handling: the simulator's controller, running live -------------------------
 
+def warm_sim(sim, prep, budget):
+    """sim.warmup(), or the stored product of an earlier run of the same cell (doc 9ad): drift /
+    continuous runs of one workload and cache size share one warm-up (the simulator's greedy
+    selection, ~4 min). The first run stores it (atomically); a product made with other options is
+    recomputed."""
+    import pickle
+    f = RES / "timing_v4" / Path(prep).name / f"warm_b{budget:g}.pkl"
+    if f.exists():
+        try:
+            sim.restore_warm(pickle.loads(f.read_bytes()))
+            logger.info(f"warm-up product loaded from {f}")
+            return
+        except Exception as e:                                 # other options / unreadable: recompute
+            logger.warning(f"warm-up product {f} not used: {e!r}")
+    sim.warmup()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_bytes(pickle.dumps(sim.warm_product()))
+    tmp.rename(f)
+
+
 class OursDrift(Ours):
     """Ours with drift handling (decided with Jialin 11-14: always on the real logs, and timed next to
     the static form everywhere). The simulator's own controller (online_sim.Sim: label window, drift
@@ -230,7 +251,7 @@ class OursDrift(Ours):
         osim.K_LIMIT[0] = sargs.max_ball_k
         D, streams = osim.load(str(prep), sargs)
         self.sim = osim.Sim(D, streams[args.stream], sargs)
-        self.sim.warmup()                      # same data, seed and options as the state's run
+        warm_sim(self.sim, prep, args.budget)  # same data, seed and options as the state's run
         c_sim = set(map(int, self.sim.cache_state()["centers"]))
         if c_sim != set(map(int, st["centers"])):
             raise SystemExit(f"controller warm-up cache differs from the state ({len(c_sim)} vs "
@@ -669,7 +690,7 @@ class OursOnline(LRU):
         osim.K_LIMIT[0] = sargs.max_ball_k
         D, streams = osim.load(str(prep), sargs)
         self.sim = osim.Sim(D, streams[args.stream], sargs)
-        self.sim.warmup()
+        warm_sim(self.sim, prep, args.budget)
         c_sim = set(map(int, self.sim.cache_state()["centers"]))
         if c_sim != set(map(int, st["centers"])):
             raise SystemExit("controller warm-up cache differs from the state")
@@ -935,6 +956,11 @@ def main():
     ap.add_argument("--qv-dims", type=int, default=16)
     ap.add_argument("--qv-buckets", type=int, default=8)
     ap.add_argument("--no-equal-memory", action="store_true")
+    ap.add_argument("--compose-backend", default=None,
+                    help="composed timing (doc 9ad): per-request DiskANN-alone latencies (eval_timing_backend.py "
+                         "backend_s<every>_lat.npy, one per timed request). Timed requests then use the stored "
+                         "answers, and a request that needs the backend (miss, audited hit) is charged that "
+                         "request's measured DiskANN latency instead of a live call: the run touches no disk")
     ap.add_argument("--no-backend-arms", action="store_true",
                     help="skip DiskANN alone / equal memory (measured once per workload by "
                          "eval_timing_backend.py, doc 9ad); speedups are then computed by plot_timing")
@@ -973,6 +999,12 @@ def main():
     # 300 queries, top-10 at the tuned search list and top-500, 100% equal), so the cache evolves
     # exactly as with live calls, over the whole stream (doc 9m)
     timed_mask = (np.arange(len(req)) % args.sample_every) == 0
+    compose = None
+    tj_of = np.cumsum(timed_mask) - 1
+    if args.compose_backend:
+        compose = np.load(args.compose_backend)
+        if len(compose) != int(timed_mask.sum()):
+            raise SystemExit(f"--compose-backend has {len(compose)} latencies, {int(timed_mask.sum())} timed requests")
     logger.info(f"{args.method} on {prep.name}, budget {args.budget}, DiskANN search list {L} "
                 f"(recall@10 {bk['targets'][args.target_recall]['recall_answer_at_k']:.3f}); "
                 f"{len(req)} requests, {int(timed_mask.sum())} timed (1 in {args.sample_every})")
@@ -1034,7 +1066,14 @@ def main():
         t_req = args.warmup + i
         x = q[qi]
         timed = bool(timed_mask[i])
-        backend = live if timed else stored
+        chg = [0.0, False]                   # composed timing: charge of the request's backend call
+        if compose is not None:
+            def backend(qi_, kk, _timed=timed, _i=i):
+                if _timed and kk == args.k and not chg[1]:
+                    chg[0], chg[1] = float(compose[tj_of[_i]]), True
+                return stored(qi_, kk)
+        else:
+            backend = live if timed else stored
         if hasattr(m, "retention"):      # not timed: the cache's content before this request
             ret_sim[i] = m.retention(ans[qi])
         bg0 = getattr(m, "background", 0.0) + maint
@@ -1062,7 +1101,7 @@ def main():
             answer = ids[:args.k]
         m.after(t_req)
         if timed:
-            total.append(time.perf_counter() - a - (getattr(m, "background", 0.0) + maint - bg0))
+            total.append(time.perf_counter() - a - (getattr(m, "background", 0.0) + maint - bg0) + chg[0])
         hits[i], audited_all[i] = hit, audited
         ret[i] = float(np.isin(answer, top[qi, :args.k]).mean())           # vs exact (not timed)
         ret_b[i] = float(np.isin(answer, ans[qi, :args.k]).mean())         # vs DiskANN's answer
