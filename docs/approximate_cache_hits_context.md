@@ -3018,3 +3018,10 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   7.0); TripClick 10% 28.4/0.909/5 (20.4, 24.3); TriviaQA Zipf 0.6 1% 25.1/0.914/1 (19.8, 17.5).
   Utility eviction >> LRU eviction (og-lru: Zipf 0.99 1% 33.0, Zipf 0.6 1% 6.2). Caveat: windows
   below T on TripClick (5 of 16; LRU 1-4): the cache changes every batch, calibration lags.
+- Warm-up length (11-15, /tmp/mx/warmup_len.txt; seed 0; hit % / retention on requests after 60k
+  for every run): SPACEV Zipf 0.6 10%: ours 24.2 / 33.7 / 40.5 at warm-up 20k / 40k / 60k, LRU K20
+  39.1 / 39.4 / 40.0; Zipf 0.6 3%: ours 18.0 / 23.9 / 30.1, LRU 19.4 / 24.0 / 27.5; Zipf 0.99 3%:
+  54.7 / 60.0 / 62.3 vs 54.3 / 56.9 / 60.2; TriviaQA 0.6 3%: 31.8 / 43.5 / 51.9 vs 30.2 / 43.2 / 49.5.
+  A larger candidate pool closes the large-cache gap on stationary traces (ours >= LRU at 60k);
+  LRU also gains on some traces because it starts from the same greedy warm-up cache. The
+  continuous variant gets a growing pool without a longer warm-up.
