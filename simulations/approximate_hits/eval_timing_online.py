@@ -935,6 +935,9 @@ def main():
     ap.add_argument("--qv-dims", type=int, default=16)
     ap.add_argument("--qv-buckets", type=int, default=8)
     ap.add_argument("--no-equal-memory", action="store_true")
+    ap.add_argument("--no-backend-arms", action="store_true",
+                    help="skip DiskANN alone / equal memory (measured once per workload by "
+                         "eval_timing_backend.py, doc 9ad); speedups are then computed by plot_timing")
     ap.add_argument("--out", required=True)
     from simulations.approximate_hits.timing_env import add_args, make_guard
     add_args(ap)
@@ -1096,6 +1099,16 @@ def main():
            "entry_changes": int(getattr(m, "changes", 0))}
     logger.info(f"hit rate {res['hit_rate']:.3f} (timed sample {res['hit_rate_timed']:.3f}); recall vs "
                 f"exact {res['recall_vs_exact_all']:.3f}; cache + DiskANN {res['cache']['mean_ms']:.2f} ms")
+    if args.no_backend_arms:
+        guard.stop()
+        res["environment"] = guard.report()
+        res["speedup"] = None
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(str(Path(args.out).with_suffix("")) + "_lat.npz", idx=np.flatnonzero(timed_mask),
+                            cache=total, hit=th)
+        Path(args.out).write_text(json.dumps(res, indent=1))
+        logger.info(f"environment {res['environment']['verdict']} (backend arms skipped)")
+        return
     req_all = req
     req = req_all[timed_mask]          # the DiskANN-alone arms run the timed sample
     # DiskANN alone, and with the cache's memory as its node cache

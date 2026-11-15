@@ -105,6 +105,20 @@ def beam_for(prep, tgt="0.95"):
     return min(ok, key=lambda g: g["mean_ms"])["W"] if ok else 2
 
 
+def arm_lines(prep, every, stream="trace", out_root="timing_v4"):
+    """The DiskANN-only arms of a workload (alone; equal memory per cache size), measured once
+    (eval_timing_backend.py, doc 9ad), over the cache sizes whose warm-up states exist."""
+    import glob
+    out = f"{R}/{out_root}/{prep}"
+    sts = sorted(glob.glob(f"{out}/state_b*.npz"))
+    if not sts:
+        return []
+    js = f"{out}/backend_s{every}.json"
+    return [f"mkdir -p {out}/logs && [ -f {js} ] || .venv-ann/bin/python -u {S}/eval_timing_backend.py "
+            f"--prep {R}/online/{prep} --states {' '.join(sts)} --target-recall {target_of(prep)} --stream {stream} "
+            f"--sample-every {every} --wait-quiet 30 --out {js} > {out}/logs/backend_s{every}.txt 2>&1"]
+
+
 def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="timing_v4", stream="trace"):
     """Full-stream runs (doc 9m): the whole stream after warm-up, every `every`-th request timed
     live, cache updates as background work for every technique; ours static (no recalibration /
@@ -114,6 +128,7 @@ def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="ti
     out = f"{R}/{out_root}/{prep}"
     base = (f".venv-ann/bin/python -u {S}/eval_timing_online.py --prep {R}/online/{prep} "
             f"--budget {b:g} --sample-every {every} --maintenance background --wait-quiet 30 --stream {stream} "
+            f"--no-backend-arms "
             f"--target-recall {target_of(prep)}")
     jobs = []
     if "ours" in techs:
@@ -183,17 +198,24 @@ def main():
         work = [(f"spacev-aker-{z}", "trace", True) for z in ("0.99", "0.6", "0.3")] + \
             [("esci1m", "random", True)] + [(f"triviaqa-ip-{z}", "trace", False) for z in ("0.99", "0.6", "0.3")] + \
             [("spacev-real", "trace", False)]
+        E = 50       # 1 request in 50 timed (doc 9ad; 1 in 20 before), DiskANN arms once per workload
+        for prep, stream, _ in work:
+            out += arm_lines(prep, E, stream=stream)
+        # sample-rate check: two cells also at 1 in 20 (ours, LRU), with their own arms
+        for prep in ("spacev-aker-0.6", "triviaqa-ip-0.6"):
+            out += arm_lines(prep, 20)
+            out += lines(prep, 0.01, 20, techs=("ours", "lru"))
         for prep, stream, _ in work:
             for b in (0.01, 0.1):
-                out += lines(prep, b, 20, stream=stream, techs=real_log if prep == "spacev-real" else main)
+                out += lines(prep, b, E, stream=stream, techs=real_log if prep == "spacev-real" else main)
         for prep, stream, extra in work:
             if extra:
                 for b in (0.01, 0.1):
-                    out += lines(prep, b, 20, stream=stream, techs=paper)
+                    out += lines(prep, b, E, stream=stream, techs=paper)
         for prep, stream, extra in work:
             if extra:
                 for b in (0.003, 0.03):
-                    out += lines(prep, b, 20, stream=stream, techs=main)
+                    out += lines(prep, b, E, stream=stream, techs=main)
         print("\n".join(out))
         return
     if a.set == "new":          # new workloads (doc 9x / 9y), once their backend is chosen and states exist
@@ -204,9 +226,10 @@ def main():
         for prep in ("tripclick-ip", "medrag-ip"):
             if not os.path.exists(f"{R}/backends/{prep}/choice.json"):
                 continue
+            out += arm_lines(prep, 50)
             for b in sizes[prep]:
                 if os.path.exists(f"{R}/timing_v4/{prep}/state_b{b:g}.npz"):
-                    out += lines(prep, b, 20, techs=("ours_drift", "ours_online", "lru", "aker", "qvcache")
+                    out += lines(prep, b, 50, techs=("ours_drift", "ours_online", "lru", "aker", "qvcache")
                                  if prep == "tripclick-ip"
                                  else ("ours", "ours_drift", "ours_online", "lru", "aker", "qvcache"))
         print("\n".join(out))

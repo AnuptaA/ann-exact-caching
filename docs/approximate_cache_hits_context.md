@@ -3112,3 +3112,21 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   well candidate by candidate, so the cap's gain is likely a dynamic (myopia) effect: growing an
   existing entry wins each batch's comparison but uses memory that many later-arriving queries
   would use better. Not resolved.
+
+### 9ad. Timing cost cuts (11-15, approved by Jialin)
+
+- Breakdown of the v3 timing jobs: ~half of each job re-timed DiskANN alone and DiskANN with equal
+  memory (~8 min per job at 62 ms), identical for every technique of a workload. Re-estimate of the
+  158-job batch with the tuned backends: ~24 h (SPACEV / ESCI ~5 min per job, TriviaQA ~18, real
+  log ~15), not 68.
+- Cut 1: `eval_timing_backend.py` times DiskANN alone once per workload and DiskANN with equal
+  memory once per cache size (node cache = memory of the static ours cache at that size; every
+  technique has the same vector budget), on the same timed requests; technique runs use
+  `eval_timing_online.py --no-backend-arms`; plot_timing fills backend / backend_mem / speedup
+  from timing_v4/<prep>/backend_s<every>.json.
+- Cut 2: 1 request in 50 timed (was 20); hit rates still over the whole stream. Check cells in the
+  same batch: SPACEV 0.6 and TriviaQA 0.6, 1%, ours and LRU, also at 1 in 20 (with their own arms).
+- Estimated batch: ~8-10 h. Proposed, not done (Jialin to decide): compose per-request latency from
+  cache-only time + the request's DiskANN time measured once (technique runs would no longer hit the
+  disk while timed); build the shared warm-up cache once instead of per technique; static ours'
+  untimed decisions outside the quiet window.

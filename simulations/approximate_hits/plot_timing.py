@@ -48,7 +48,7 @@ HEADLINE_KEY = {"ours": "ours", "ours_drift": "ours_drift", "ours_online": "ours
                 "aker_paper": "aker_paper", "qvcache_paper": "qvcache_paper"}
 
 
-VERSION, EVERY = "timing_v4", 20     # full-stream runs, 1 request in EVERY timed; tuned DiskANN (doc 9u)
+VERSION, EVERY = "timing_v4", 50     # full-stream runs, 1 request in EVERY timed; tuned DiskANN (doc 9u)
 
 
 def load(prep, budget, every=None):
@@ -62,6 +62,19 @@ def load(prep, budget, every=None):
             if match(f.stem):
                 r = json.loads(f.read_text())
                 r["file"] = f.stem
+                if r.get("speedup") is None:      # run with --no-backend-arms (doc 9ad)
+                    arm = d / f"backend_s{every}.json"
+                    if not arm.exists():
+                        continue
+                    a = json.loads(arm.read_text())
+                    r["backend"] = a["backend"]
+                    if f"{budget:g}" in a["per_budget"]:
+                        r["backend_mem"] = a["per_budget"][f"{budget:g}"]
+                    b0 = r["backend"]["mean_ms"]
+                    r["speedup"] = {"overall": b0 / r["cache"]["mean_ms"],
+                                    "limit_1_over_1_minus_h": 1 / max(1 - r["hit_rate"] + r["audited_share"], 1e-9),
+                                    "vs_equal_memory": (r["backend_mem"]["mean_ms"] / r["cache"]["mean_ms"])
+                                    if "backend_mem" in r else None}
                 out[key] = r
     return out
 
