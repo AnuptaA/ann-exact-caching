@@ -3053,3 +3053,9 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   span), while it beats the victims' credit per vector. Aim: the large-cache cells where LRU's
   recency bet wins (SPACEV / TriviaQA Zipf 0.3-0.6, 10%) without hurting ESCI. Test queued
   (/tmp/mx/og_fresh.txt, 12 cells, seed 0).
+- `--og-fresh` result (seed 0): +1 point at 10% (SPACEV 0.3 20.9 vs 19.8, 0.6 32.1 vs 31.1, 0.99
+  66.2 vs 66.2; LRU 26.7 / 36.9 / 67.1), but -6 at SPACEV 0.6 1% (10.9 vs 17.0) and -1 at SPACEV
+  0.3 3%; neutral on ESCI / TripClick / MedRAG. Not adopted (kept as an option). The remaining
+  large-cache gap on SPACEV / TriviaQA Zipf 0.3-0.6 is open.
+- --og-span (window of misses and credits): 40k >= 20k (default) > 10k slightly (SPACEV 0.6 1%:
+  17.4 / 17.0 / 14.3; TripClick 1%: 8.8 / 7.4 / 6.4; ESCI 10%: 33.0 / 32.8 / 33.2): not sensitive.
