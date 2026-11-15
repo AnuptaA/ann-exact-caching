@@ -3025,3 +3025,12 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   A larger candidate pool closes the large-cache gap on stationary traces (ours >= LRU at 60k);
   LRU also gains on some traces because it starts from the same greedy warm-up cache. The
   continuous variant gets a growing pool without a longer warm-up.
+- ogreedy 10% (fixed): SPACEV Zipf 0.6 31.1 (ours 24.5, LRU K20 36.9), Zipf 0.99 66.2 (LRU 67.1),
+  SPACEV real 10.5 (LRU 10.2). At Zipf 0.6 10% ogreedy keeps ~3,500 entries of ~275 vectors, LRU
+  ~12,900 of ~49: ogreedy admits a new query only with support from earlier misses (exact repeats
+  are 6.6% there), so new queries lose to growing entries; LRU bets on recency. Residual gap =
+  evidence-driven vs recency-driven admission.
+- Windows below T on TripClick are shared with LRU (both dip to ~0.88 at windows 10-12, requests
+  ~70k-80k, then recover): a property of that log period. --og-split with maintained labels (fresh
+  calibration against the current cache, build / calibration halves) did not reduce them (1%: 7 of
+  16 windows below, 9.5% / 0.907); kept as an option, not the default.
