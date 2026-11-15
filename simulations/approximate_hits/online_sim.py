@@ -845,18 +845,36 @@ class Sim:
         for _, cr in self.og_credit:
             for c, v in cr.items():
                 credit[c] = credit.get(c, 0.0) + v
-        size = {c: max(len(cache.members(c)), 1) for c in cache.entries}
+        cache._update_members()      # victim order by credit per vector held only by that entry
+        size = {c: max(int((cache._count[cache.members(c)] == 1).sum()), 1) for c in cache.entries}
         if a.og_evict == "lru":
             order = sorted(cache.entries, key=lambda c: cache.last_used.get(c, 0))
         else:
             order = sorted(cache.entries, key=lambda c: credit.get(c, 0.0) / size[c])
+        # candidates' gains are ORACLE hits on past misses (perfect hit decisions); incumbents'
+        # credits are hits actually served under the calibrated cutoff. Put both in served hits:
+        # scale gains by rho = served / oracle hits over the same span, from this run's own log (the
+        # warm-up's in-sample rates as a prior worth its scoring split); without it candidates
+        # always outrank incumbents (TripClick 10%: ~1,400 changes per batch, retention 0.892 < T)
+        from simulations.approximate_hits.greedy_population import hits_from_histograms
+        recent = [b for b in self.log if b["t"] > t - span and "ret_hist" in b]
+        ins = getattr(self, "insample", None) or {}
+        n0 = ins.get("n_score", 0)
+        srv = sum(b["served"] for b in recent) + n0 * ins.get("calibrated_hit_rate", 0.0)
+        hist = np.sum([b["ret_hist"] for b in recent], axis=0) if recent else np.zeros(k + 1)
+        orc = float(hits_from_histograms(np.asarray(hist, dtype=np.int64), self.T, k)[0]) \
+            + n0 * ins.get("cache_oracle_hit_rate", 0.0)
+        rho = float(np.clip(srv / orc, 0.0, 1.0)) if orc > 0 else 1.0
+        # vectors an eviction actually frees: those no other remaining entry holds
+        cache._update_members()
+        cnt = cache._count.copy()
         vi, freed, victims, chosen = 0, 0, [], []
         while True:
             alive = (pop.new_vectors > 0)
             if not alive.any():
                 break
             d_hits, _, _ = pop._evaluate_candidates(alive)
-            ratio = np.where(alive, d_hits / np.maximum(pop.new_vectors, 1), -1.0)
+            ratio = np.where(alive, rho * d_hits / np.maximum(pop.new_vectors, 1), -1.0)
             j = int(np.argmax(ratio))
             if ratio[j] <= 0:
                 break
@@ -866,11 +884,17 @@ class Sim:
                 if v in chosen:
                     vi += 1
                     continue
-                if a.og_evict == "utility" and credit.get(v, 0.0) / size[v] >= ratio[j]:
+                mv = cache.members(v)
+                own = int((cnt[mv] == 1).sum())       # freed if v goes (shared ones stay cached)
+                if own == 0:
+                    vi += 1
+                    continue
+                if a.og_evict == "utility" and credit.get(v, 0.0) / own >= ratio[j]:
                     break
+                cnt[mv] -= 1
                 victims.append(v)
-                freed += size[v]
-                need -= size[v]
+                freed += own
+                need -= own
                 vi += 1
             if need > 0:
                 break
@@ -895,7 +919,7 @@ class Sim:
                 if v in cache.entries:
                     cache.remove(v)
                     mem = cache.memory()
-        self.og_log.append({"t": t, "added": len(pop.selected), "evicted": len(victims),
+        self.og_log.append({"t": t, "rho": rho, "added": len(pop.selected), "evicted": len(victims),
                             "entries": len(cache.entries), "cached": cache.n_cached()})
 
     # -- database events ---------------------------------------------------

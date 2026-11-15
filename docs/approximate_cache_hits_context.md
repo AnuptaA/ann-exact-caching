@@ -3002,3 +3002,12 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   window (582 of 826 warm-up entries evicted in batch one). TripClick 1%, requests 20k-30k:
   ogreedy-utility 8.0% / 0.907 vs ours 7.0% / 0.902, LRU K10 7.1% / 0.894. Full runs queued:
   /tmp/mx/ogreedy.txt (6 workloads x 1%, 10% x 2 eviction rules, seed 0).
+- ogreedy fixes (11-14 23:24-23:38), after the first full results (now *_v1.json, void): (1) the
+  exchange compared ORACLE gains of candidates with SERVED credits of incumbents: gains now scaled
+  by rho = served / oracle hits over the span (warm-up in-sample rates as a prior); (2) main cause
+  of collapse: an eviction was assumed to free all its members, but shared vectors stay cached, so
+  greedy overspent and the final memory trim removed old entries with no value test (TripClick 10%:
+  1,763 -> 483 entries, retention 0.81 in a window); now freed = vectors held by no other remaining
+  entry, and victims are valued per such vector. Check, requests 20k-45k, 10%: TripClick 27.3% /
+  0.913 (ours 22.5 / 0.907, LRU K20 23.5 / 0.918, v1 22.3 / 0.858); ESCI 32.4% / 0.906 (ours 30.2 /
+  0.910, LRU K20 26.1 / 0.906, v1 26.6 / 0.874). Full set rerun with the fixed code.
