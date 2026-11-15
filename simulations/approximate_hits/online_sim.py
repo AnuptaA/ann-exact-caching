@@ -885,6 +885,33 @@ class Sim:
             hi = np.rint(hist * 1000.0 / max(ww.sum(), 1e-9)).astype(np.int64)   # ~1,000 units
             orc += float(hits_from_histograms(hi, self.T, k)[0]) / max(hi.sum(), 1) * n_req
         rho = float(np.clip(srv / orc, 0.0, 1.0)) if orc > 0 else 1.0
+        # --og-kcal (11-15): realized / predicted hits per entry size K, measured on this run:
+        # entries chosen by this exchange record their predicted gain (rho x marginal hits on the
+        # span's misses, in hits per span); their credits over the span since then are realized hits.
+        # Factor phi_K = sum realized / sum predicted over entries of size K that have been in the
+        # cache at least half a span (1 until 20 such entries exist); candidates of size K are
+        # ranked by phi_K x gain per vector. At 10% the greedy otherwise prefers top-200 / 500
+        # entries whose past coverage does not recur (a hand cap at K 100: SPACEV 0.6 31.2 -> 42.2)
+        phi = {}
+        if a.og_kcal:
+            num, den, cntk = {}, {}, {}
+            for c, (K, t_add, pred) in list(self.og_pred.items()):
+                if c not in cache.entries or cache.entries[c] != K:
+                    del self.og_pred[c]
+                    continue
+                age = t - t_add
+                if age < span / 2:
+                    continue
+                f = min(age, span) / span
+                num[K] = num.get(K, 0.0) + credit.get(c, 0.0)
+                den[K] = den.get(K, 0.0) + pred * f
+                cntk[K] = cntk.get(K, 0) + 1
+            for K in kvals:
+                if cntk.get(K, 0) >= 20 and den.get(K, 0) > 0:
+                    phi[K] = float(np.clip(num[K] / den[K], 0.0, 1.0))
+            self.og_phi_log.append((t, dict(phi)))
+        kof = np.array([K for _, K in pairs])
+        phiv = np.array([phi.get(int(K), 1.0) for K in kof])
         # vectors an eviction actually frees: those no other remaining entry holds
         cache._update_members()
         cnt = cache._count.copy()
@@ -894,7 +921,7 @@ class Sim:
             if not alive.any():
                 break
             d_hits, _, _ = pop._evaluate_candidates(alive)
-            ratio = np.where(alive, rho * d_hits / np.maximum(pop.new_vectors, 1), -1.0)
+            ratio = np.where(alive, rho * phiv * d_hits / np.maximum(pop.new_vectors, 1), -1.0)
             j = int(np.argmax(ratio))
             if ratio[j] <= 0:
                 break
@@ -918,6 +945,14 @@ class Sim:
                 vi += 1
             if need > 0:
                 break
+            if a.og_kcal:
+                # commit j itself (the populator's own step ranks without phi)
+                vecs = pop.cand_v[pop.cand_ptr[j]:pop.cand_ptr[j + 1]]
+                pop._cache_vectors(vecs[~pop.cached[vecs]])
+                pop.selected.append(j)
+                self.og_pred[pairs[j][0]] = (pairs[j][1], t, float(rho * d_hits[j]))
+                chosen.append(pairs[j][0])
+                continue
             res = pop.step(cap + freed)
             if res is None:
                 break
@@ -1074,6 +1109,7 @@ class Sim:
             self.save_state(a.save_state)
         p_lru = cache.p
         self.og_credit, self.og_miss, self.og_log, self.og_fresh_log = [], [], [], []
+        self.og_pred, self.og_phi_log = {}, []
         last_alarm = None
         last_check = a.warmup
         pending = []                # scheduled post-alarm rebuild checks (times)
@@ -1172,7 +1208,7 @@ class Sim:
                             f"ret {done['served_retention_sum'] / max(done['served'], 1):.3f} "
                             f"lambda {self.lam} entries {len(cache.entries)} mem {done['memory']:.0f}")
         return {"method": method, "args": vars(a), "log": self.log, "events": self.events,
-                "og_log": self.og_log, "og_fresh_log": self.og_fresh_log,
+                "og_log": self.og_log, "og_fresh_log": self.og_fresh_log, "og_phi_log": self.og_phi_log,
                 "cost": dict(self.cost, vectors_fetched=cache.vectors_fetched,
                              warmup_topR=a.warmup, short_rows=self.D["short"][0])}
 
@@ -1260,6 +1296,9 @@ def make_parser():
     ap.add_argument("--og-evict", choices=["utility", "lru"], default="utility",
                     help="ogreedy: victims by credit per vector (only when below the candidate's gain "
                          "per vector) or least recently used")
+    ap.add_argument("--og-kcal", action="store_true",
+                    help="ogreedy: rank candidates of entry size K by phi_K x gain, phi_K = realized / "
+                         "predicted hits of this run's entries of size K (no cap on K)")
     ap.add_argument("--og-fresh", action="store_true",
                     help="ogreedy: also admit fresh misses (no evidence of their own) at the K whose "
                          "hindsight value on this run (earlier misses vs later ones) is best, while it "

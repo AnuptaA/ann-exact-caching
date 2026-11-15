@@ -3087,3 +3087,11 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   spacev-real 0.3%: og (4.5, 0.946) ours None lru None | 1%: og (5.7, 0.937) ours (4.6, 0.939) lru (3.5, 0.95) | 3%: og (7.4, 0.922) ours None lru None | 10%: og (10.5, 0.909) ours (7.6, 0.918) lru (10.1, 0.925)
   tripclick-ip 0.3%: og (5.2, 0.937) ours (2.2, 0.937) lru (2.4, 0.931) | 1%: og (8.5, 0.925) ours (4.4, 0.921) lru (7.0, 0.929) | 3%: og (13.2, 0.918) ours (7.3, 0.92) lru (12.4, 0.919) | 10%: og (28.4, 0.911) ours (14.1, 0.911) lru (25.0, 0.916)
   medrag-ip 0.01%: og (50.3, 0.918) ours (44.3, 0.921) lru (23.7, 0.918) | 0.03%: og (67.3, 0.913) ours (57.2, 0.919) lru (40.9, 0.904) | 0.1%: og (73.9, 0.912) ours (59.7, 0.923) lru (70.5, 0.909) | 0.3%: og (88.9, 0.919) ours (66.4, 0.919) lru (91.8, 0.91)
+- Entry-size cap on ogreedy at 10% (seed 0; --max-ball-k): SPACEV 0.3 19.8 (3,509 entries) ->
+  K<=100 34.6 (12,781) / K<=50 27.9 (14,075), LRU K20 26.7; SPACEV 0.6 31.2 (3,558) -> 42.2
+  (12,422) / 36.0 (11,718), LRU 36.9. At large budgets greedy over-chooses top-200 / 500 entries
+  whose coverage of past misses does not recur (a generalization bias of its objective); at small
+  budgets large entries win (the top-20 cap test). Self-adaptive version `--og-kcal`: per entry
+  size K, phi_K = realized hits (credits) / predicted gain of this run's own entries of size K
+  (>= 20 entries, >= half a span old; else 1); candidates ranked by phi_K x gain per vector; no
+  cap. Test queued (/tmp/mx/og_kcal.txt, 12 cells, seed 0).
