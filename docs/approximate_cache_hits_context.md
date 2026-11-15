@@ -3047,3 +3047,9 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   tripclick-ip 0.3%: og (5.4, 0.934) ours (2.2, 0.937) lru (2.4, 0.931) | 1%: og (7.9, 0.927) ours (4.4, 0.921) lru (7.0, 0.929) | 3%: og (13.8, 0.919) ours (7.3, 0.92) lru (12.4, 0.919) | 10%: og (28.1, 0.913) ours (14.1, 0.911) lru (25.0, 0.916)
   medrag-ip 0.01%: og (50.4, 0.918) ours (44.3, 0.921) lru (23.7, 0.918) | 0.03%: og (67.3, 0.913) ours (57.2, 0.919) lru (40.9, 0.904) | 0.1%: og (73.8, 0.912) ours (59.7, 0.923) lru (70.5, 0.909) | 0.3%: og (88.9, 0.919) ours (66.4, 0.919) lru (91.8, 0.91)
   og >= ours at every cell except TriviaQA 0.3% (0.3 / 0.6 Zipf: 2.5 vs 2.9, 10.7 vs 11.7); og >= LRU except the 10% cells of SPACEV 0.3 / 0.6 (19.7 vs 27.3, 31.3 vs 36.7), TriviaQA 0.3 / 0.6 10% (60.1 vs 62.9, 68.4 vs 71.3), SPACEV 0.99 10% (66.1 vs 67.0), SPACEV 0.3 3% (10.1 vs 10.6), MedRAG 0.3% (88.9 vs 91.8). Every og cell meets T.
+- `--og-fresh` (11-15): fresh misses (no evidence of their own) admitted at the K whose hindsight
+  value on this run is best (earlier half of the miss window, as if admitted at each K, scored on
+  the later half; mean gain over the current cache per new vector, x rho, scaled to the credit
+  span), while it beats the victims' credit per vector. Aim: the large-cache cells where LRU's
+  recency bet wins (SPACEV / TriviaQA Zipf 0.3-0.6, 10%) without hurting ESCI. Test queued
+  (/tmp/mx/og_fresh.txt, 12 cells, seed 0).

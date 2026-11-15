@@ -912,6 +912,63 @@ class Sim:
             if res is None:
                 break
             chosen.append(pairs[res["candidate"]][0])
+        if a.og_fresh:
+            # fresh admission (11-15): a new miss has no evidence of its own; its expected value is
+            # measured in hindsight on this run: earlier misses of the window, as if admitted at
+            # each K, against the later misses (gain over the current cache per new vector, mean
+            # over the earlier misses). New misses not chosen above are admitted at the best K
+            # while that value beats the next victim's credit per vector.
+            t_mid = t - span / 2
+            pe = [x[1] for x in self.og_miss[:-1] if x[0] <= t_mid]
+            pl = [x[1] for x in self.og_miss[:-1] if x[0] > t_mid]
+            if pe and pl:
+                early = np.unique(np.concatenate(pe))
+                lq, lw = np.unique(np.concatenate(pl), return_counts=True)
+                early = early[~np.isin(early, lq)][:4000]        # no self-service
+                if len(early) and len(lq):
+                    te = topk_present(D, early, max(kvals))
+                    fp = [(i, K) for i in range(len(early)) for K in kvals]
+                    pop2 = GreedyPopulator([te[i, :K] for i, K in fp], topk_present(D, lq, k, key="answer"),
+                                           cache.n_db, k, self.T, score_weights=lw.astype(np.int64))
+                    pop2._cache_vectors(np.asarray(cache.cached_ids, dtype=np.int64))
+                    dh, _, _ = pop2._evaluate_candidates(pop2.new_vectors > 0)
+                    best_K, best_v = None, 0.0
+                    for K in kvals:
+                        m = np.array([kk == K for _, kk in fp])
+                        v = rho * dh[m].sum() / max(pop2.new_vectors[m].sum(), 1)
+                        if v > best_v:
+                            best_K, best_v = K, v
+                    # the later part spans (t - t_mid) requests; credits span `span`: same units
+                    best_v *= span / max(t - t_mid, 1)
+                    self.og_fresh_log.append((t, best_K, best_v))
+                    if best_K is not None:
+                        for c in [c for c in new if c not in chosen]:
+                            add_v = int((~pop.cached[tops[row[c], :best_K]]).sum())
+                            need = pop.cache_size + add_v - (cap + freed)
+                            while need > 0 and vi < len(order):
+                                v = order[vi]
+                                if v in chosen:
+                                    vi += 1
+                                    continue
+                                mv = cache.members(v)
+                                own = int((cnt[mv] == 1).sum())
+                                if own == 0:
+                                    vi += 1
+                                    continue
+                                if credit.get(v, 0.0) / own >= best_v:
+                                    break
+                                cnt[mv] -= 1
+                                victims.append(v)
+                                freed += own
+                                need -= own
+                                vi += 1
+                            if need > 0:
+                                break
+                            j = pairs.index((c, best_K))
+                            vecs = pop.cand_v[pop.cand_ptr[j]:pop.cand_ptr[j + 1]]
+                            pop._cache_vectors(vecs[~pop.cached[vecs]])
+                            pop.selected.append(j)
+                            chosen.append(c)
         for v in victims:
             if v in cache.entries:
                 cache.remove(v)
@@ -1006,7 +1063,7 @@ class Sim:
         if getattr(a, "save_state", None):
             self.save_state(a.save_state)
         p_lru = cache.p
-        self.og_credit, self.og_miss, self.og_log = [], [], []
+        self.og_credit, self.og_miss, self.og_log, self.og_fresh_log = [], [], [], []
         last_alarm = None
         last_check = a.warmup
         pending = []                # scheduled post-alarm rebuild checks (times)
@@ -1105,7 +1162,7 @@ class Sim:
                             f"ret {done['served_retention_sum'] / max(done['served'], 1):.3f} "
                             f"lambda {self.lam} entries {len(cache.entries)} mem {done['memory']:.0f}")
         return {"method": method, "args": vars(a), "log": self.log, "events": self.events,
-                "og_log": self.og_log,
+                "og_log": self.og_log, "og_fresh_log": self.og_fresh_log,
                 "cost": dict(self.cost, vectors_fetched=cache.vectors_fetched,
                              warmup_topR=a.warmup, short_rows=self.D["short"][0])}
 
@@ -1193,6 +1250,10 @@ def make_parser():
     ap.add_argument("--og-evict", choices=["utility", "lru"], default="utility",
                     help="ogreedy: victims by credit per vector (only when below the candidate's gain "
                          "per vector) or least recently used")
+    ap.add_argument("--og-fresh", action="store_true",
+                    help="ogreedy: also admit fresh misses (no evidence of their own) at the K whose "
+                         "hindsight value on this run (earlier misses vs later ones) is best, while it "
+                         "beats the victims' credit per vector")
     ap.add_argument("--og-split", action="store_true",
                     help="ogreedy: misses of a fixed half of the queries score candidates, the other "
                          "half calibrates (use with --cal-labels maintained: calibration pairs "
