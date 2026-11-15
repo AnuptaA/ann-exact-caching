@@ -885,30 +885,41 @@ class Sim:
             hi = np.rint(hist * 1000.0 / max(ww.sum(), 1e-9)).astype(np.int64)   # ~1,000 units
             orc += float(hits_from_histograms(hi, self.T, k)[0]) / max(hi.sum(), 1) * n_req
         rho = float(np.clip(srv / orc, 0.0, 1.0)) if orc > 0 else 1.0
-        # --og-kcal (11-15): realized / predicted hits per entry size K, measured on this run:
-        # entries chosen by this exchange record their predicted gain (rho x marginal hits on the
-        # span's misses, in hits per span); their credits over the span since then are realized hits.
-        # Factor phi_K = sum realized / sum predicted over entries of size K that have been in the
-        # cache at least half a span (1 until 20 such entries exist); candidates of size K are
-        # ranked by phi_K x gain per vector. At 10% the greedy otherwise prefers top-200 / 500
-        # entries whose past coverage does not recur (a hand cap at K 100: SPACEV 0.6 31.2 -> 42.2)
-        phi = {}
-        if a.og_kcal:
-            num, den, cntk = {}, {}, {}
-            for c, (K, t_add, pred) in list(self.og_pred.items()):
-                if c not in cache.entries or cache.entries[c] != K:
-                    del self.og_pred[c]
-                    continue
-                age = t - t_add
-                if age < span / 2:
-                    continue
-                f = min(age, span) / span
-                num[K] = num.get(K, 0.0) + credit.get(c, 0.0)
-                den[K] = den.get(K, 0.0) + pred * f
-                cntk[K] = cntk.get(K, 0) + 1
-            for K in kvals:
-                if cntk.get(K, 0) >= 20 and den.get(K, 0) > 0:
-                    phi[K] = float(np.clip(num[K] / den[K], 0.0, 1.0))
+        # --og-kcal (11-15, v2): temporal cross-check per entry size K, in marginal hits on both
+        # sides: the span's misses split into an earlier and a later half; the same candidates
+        # (this batch's pairs) scored against each half over the current cache; among the
+        # candidates of size K that greedy would favor on the earlier half (top fifth by gain per
+        # vector), phi_K = their gains on the later half / on the earlier half (clipped to [0, 1];
+        # 1 without data). Candidates of size K are ranked by phi_K x gain. Recomputed every 5
+        # batches. (v1 compared attributed credits with marginal predictions: shared vectors
+        # inflated credits, phi stuck at 1.) At 10% greedy otherwise prefers top-200 / 500 entries
+        # whose past coverage does not recur (a hand cap at K 100: SPACEV 0.6 31.2 -> 42.2).
+        phi = getattr(self, "og_phi", {}) if a.og_kcal else {}
+        if a.og_kcal and (not hasattr(self, "og_phi") or (t - self.og_phi_t) >= 5 * a.batch):
+            t_mid = t - span / 2
+            pe = [x[1] for x in self.og_miss[:-1] if x[0] <= t_mid]
+            pl = [x[1] for x in self.og_miss[:-1] if x[0] > t_mid]
+            phi = {}
+            if pe and pl:
+                gains = []
+                for part in (pe, pl):
+                    pq, pw = np.unique(np.concatenate(part), return_counts=True)
+                    pp = GreedyPopulator([tops[row[c], :K] for c, K in pairs], topk_present(D, pq, k, key="answer"),
+                                         cache.n_db, k, self.T, score_weights=pw.astype(np.int64))
+                    pp._cache_vectors(np.asarray(cache.cached_ids, dtype=np.int64))
+                    dh, _, _ = pp._evaluate_candidates(pp.new_vectors > 0)
+                    gains.append((dh, pp.new_vectors.copy()))
+                (ge, nv), (gl, _) = gains
+                kk = np.array([K for _, K in pairs])
+                for K in kvals:
+                    m = np.flatnonzero((kk == K) & (nv > 0))
+                    if len(m) < 20:
+                        continue
+                    r = ge[m] / nv[m]
+                    top = m[np.argsort(-r)[:max(10, len(m) // 5)]]
+                    if ge[top].sum() > 0:
+                        phi[K] = float(np.clip(gl[top].sum() / ge[top].sum(), 0.0, 1.0))
+            self.og_phi, self.og_phi_t = phi, t
             self.og_phi_log.append((t, dict(phi)))
         kof = np.array([K for _, K in pairs])
         phiv = np.array([phi.get(int(K), 1.0) for K in kof])
@@ -950,7 +961,6 @@ class Sim:
                 vecs = pop.cand_v[pop.cand_ptr[j]:pop.cand_ptr[j + 1]]
                 pop._cache_vectors(vecs[~pop.cached[vecs]])
                 pop.selected.append(j)
-                self.og_pred[pairs[j][0]] = (pairs[j][1], t, float(rho * d_hits[j]))
                 chosen.append(pairs[j][0])
                 continue
             res = pop.step(cap + freed)

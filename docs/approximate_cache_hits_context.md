@@ -3095,3 +3095,9 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   size K, phi_K = realized hits (credits) / predicted gain of this run's own entries of size K
   (>= 20 entries, >= half a span old; else 1); candidates ranked by phi_K x gain per vector; no
   cap. Test queued (/tmp/mx/og_kcal.txt, 12 cells, seed 0).
+- --og-kcal v1 had no effect (phi = 1 everywhere): credits count every served vector an entry
+  holds, shared ones included, while predictions are marginal hits; realized >= predicted. v2:
+  temporal cross-check in marginal hits on both sides (span misses split earlier / later; this
+  batch's candidates scored against each half over the current cache; per K, among the top fifth
+  by earlier-half gain per vector, phi_K = later gain / earlier gain), every 5 batches. v1 outputs
+  archived (*_kcal_v1.json); v2 rerun on the same 12 cells.
