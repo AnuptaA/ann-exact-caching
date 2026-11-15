@@ -428,6 +428,13 @@ class Cache:
 #-------------------------------------------------------------------------------
 
 
+def og_build_half(q):
+    """ogreedy --og-split: a fixed half of the query ids (multiplicative hash) whose misses score
+    candidates; the other half's misses calibrate (never the cache's own build data)."""
+    q = np.asarray(q, dtype=np.int64)
+    return (((q * 2654435761) >> 7) & 1) == 0
+
+
 def greedy_entries(D, cand, score, score_w, budget, k, target):
     """Greedy cache (dict center -> K) and its oracle hits on the scoring set.
 
@@ -802,7 +809,8 @@ class Sim:
                     if v:
                         cred0[c] = v / k
             self.og_credit = [(a.warmup, cred0)]
-            self.og_miss = [(a.warmup, w[~sw_])]
+            wm = w[~sw_]
+            self.og_miss = [(a.warmup, wm[og_build_half(wm)] if a.og_split else wm)]
         cache.mark_used(near[serve], t)
         # credits of this batch
         hv = np.bincount(np.asarray(near[serve]).ravel(), minlength=cache.n_db) if serve.any() else None
@@ -815,6 +823,8 @@ class Sim:
         self.og_credit.append((t, cred))
         self.og_credit = [x for x in self.og_credit if x[0] > t - span]
         miss = qb[~serve]
+        if a.og_split:
+            miss = miss[og_build_half(miss)]
         self.og_miss = [x for x in self.og_miss if x[0] > t - span]
         past = [x[1] for x in self.og_miss]        # misses of earlier batches only
         self.og_miss.append((t, miss))
@@ -1058,6 +1068,9 @@ class Sim:
                 # serve-time (score, retention) pairs, i.e. against the cache
                 # in force before this batch's updates
                 lab = np.ones(len(qb), bool) if a.oracle_cal else (~serve | audit)
+                if method == "ogreedy" and getattr(a, "og_split", False):
+                    # misses of build-half queries score ogreedy's candidates: not calibration
+                    lab &= serve | ~og_build_half(qb)
                 wt = np.where(serve & (not a.oracle_cal), 1 / rate, 1.0)
                 # the window is used only to build caches (greedy rebuilds)
                 self.cal.append((t, score[lab], y[lab], wt[lab], qb[lab]))
@@ -1180,6 +1193,10 @@ def make_parser():
     ap.add_argument("--og-evict", choices=["utility", "lru"], default="utility",
                     help="ogreedy: victims by credit per vector (only when below the candidate's gain "
                          "per vector) or least recently used")
+    ap.add_argument("--og-split", action="store_true",
+                    help="ogreedy: misses of a fixed half of the queries score candidates, the other "
+                         "half calibrates (use with --cal-labels maintained: calibration pairs "
+                         "re-scored against the current cache every batch)")
     ap.add_argument("--og-span", type=int, default=0,
                     help="ogreedy: requests whose misses score candidates and whose hits credit entries "
                          "(0 = --cal-span)")
