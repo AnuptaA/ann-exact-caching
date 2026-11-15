@@ -3101,3 +3101,14 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   batch's candidates scored against each half over the current cache; per K, among the top fifth
   by earlier-half gain per vector, phi_K = later gain / earlier gain), every 5 batches. v1 outputs
   archived (*_kcal_v1.json); v2 rerun on the same 12 cells.
+- --og-kcal v2 results (seed 0): phi falls with SMALLER K (TripClick 1%: K10 0.19 ... K500 0.48;
+  SPACEV 0.99 1%: 0.24 ... 0.51): small entries' predicted gains hold up worse on later requests,
+  so it does not steer toward small entries. Hits: TripClick 1% 9.8 (vs 7.3), 10% 29.0 (28.5);
+  SPACEV 0.3 / 0.6 10% 20.2 / 31.2 (19.8 / 31.2; cap K<=100: 34.6 / 42.2); TriviaQA 0.6 10%
+  69.3 (68.9; cap 69.0); others within 0.3. Not adopted as default.
+- Open question (for Jialin): at 10% on SPACEV Zipf 0.3 / 0.6, capping ogreedy's entries at K 100
+  gives 34.6 / 42.2 vs LRU 26.7 / 36.9 (uncapped 19.8 / 31.2), but the cap is a hand setting and
+  does not help TriviaQA 0.6. The per-size cross-check says big entries generalize at least as
+  well candidate by candidate, so the cap's gain is likely a dynamic (myopia) effect: growing an
+  existing entry wins each batch's comparison but uses memory that many later-arriving queries
+  would use better. Not resolved.
