@@ -644,6 +644,115 @@ class LRU(Ours):
 
 # -- Aker (real library) ------------------------------------------------------------------------
 
+class OursOnline(LRU):
+    """The continuous greedy variant (online_sim --method ogreedy, doc 9ac), its own logic running
+    LIVE: the simulator's controller (Sim.ogreedy_update: candidates from this run's misses, credits
+    from this run's served answers, exchange, eviction; Sim.calibrate) is fed this harness's scores,
+    labels and served answers batch by batch; after each batch the harness cache (incrementally
+    maintained, as LRU's) is changed to the controller's entry set: removed / resized / new entries,
+    each ball and shell from the backend's top-500 list as the simulator builds them. The
+    controller's work and the cache changes are background work (background_rebuild_s)."""
+
+    def __init__(self, args, db, q, st, deep, prep):
+        from simulations.approximate_hits import online_sim as osim
+        bf = RES / "backends" / Path(prep).name / "diskann.npz"
+        sargs = osim.make_parser().parse_args(
+            ["--prep", str(prep), "--method", "ogreedy", "--og-evict", "utility", "--budget", f"{args.budget:g}",
+             "--stream", args.stream, "--seed", "0", "--detect", "--shell-scope", "balls",
+             "--shell-balls", str(SHELL_BALLS), "--backend-file", str(bf), "--backend-target", args.target_recall,
+             "--warmup", str(int(st["warmup"])), "--k", str(args.k), "--target", str(args.target),
+             "--delta", str(args.cal_delta), "--audit-rate", str(args.audit_rate), "--cal-span", str(args.cal_span),
+             "--batch", str(args.cal_every)])
+        sargs.response = "recal"
+        if sargs.alarm_audit_rate is None:
+            sargs.alarm_audit_rate = sargs.audit_rate
+        osim.K_LIMIT[0] = sargs.max_ball_k
+        D, streams = osim.load(str(prep), sargs)
+        self.sim = osim.Sim(D, streams[args.stream], sargs)
+        self.sim.warmup()
+        c_sim = set(map(int, self.sim.cache_state()["centers"]))
+        if c_sim != set(map(int, st["centers"])):
+            raise SystemExit("controller warm-up cache differs from the state")
+        self.sim.og_credit, self.sim.og_miss, self.sim.og_log, self.sim.og_fresh_log = [], [], [], []
+        self.live = False
+        super().__init__(args, db, q, st, deep)        # harness cache from the state (LRU's structures)
+        for c, K in self.sim.cache.entries.items():
+            self.entries[int(c)]["K"] = int(K)
+        lab = list(self.cal.lab)
+        cq = np.asarray(st["cal_q"], dtype=np.int64)
+        t0 = int(st["warmup"])
+        if len(lab) == len(cq) and len(cq):
+            s_ = np.array([x[1] for x in lab])
+            self.sim.cal = [(t0, s_, np.array([x[2] for x in lab]), np.array([x[3] for x in lab]), cq)]
+            self.sim.ref = [(t0, s_)]
+        self.sim.lam_start = self.cal.start
+        self.sim.calibrate(t0)
+        self.warmup, self.batch = t0, sargs.batch
+        self.buf = []
+        self.changes = 0
+        self.live = True
+        logger.info(f"ours (continuous greedy): controller cutoff {self.sim.lam}")
+
+    def lookup(self, qi, x):
+        if self.live:
+            self.cal.lam = self.sim.lam
+        hit, near = super().lookup(qi, x)
+        self._qi, self._hit, self._y = int(qi), hit, np.nan
+        return hit, near
+
+    def label(self, t, answer, w):
+        if not self.live:
+            return super().label(t, answer, w)
+        self._y = served_overlap(self._near, answer, self.k)
+
+    def on_miss(self, t, qi, x, ids, ix):
+        self.label(t, ids, 1.0)             # no insert: the controller decides after the batch
+
+    def after(self, t):
+        near = np.full(self.k, -1, dtype=np.int64)
+        near[:min(self.k, len(self._near))] = np.asarray(self._near, dtype=np.int64)[:self.k]
+        self.buf.append((self._qi, self._s, self._hit, bool(self._hit and np.isfinite(self._y)), self._y, near))
+        self._now = t + 1
+        if (t + 1 - self.warmup) % self.batch == 0:
+            b0 = time.perf_counter()
+            self._batch_end(t + 1)
+            dt = time.perf_counter() - b0
+            self.background += dt
+            self.rebuild_s += dt
+
+    def _batch_end(self, tt):
+        sim, a = self.sim, self.sim.a
+        b, self.buf = self.buf, []
+        qb = np.array([x[0] for x in b], dtype=np.int64)
+        s = np.array([x[1] for x in b], dtype=float)
+        serve = np.array([x[2] for x in b], dtype=bool)
+        aud = np.array([x[3] for x in b], dtype=bool)
+        y = np.array([x[4] for x in b], dtype=float)
+        near = np.stack([x[5] for x in b])
+        rate = a.audit_rate
+        lab = ~serve | aud
+        wt = np.where(serve, 1 / rate, 1.0)
+        sim.cal.append((tt, s[lab], y[lab], wt[lab], qb[lab]))
+        sim.ref.append((tt, s))
+        sim.audits.append((tt, y[aud], np.full(int(aud.sum()), 1 / rate)))
+        sim.log.append({"t": tt, "n": len(qb), "served": int(serve.sum())})
+        sim.ogreedy_update(qb, serve, near, tt)
+        sim.calibrate(tt)
+        # apply the controller's entry set to the harness cache
+        want = {int(c): int(K) for c, K in sim.cache.entries.items()}
+        for c in [c for c in self.entries if want.get(c) != self.entries[c].get("K")]:
+            self._remove_entry(c)
+            self.changes += 1
+        for c, K in want.items():
+            if c not in self.entries:
+                row = np.asarray(self.deep[c], dtype=np.int64)
+                row = row[row >= 0]
+                self._add_entry(c, np.asarray(self.q[c], dtype=np.float32), row, K)
+                self.entries[c]["K"] = K
+                self.entries[c]["used"] = tt
+                self.changes += 1
+
+
 class AkerReal:
     audits = False
 
@@ -778,7 +887,7 @@ class QVCacheFast:
 
 def main():
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--method", choices=["ours", "ours_drift", "lru", "aker", "qvcache"], required=True)
+    ap.add_argument("--method", choices=["ours", "ours_drift", "ours_online", "lru", "aker", "qvcache"], required=True)
     ap.add_argument("--detect", nargs="+", default=["score"],
                     help="ours_drift: the simulator's drift tests (headline form: score)")
     ap.add_argument("--prep", required=True)
@@ -866,11 +975,14 @@ def main():
                 f"{len(req)} requests, {int(timed_mask.sum())} timed (1 in {args.sample_every})")
     deep = None
     args._answers = ans                     # for the serving-path warm-up calibration
-    if args.method in ("ours", "ours_drift", "lru"):
+    if args.method in ("ours", "ours_drift", "ours_online", "lru"):
         if args.method == "ours":
             m = Ours(args, db, q, st)
         elif args.method == "ours_drift":
             m = OursDrift(args, db, q, st, prep)
+        elif args.method == "ours_online":
+            deep = np.load(RES / "backends" / prep.name / "diskann.npz")[f"deep_{args.target_recall}"]
+            m = OursOnline(args, db, q, st, deep, prep)
         else:
             deep = np.load(RES / "backends" / prep.name / "diskann.npz")[f"deep_{args.target_recall}"]
             m = LRU(args, db, q, st, deep)
@@ -980,7 +1092,8 @@ def main():
            "replay_s": time.time() - t0, "trace": trace,
            "knn_fallbacks": int(getattr(m, "fallbacks", 0)),
            "controller_events": getattr(getattr(m, "sim", None), "events", None),
-           "rebuilds_installed": int(getattr(m, "rebuilds", 0))}
+           "rebuilds_installed": int(getattr(m, "rebuilds", 0)),
+           "entry_changes": int(getattr(m, "changes", 0))}
     logger.info(f"hit rate {res['hit_rate']:.3f} (timed sample {res['hit_rate_timed']:.3f}); recall vs "
                 f"exact {res['recall_vs_exact_all']:.3f}; cache + DiskANN {res['cache']['mean_ms']:.2f} ms")
     req_all = req

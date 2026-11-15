@@ -3067,3 +3067,12 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   27.3% / 0.912 (rho 0.84-0.86) vs 27.3% / 0.913 before. All ogreedy headline runs (80) and the
   LRU-eviction runs (12) rerun with the fixed code; previous outputs archived as *_v3.json. The
   og-span / og-fresh / og-split diagnostics above used the previous rho (difference ~0).
+- Timing harness `--method ours_online` (class OursOnline, on LRU's incremental cache): the
+  simulator's ogreedy controller runs live on the run's scores, labels and served answers; after
+  each batch the harness cache is changed to the controller's entry set (balls / shells from the
+  backend's top-500 lists, the simulator's sampling draw); controller work + changes = background.
+  Check (tc-test, 1%, 40k requests): harness 6.9% / 0.943 vs simulator 8.5% / 0.923 (the same
+  harness-vs-simulator gap as ours_drift: approximate in-cache search, slightly lower scores);
+  13,874 entry changes; 189 s background (~4.7 s per 1,000-request batch).
+- Timing final set now 158 jobs (+24 ours_online, every main cell incl. the SPACEV real log);
+  TripClick / MedRAG "new" set likewise. At ~26 min per job: ~68 h of quiet machine.
