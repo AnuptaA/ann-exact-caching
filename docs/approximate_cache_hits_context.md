@@ -3172,3 +3172,19 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   Final timing results mix 29 live runs (SPACEV 0.99, 0.6 partly, TriviaQA 0.6 1%) and composed
   runs; the JSON args record --compose-backend. Then: TripClick / MedRAG chains (their waiting
   scripts need TIMING4.DONE, which the killed live batch never set).
+- In-cache search list found too small on TriviaQA at 10% (11-16 06:30): the partial timing plot showed
+  static ours at TriviaQA Zipf 0.99 10% with hit rate 0.052 (simulator 0.81; 1%: 0.598 vs 0.64),
+  speedup 1.02. Cause: the harness's hit path searches the cached vectors with HNSW (search list 256, fixed
+  from the SPACEV check, 0.975-0.985 neighbor recall); on TriviaQA 10% (769-d, 696k vectors) recall@10
+  is 0.733 / 0.901 / 0.945 / 0.971 / 0.988 at search list 64 / 256 / 512 / 1024 / 2048 (1.6 / 2.9 / 5.5
+  / 11 ms per lookup beyond 256: 1.6, 2.9, 5.5, 11.1 ms). The hit score is built from the neighbors'
+  distances, so approximate neighbors mean low scores and a strict cutoff. With 1024: hit rate 0.736.
+  Fix (all HNSW techniques: ours, drift, continuous, LRU): `tune_ef` picks, per cache, the smallest
+  of 256 / 512 / ... / 4096 with neighbor recall@10 >= 0.975 on 300 warm-up requests (brute force over
+  the cached vectors, untimed); recorded as in_cache_search in every result. All ours / drift /
+  continuous / LRU results so far (96 files, composed and the live ones) archived in
+  timing_v4/ef256_old/ and rerun composed (Aker and QVCache use their own libraries: unchanged).
+  The larger search list costs real hit-path time at big caches; that is part of the result.
+- Partial timing plot (before the fix): SPACEV Zipf 0.3 / 0.6 speedups ~0.9-1.1 (DiskANN with the
+  cache's memory as a node cache is 1.4-1.5 there, the gap-baseline effect plus memory), SPACEV 0.99
+  1.3-1.8, ESCI ~1.0 (LRU 0.74-0.87: its cache updates), TriviaQA 0.99 1% up to 2.4.

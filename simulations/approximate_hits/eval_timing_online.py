@@ -53,8 +53,43 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 RES = Path("simulations/approximate_hits/results")
-KNN_EF = 256    # in-cache HNSW search list: 0.975-0.985 neighbor recall at 10% (32: 0.83-0.89; doc 9o)
+KNN_EF = int(os.environ.get("KNN_EF", 256))    # in-cache HNSW search list: 0.975-0.985 neighbor recall at 10% (32: 0.83-0.89; doc 9o)
 SHELL_BALLS = 10      # the hit path's shell scope (FastHitPath "balls10", online_sim --shell-balls 10)
+
+
+def tune_ef(m, q, warm_q, target=0.975, n=300, tune_only=False):
+    """In-cache HNSW search list chosen per cache (doc 9ad): the smallest of 256, 512, ... 4096 whose
+    approximate 10 nearest cached vectors overlap the exact ones by >= target (measured on the last n
+    warm-up requests, brute force over the cached vectors; untimed, before the replay). A fixed 256
+    gave 0.975-0.985 on SPACEV but only 0.90 on TriviaQA at 10% (769-d, 700k vectors): static ours
+    served 5% instead of 74-81%, since the hit score is built from the neighbors' distances."""
+    global KNN_EF
+    import faiss
+    if hasattr(m, "hp"):
+        hn, cv = m.hp.hnsw, m.hp.cv
+        setters = [lambda e: setattr(m.hp.hnsw.hnsw, "efSearch", e)]
+    elif getattr(m, "hnsw", None) is not None:
+        hn, cv = m.hnsw, m.cv[:m.n_cv]
+        setters = [lambda e: setattr(m.hnsw.hnsw, "efSearch", e)]
+    else:
+        return None
+    xq = np.ascontiguousarray(np.asarray(q[np.asarray(warm_q[-n:], dtype=np.int64)], dtype=np.float32))
+    faiss.omp_set_num_threads(4)
+    _, gt = faiss.knn(xq, np.ascontiguousarray(cv), 10)
+    faiss.omp_set_num_threads(1)
+    ef, rec = 256, 0.0
+    while True:
+        hn.hnsw.efSearch = ef
+        _, ii = hn.search(xq, 10)
+        rec = float(np.mean([len(set(a.tolist()) & set(b.tolist())) / 10 for a, b in zip(ii, gt)]))
+        if rec >= target or ef >= 4096:
+            break
+        ef *= 2
+    for f in setters:
+        f(ef)
+    KNN_EF = ef
+    logger.info(f"in-cache search list {ef}: neighbor recall@10 {rec:.3f} ({len(cv)} cached vectors)")
+    return {"ef": ef, "neighbor_recall": rec}
 
 
 def summary(lat):
@@ -956,6 +991,7 @@ def main():
     ap.add_argument("--qv-dims", type=int, default=16)
     ap.add_argument("--qv-buckets", type=int, default=8)
     ap.add_argument("--no-equal-memory", action="store_true")
+    ap.add_argument("--tune-only", action="store_true", help="print the in-cache search list chosen and stop")
     ap.add_argument("--compose-backend", default=None,
                     help="composed timing (doc 9ad): per-request DiskANN-alone latencies (eval_timing_backend.py "
                          "backend_s<every>_lat.npy, one per timed request). Timed requests then use the stored "
@@ -1034,6 +1070,10 @@ def main():
     del args._answers
     if deep is None and max(getattr(m, "miss_k", args.k), args.k) > ans.shape[1]:
         deep = np.load(RES / "backends" / prep.name / "diskann.npz")[f"deep_{args.target_recall}"]
+    ef_info = tune_ef(m, q, warm_q)
+    if args.tune_only:
+        print(json.dumps({"prep": prep.name, "budget": args.budget, "method": args.method, **(ef_info or {})}))
+        return
     mem0 = m.memory_bytes
     for s_ in getattr(m, "t", {}):            # stage times: per request, over all requests
         m.t[s_] = 0.0
@@ -1135,7 +1175,7 @@ def main():
            "knn_fallbacks": int(getattr(m, "fallbacks", 0)),
            "controller_events": getattr(getattr(m, "sim", None), "events", None),
            "rebuilds_installed": int(getattr(m, "rebuilds", 0)),
-           "entry_changes": int(getattr(m, "changes", 0))}
+           "entry_changes": int(getattr(m, "changes", 0)), "in_cache_search": ef_info}
     logger.info(f"hit rate {res['hit_rate']:.3f} (timed sample {res['hit_rate_timed']:.3f}); recall vs "
                 f"exact {res['recall_vs_exact_all']:.3f}; cache + DiskANN {res['cache']['mean_ms']:.2f} ms")
     if args.no_backend_arms:
