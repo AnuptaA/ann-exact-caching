@@ -3200,3 +3200,35 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   vs a 9.6 ms DiskANN search, and a miss pays the failed lookup too (10.5-11.7 ms vs 9.6); (b) DiskANN
   with the cache's memory as a node cache (grey dashed) is 1.4-1.5x there, above every technique;
   (c) SPACEV Zipf 0.99: 1.5-1.8x; TriviaQA 0.99 1%: 2.0-2.4x.
+
+### 9ae. Plan after the first full timing plot (11-16 evening, decided with Jialin)
+
+Findings that drive it: (1) speedup = baseline / mean latency: ours' hit path (HNSW kNN over cached
+vectors) costs every request 1-24 ms (kNN 0.5-23.4 ms; balls 0.1-0.2; intruder count 0.1-0.75; model
+~0) against 9.6 ms (SPACEV) / 74 ms (TriviaQA) per DiskANN search, so ours needs hit rate > lookup /
+DiskANN time (12% SPACEV, 32% TriviaQA 10%) just to break even; Aker / QVCache pay ~0. (2) The hit
+decision depends only on the kNN radius (and the intruder count measured against it), not on the
+neighbor identities; the served answer (the 10 points) matters for retention. SPACEV 0.6 10%, 1,500
+requests: search list 64 (neighbor recall 0.908) gives median radius ratio 1.0000 (p95 1.015), 99.8%
+equal decisions, retention of exact-hit queries 0.911 vs 0.924; list 128 (0.949): 100%, 0.922.
+The 0.975 neighbor-recall target was my choice from an earlier SPACEV check, not derived.
+(3) DiskANN with a node cache: SPACEV 9.6 -> 6.8 ms with 54k nodes (0.5%), 6.5 at 1.6M; ESCI 8.5 ->
+6.5 (3.2k nodes) ... 5.4 (100k); TriviaQA 74.0 -> 73.6 / 72.7 (100k / 884k): hub nodes at the search
+start, independent of repetition (same at every Zipf); latency-bound (few sequential reads) vs
+read-rate-bound (TriviaQA ~1,000 reads at ~15k reads/s).
+
+Decided:
+a. Audits: not charged to request latency; audit time measured separately and reported separately
+   (affects drift / continuous / LRU runs).
+b. Stage-1 hit path tuned ADAPTIVELY: starting from a high-accuracy setting, lower the search list and
+   then the vector precision (fp32 -> 8-bit -> coarser / PQ) while the radius estimates and hit decisions
+   stay accurate against exact search on warm-up requests; keep the last accurate setting. Stage 2:
+   served answer for hits only, with its own accuracy rule (retention of hits).
+c. Node cache: a fixed small node cache in the DiskANN baseline and under every technique's misses
+   (outside the cache budget), size chosen per workload by doubling until the latency gain saturates.
+d. The 100 ms rule is no longer a hard limit. BACKEND-RECALL SENSITIVITY TEST (must not be dropped):
+   rerun the comparison with DiskANN tuned to higher recall (0.97 / 0.98 / 0.99) at least on SPACEV and
+   ESCI (probe: SPACEV 0.95 / 0.97 / 0.98 = 10 / 20 / 29 ms; ESCI 9 / 14 ms; TriviaQA 76 / 186 ms),
+   reported as a sensitivity result; main numbers stay at 0.95.
+e. No heuristic pre-check with new parameters. Exact bound (skip the kNN when the best-case score
+   cannot reach the cutoff) kept as an idea, only if it prunes enough (to be measured).
