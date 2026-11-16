@@ -115,7 +115,7 @@ def main():
                 # target met: this run's own mean retention of hits (whole stream, real DiskANN)
                 rt = ret_of(r)
                 ok = rt is not None and rt >= T - TOL
-                pts.append((b * JITTER[hk], r["speedup"]["overall"], r["recall_vs_exact_all"], ok))
+                pts.append((b * JITTER[hk], r["speedup"]["overall"], rt if rt is not None else np.nan, ok))
                 if r.get("backend_mem"):
                     eq_pts.append((b, r["backend"]["mean_ms"] / r["backend_mem"]["mean_ms"]))
                 c = r["cache"]
@@ -148,11 +148,11 @@ def main():
                      loc="left", fontweight="bold")
         if j % ncol == 0:
             ax.set_ylabel("speedup over DiskANN alone\n(mean latency, all requests)")
-            st.set_ylabel("recall vs\nexact (all)", fontsize=8)
+            st.set_ylabel("retention\nof hits", fontsize=8)
         ax.grid(alpha=0.3)
         ax.tick_params(labelbottom=False)
-        st.axhline(0.953, color="grey", lw=1, ls="--")
-        st.set_ylim(0.70, 0.98)
+        st.axhline(0.9, color="grey", lw=1, ls="--")       # the target
+        st.set_ylim(0.30, 1.0)
         st.grid(alpha=0.3)
         st.set_xticks(bs)
         st.set_xticklabels([f"{100 * b:g}%" for b in bs], fontsize=8)
@@ -163,7 +163,7 @@ def main():
     fig.text(0.5, 0.955, "DiskANN tuned per workload (search list x beam width, recall@10 0.95 or 0.9 if 0.95 > 100 ms), same index for every technique; whole stream after "
              "warm-up, 1 in 50 requests timed end to end (DiskANN baselines with a 10 ms gap between searches; technique runs composed: backend calls charged the request's measured DiskANN time, hit path with a per-cache search list); cache updates are background work.\n"
              "Filled: mean retention of hits (served answer vs DiskANN's top-10) >= 0.89 in this run; hollow: below. "
-             "Strip: recall vs exact over all requests (grey dashed: DiskANN alone, .953).",
+             "Strip: mean retention of hits (served answer vs DiskANN's top-10; grey dashed: the target 0.9). Recall over all requests is in timing_table.md.",
              ha="center", fontsize=7.5)
     out = RES / "latest" / "timing.png"          # latest plots only (11-14)
     out.parent.mkdir(parents=True, exist_ok=True)

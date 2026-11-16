@@ -1,21 +1,20 @@
 | trace | budget | technique | hit % | ret. hits | recall all | DiskANN ms | cache+DiskANN ms | hit ms | miss ms | p99 ms | DiskANN p99 | speedup | 1/(1-h) | env |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Zipf 0.3 | 0.3% | Ours | 1.06 | 0.944 | 0.956 | 10.2 | 10.8 | 0.592 | 10.8 | 16.7 | 16 | 0.942 | 1.01 | contended |
-| Zipf 0.3 | 1% | Ours (cutoff lost 79k requests) | 0 | - | 0.956 | 10.2 | 11.5 | - | 11.5 | 17.5 | 16 | 0.882 | 1 | contended |
-| Zipf 0.3 | 3% | Ours (cutoff lost 79k requests) (cutoff lost 79k requests) | 0 | - | 0.956 | 10.2 | 13.3 | - | 13.3 | 19.1 | 16 | 0.765 | 1 | contended |
-| Zipf 0.3 | 10% | Ours (cutoff lost 79k requests) (cutoff lost 79k requests) | 12.1 | 0.922 | 0.95 | 10.2 | 11 | 1.92 | 12.4 | 18.3 | 16 | 0.924 | 1.14 | contended |
+| Zipf 0.3 | 1% | Ours (cutoff lost 79k requests) | 0 | - | 0.956 | 10.2 | 11 | - | 11 | 16.8 | 16 | 0.927 | 1 | contended |
+| Zipf 0.3 | 3% | Ours (cutoff lost 79k requests) (cutoff lost 79k requests) | 0 | - | 0.956 | 10.2 | 11.1 | - | 11.1 | 17 | 16 | 0.916 | 1 | contended |
 | Zipf 0.3 | 0.3% | Ours (drift handling) (cutoff lost 37k requests) | 0.988 | 0.919 | 0.956 | 10.2 | 10.6 | 0.453 | 10.7 | 16.5 | 16 | 0.956 | 1.01 | contended |
-| Zipf 0.3 | 1% | Ours (drift handling) (cutoff lost 37k requests) (cutoff lost 27k requests) | 2.28 | 0.92 | 0.955 | 10.2 | 11.2 | 2.39 | 11.4 | 17.3 | 16 | 0.906 | 1.02 | contended |
-| Zipf 0.3 | 3% | Ours (drift handling) (cutoff lost 37k requests) (cutoff lost 27k requests) (cutoff lost 35k requests) | 2.57 | 0.941 | 0.955 | 10.2 | 11.5 | 2.89 | 11.8 | 17.6 | 16 | 0.881 | 1.02 | contended |
-| Zipf 0.3 | 10% | Ours (drift handling) (cutoff lost 37k requests) (cutoff lost 27k requests) (cutoff lost 35k requests) | 11.8 | 0.923 | 0.951 | 10.2 | 11.1 | 2.77 | 12.4 | 18.1 | 16 | 0.918 | 1.12 | contended |
+| Zipf 0.3 | 1% | Ours (drift handling) (cutoff lost 37k requests) (cutoff lost 30k requests) | 2.12 | 0.926 | 0.955 | 10.2 | 11.5 | 2.34 | 11.7 | 17.6 | 16 | 0.881 | 1.02 | contended |
+| Zipf 0.3 | 3% | Ours (drift handling) (cutoff lost 37k requests) (cutoff lost 30k requests) (cutoff lost 11k requests) | 3.57 | 0.944 | 0.955 | 10.2 | 11.5 | 2.15 | 11.9 | 17.7 | 16 | 0.882 | 1.03 | contended |
+| Zipf 0.3 | 10% | Ours (drift handling) (cutoff lost 37k requests) (cutoff lost 30k requests) (cutoff lost 11k requests) | 11 | 0.93 | 0.952 | 10.2 | 11.2 | 3.05 | 12.3 | 18.1 | 16 | 0.91 | 1.11 | contended |
 | Zipf 0.3 | 0.3% | Ours (continuous greedy) (cutoff lost 39k requests) | 0.847 | 0.913 | 0.956 | 10.2 | 10.6 | 0.546 | 10.7 | 16.6 | 16 | 0.955 | 1.01 | contended |
 | Zipf 0.3 | 1% | Ours (continuous greedy) (cutoff lost 39k requests) (cutoff lost 29k requests) | 1.94 | 0.931 | 0.955 | 10.2 | 10.8 | 2.55 | 11 | 16.9 | 16 | 0.944 | 1.02 | contended |
-| Zipf 0.3 | 3% | Ours (continuous greedy) (cutoff lost 39k requests) (cutoff lost 29k requests) (cutoff lost 2k requests) | 6.55 | 0.932 | 0.953 | 10.2 | 11.2 | 2.23 | 12 | 18 | 16 | 0.903 | 1.06 | contended |
-| Zipf 0.3 | 10% | Ours (continuous greedy) (cutoff lost 39k requests) (cutoff lost 29k requests) (cutoff lost 2k requests) | 17 | 0.919 | 0.947 | 10.2 | 9.78 | 2.19 | 11.6 | 17.4 | 16 | 1.04 | 1.18 | contended |
-| Zipf 0.3 | 0.3% | LRU (cutoff lost 43k requests) | 0.672 | 0.933 | 0.956 | 10.2 | 11.4 | 1.36 | 11.5 | 17.3 | 16 | 0.888 | 1.01 | contended |
-| Zipf 0.3 | 1% | LRU (cutoff lost 43k requests) (cutoff lost 19k requests) | 2.32 | 0.937 | 0.955 | 10.2 | 11.1 | 1.57 | 11.3 | 17.2 | 16 | 0.913 | 1.02 | contended |
-| Zipf 0.3 | 3% | LRU (cutoff lost 43k requests) (cutoff lost 19k requests) (cutoff lost 3k requests) | 7.49 | 0.916 | 0.952 | 10.2 | 11.7 | 3.03 | 12.4 | 18.3 | 16 | 0.864 | 1.07 | contended |
-| Zipf 0.3 | 10% | LRU (cutoff lost 43k requests) (cutoff lost 19k requests) (cutoff lost 3k requests) | 21.9 | 0.915 | 0.944 | 10.2 | 10.1 | 2.45 | 12.2 | 17.8 | 16 | 1.01 | 1.24 | contended |
+| Zipf 0.3 | 3% | Ours (continuous greedy) (cutoff lost 39k requests) (cutoff lost 29k requests) (cutoff lost 16k requests) | 4.54 | 0.937 | 0.954 | 10.2 | 11.3 | 2.6 | 11.8 | 17.7 | 16 | 0.897 | 1.04 | contended |
+| Zipf 0.3 | 10% | Ours (continuous greedy) (cutoff lost 39k requests) (cutoff lost 29k requests) (cutoff lost 16k requests) | 17 | 0.919 | 0.947 | 10.2 | 9.78 | 2.19 | 11.6 | 17.4 | 16 | 1.04 | 1.18 | contended |
+| Zipf 0.3 | 0.3% | LRU (cutoff lost 45k requests) | 0.619 | 0.934 | 0.956 | 10.2 | 10.9 | 0.761 | 11 | 16.9 | 16 | 0.93 | 1.01 | contended |
+| Zipf 0.3 | 1% | LRU (cutoff lost 45k requests) (cutoff lost 19k requests) | 2.32 | 0.937 | 0.955 | 10.2 | 11.1 | 1.57 | 11.3 | 17.2 | 16 | 0.913 | 1.02 | contended |
+| Zipf 0.3 | 3% | LRU (cutoff lost 45k requests) (cutoff lost 19k requests) (cutoff lost 1k requests) | 7.45 | 0.921 | 0.952 | 10.2 | 11.9 | 3 | 12.6 | 18.4 | 16 | 0.853 | 1.07 | contended |
+| Zipf 0.3 | 10% | LRU (cutoff lost 45k requests) (cutoff lost 19k requests) (cutoff lost 1k requests) | 21.9 | 0.915 | 0.944 | 10.2 | 10.1 | 2.45 | 12.2 | 17.8 | 16 | 1.01 | 1.24 | contended |
 | Zipf 0.3 | 0.3% | Aker | 0.29 | 0.921 | 0.956 | 10.2 | 10.2 | 0.0239 | 10.2 | 16.1 | 16 | 0.999 | 1 | contended |
 | Zipf 0.3 | 1% | Aker | 0.886 | 0.926 | 0.955 | 10.2 | 10.1 | 0.0338 | 10.2 | 16.1 | 16 | 1 | 1.01 | contended |
 | Zipf 0.3 | 3% | Aker | 2.66 | 0.936 | 0.955 | 10.2 | 9.94 | 0.0366 | 10.2 | 16 | 16 | 1.02 | 1.03 | contended |
@@ -34,7 +33,7 @@
 | Zipf 0.6 | 10% | Ours | 20.5 | 0.923 | 0.942 | 9.61 | 8.99 | 1.09 | 11 | 14.6 | 13.6 | 1.07 | 1.26 | contended |
 | Zipf 0.6 | 0.3% | Ours (drift handling) | 9.08 | 0.923 | 0.947 | 9.61 | 9.48 | 1.68 | 10.2 | 14.1 | 13.6 | 1.01 | 1.09 | contended |
 | Zipf 0.6 | 1% | Ours (drift handling) | 11 | 0.925 | 0.947 | 9.61 | 9.6 | 1.58 | 10.4 | 14.3 | 13.6 | 1 | 1.11 | contended |
-| Zipf 0.6 | 3% | Ours (drift handling) | 13.4 | 0.927 | 0.946 | 9.61 | 10.2 | 2.49 | 11.3 | 15.1 | 13.6 | 0.946 | 1.14 | contended |
+| Zipf 0.6 | 3% | Ours (drift handling) | 13.4 | 0.923 | 0.946 | 9.61 | 10.2 | 2.27 | 11.4 | 15.2 | 13.6 | 0.939 | 1.14 | contended |
 | Zipf 0.6 | 10% | Ours (drift handling) | 19.9 | 0.926 | 0.943 | 9.61 | 9.28 | 2.35 | 11 | 14.7 | 13.6 | 1.04 | 1.22 | contended |
 | Zipf 0.6 | 0.3% | Ours (continuous greedy) | 11.3 | 0.925 | 0.946 | 9.61 | 9.4 | 1.1 | 10.4 | 14.2 | 13.6 | 1.02 | 1.11 | contended |
 | Zipf 0.6 | 1% | Ours (continuous greedy) | 15.1 | 0.921 | 0.944 | 9.61 | 9.28 | 1.63 | 10.6 | 14.4 | 13.6 | 1.04 | 1.16 | contended |
@@ -57,7 +56,7 @@
 | Zipf 0.6 | 3% | QVCache | 10.4 | 0.924 | 0.947 | 9.61 | 10.2 | 1.64 | 11.2 | 15.2 | 13.6 | 0.941 | 1.12 | contended |
 | Zipf 0.6 | 10% | QVCache | 10.6 | 0.958 | 0.95 | 9.61 | 8.84 | 0.248 | 9.87 | 13.7 | 13.6 | 1.09 | 1.12 | contended |
 | Zipf 0.99 | 0.3% | Ours | 45.4 | 0.92 | 0.936 | 9.53 | 5.98 | 0.665 | 10.5 | 14.9 | 14.3 | 1.59 | 1.83 | contended |
-| Zipf 0.99 | 1% | Ours | 48.5 | 0.912 | 0.932 | 9.53 | 6.31 | 1.32 | 11.2 | 15.4 | 14.3 | 1.51 | 1.94 | contended |
+| Zipf 0.99 | 1% | Ours | 48.6 | 0.914 | 0.933 | 9.53 | 5.62 | 0.655 | 10.5 | 14.9 | 14.3 | 1.7 | 1.94 | contended |
 | Zipf 0.99 | 3% | Ours | 53.6 | 0.905 | 0.927 | 9.53 | 5.24 | 0.844 | 10.7 | 15 | 14.3 | 1.82 | 2.15 | contended |
 | Zipf 0.99 | 10% | Ours | 57 | 0.91 | 0.928 | 9.53 | 5.32 | 1.08 | 11 | 15.2 | 14.3 | 1.79 | 2.33 | contended |
 | Zipf 0.99 | 0.3% | Ours (drift handling) | 45.5 | 0.917 | 0.935 | 9.53 | 6.19 | 1.4 | 10.3 | 14.7 | 14.3 | 1.54 | 1.69 | contended |
@@ -112,48 +111,48 @@
 | ESCI (no repeated queries) | 1% | QVCache | 0.268 | 0.628 | 0.954 | 8.46 | 8.81 | 0.264 | 8.84 | 12.4 | 12 | 0.96 | 1 | contended |
 | ESCI (no repeated queries) | 3% | QVCache | 0.406 | 0.773 | 0.954 | 8.46 | 8.94 | 0.402 | 8.96 | 12.5 | 12 | 0.947 | 1 | contended |
 | ESCI (no repeated queries) | 10% | QVCache | 0.691 | 0.894 | 0.954 | 8.46 | 10.7 | 1.95 | 10.7 | 14.6 | 12 | 0.794 | 1.01 | contended |
-| TriviaQA, Zipf 0.3 | 1% | Ours | 7 | 0.916 | 0.949 | 73.7 | 71 | 3.18 | 77.2 | 84.6 | 80.8 | 1.04 | 1.08 | contended |
-| TriviaQA, Zipf 0.3 | 10% | Ours | 16.7 | 0.952 | 0.951 | 73.7 | 72.3 | 11.8 | 86 | 94.7 | 80.8 | 1.02 | 1.2 | contended |
-| TriviaQA, Zipf 0.3 | 1% | Ours (drift handling) (cutoff lost 3k requests) | 6.46 | 0.918 | 0.949 | 73.7 | 72.5 | 9.65 | 77.5 | 84.9 | 80.8 | 1.02 | 1.06 | contended |
-| TriviaQA, Zipf 0.3 | 10% | Ours (drift handling) (cutoff lost 3k requests) | 27.3 | 0.916 | 0.939 | 73.7 | 68.3 | 20.8 | 87.6 | 96.8 | 80.8 | 1.08 | 1.33 | contended |
-| TriviaQA, Zipf 0.3 | 1% | Ours (continuous greedy) | 7.67 | 0.924 | 0.949 | 73.7 | 71.7 | 11.2 | 77 | 84.7 | 80.8 | 1.03 | 1.07 | contended |
-| TriviaQA, Zipf 0.3 | 10% | Ours (continuous greedy) | 47.3 | 0.913 | 0.925 | 73.7 | 57.2 | 22.2 | 91 | 114 | 80.8 | 1.29 | 1.74 | contended |
-| TriviaQA, Zipf 0.3 | 1% | LRU (cutoff lost 10k requests) | 3.16 | 0.922 | 0.952 | 73.7 | 75.4 | 8.61 | 77.9 | 86 | 80.8 | 0.977 | 1.03 | contended |
-| TriviaQA, Zipf 0.3 | 10% | LRU (cutoff lost 10k requests) | 54.8 | 0.91 | 0.921 | 73.7 | 67.5 | 35.1 | 108 | 141 | 80.8 | 1.09 | 1.97 | contended |
+| TriviaQA, Zipf 0.3 | 1% | Ours | 7 | 0.915 | 0.949 | 73.7 | 71.2 | 3.35 | 77.4 | 85 | 80.8 | 1.03 | 1.08 | contended |
+| TriviaQA, Zipf 0.3 | 10% | Ours | 31.1 | 0.902 | 0.932 | 73.7 | 61.7 | 11.4 | 85.8 | 94.2 | 80.8 | 1.19 | 1.45 | contended |
+| TriviaQA, Zipf 0.3 | 1% | Ours (drift handling) (cutoff lost 3k requests) | 5.68 | 0.926 | 0.95 | 73.7 | 73.1 | 7.1 | 77.5 | 85.2 | 80.8 | 1.01 | 1.05 | contended |
+| TriviaQA, Zipf 0.3 | 10% | Ours (drift handling) (cutoff lost 3k requests) | 29.2 | 0.911 | 0.937 | 73.7 | 81.8 | 34.6 | 103 | 116 | 80.8 | 0.9 | 1.36 | contended |
+| TriviaQA, Zipf 0.3 | 1% | Ours (continuous greedy) | 8.3 | 0.924 | 0.949 | 73.7 | 70.9 | 9.79 | 77 | 84.6 | 80.8 | 1.04 | 1.08 | contended |
+| TriviaQA, Zipf 0.3 | 10% | Ours (continuous greedy) | 48.5 | 0.912 | 0.924 | 73.7 | 57 | 22.7 | 90.7 | 110 | 80.8 | 1.29 | 1.77 | contended |
+| TriviaQA, Zipf 0.3 | 1% | LRU (cutoff lost 15k requests) | 2.98 | 0.921 | 0.952 | 73.7 | 75.2 | 7.36 | 77.7 | 85.9 | 80.8 | 0.98 | 1.03 | contended |
+| TriviaQA, Zipf 0.3 | 10% | LRU (cutoff lost 15k requests) | 52.9 | 0.912 | 0.922 | 73.7 | 53.1 | 21.6 | 90.2 | 107 | 80.8 | 1.39 | 1.91 | contended |
 | TriviaQA, Zipf 0.3 | 1% | Aker | 2.8 | 0.931 | 0.952 | 73.7 | 71.6 | 0.0411 | 73.7 | 80.9 | 80.8 | 1.03 | 1.03 | contended |
 | TriviaQA, Zipf 0.3 | 10% | Aker | 15.3 | 0.958 | 0.948 | 73.7 | 62 | 0.034 | 73.8 | 80.9 | 80.8 | 1.19 | 1.18 | contended |
 | TriviaQA, Zipf 0.3 | 1% | QVCache | 2.67 | 0.858 | 0.951 | 73.7 | 76.4 | 4.39 | 78.3 | 86.1 | 80.8 | 0.964 | 1.03 | contended |
 | TriviaQA, Zipf 0.3 | 10% | QVCache | 15.6 | 0.909 | 0.943 | 73.7 | 63.7 | 0.834 | 74.6 | 81.9 | 80.8 | 1.16 | 1.18 | contended |
-| TriviaQA, Zipf 0.6 | 1% | Ours | 16.5 | 0.915 | 0.943 | 74 | 65.1 | 3.1 | 77.4 | 84.8 | 81.6 | 1.14 | 1.2 | contended |
-| TriviaQA, Zipf 0.6 | 10% | Ours | 7.67 | 0.968 | 0.953 | 74 | 80.7 | 11.6 | 86 | 95.9 | 81.6 | 0.917 | 1.08 | contended |
-| TriviaQA, Zipf 0.6 | 1% | Ours (drift handling) | 16 | 0.916 | 0.943 | 74 | 67.1 | 12.3 | 77.6 | 85.3 | 81.6 | 1.1 | 1.17 | contended |
-| TriviaQA, Zipf 0.6 | 10% | Ours (drift handling) (cutoff lost 1k requests) | 38.8 | 0.913 | 0.933 | 74 | 61.4 | 20.5 | 87.4 | 96.7 | 81.6 | 1.21 | 1.53 | contended |
-| TriviaQA, Zipf 0.6 | 1% | Ours (continuous greedy) | 21.2 | 0.913 | 0.94 | 74 | 63.2 | 10.6 | 77.5 | 86.3 | 81.6 | 1.17 | 1.24 | contended |
-| TriviaQA, Zipf 0.6 | 10% | Ours (continuous greedy) | 57.3 | 0.912 | 0.92 | 74 | 51.4 | 21.4 | 91.8 | 113 | 81.6 | 1.44 | 2.06 | contended |
-| TriviaQA, Zipf 0.6 | 1% | LRU | 14.2 | 0.915 | 0.944 | 74 | 68 | 12.3 | 78.3 | 86.9 | 81.6 | 1.09 | 1.15 | contended |
-| TriviaQA, Zipf 0.6 | 10% | LRU | 61.5 | 0.91 | 0.917 | 74 | 47.4 | 21.1 | 91.7 | 109 | 81.6 | 1.56 | 2.23 | contended |
+| TriviaQA, Zipf 0.6 | 1% | Ours | 16.4 | 0.916 | 0.943 | 74 | 65.1 | 3.12 | 77.4 | 84.9 | 81.6 | 1.14 | 1.2 | contended |
+| TriviaQA, Zipf 0.6 | 10% | Ours | 41.9 | 0.908 | 0.93 | 74 | 67 | 23.5 | 98.2 | 109 | 81.6 | 1.1 | 1.72 | contended |
+| TriviaQA, Zipf 0.6 | 1% | Ours (drift handling) | 17 | 0.912 | 0.942 | 74 | 66 | 9.8 | 77.6 | 85.1 | 81.6 | 1.12 | 1.18 | contended |
+| TriviaQA, Zipf 0.6 | 10% | Ours (drift handling) | 39.2 | 0.914 | 0.933 | 74 | 60.7 | 19.8 | 87.4 | 96.4 | 81.6 | 1.22 | 1.54 | contended |
+| TriviaQA, Zipf 0.6 | 1% | Ours (continuous greedy) | 19.9 | 0.919 | 0.942 | 74 | 63.9 | 12.1 | 77.3 | 85.1 | 81.6 | 1.16 | 1.22 | contended |
+| TriviaQA, Zipf 0.6 | 10% | Ours (continuous greedy) | 57.8 | 0.914 | 0.924 | 74 | 67.5 | 36.8 | 109 | 145 | 81.6 | 1.1 | 2.08 | contended |
+| TriviaQA, Zipf 0.6 | 1% | LRU | 14.8 | 0.909 | 0.943 | 74 | 66.9 | 9.32 | 78.2 | 87 | 81.6 | 1.11 | 1.15 | contended |
+| TriviaQA, Zipf 0.6 | 10% | LRU | 60.9 | 0.912 | 0.919 | 74 | 47.7 | 21 | 90.5 | 110 | 81.6 | 1.55 | 2.21 | contended |
 | TriviaQA, Zipf 0.6 | 1% | Aker | 6.53 | 0.944 | 0.949 | 74 | 68.3 | 0.0284 | 73.3 | 81.6 | 81.6 | 1.08 | 1.07 | quiet |
 | TriviaQA, Zipf 0.6 | 10% | Aker | 27.1 | 0.915 | 0.932 | 74 | 54.8 | 0.0357 | 74 | 80.7 | 81.6 | 1.35 | 1.37 | contended |
 | TriviaQA, Zipf 0.6 | 1% | QVCache | 6.36 | 0.911 | 0.949 | 74 | 73.9 | 3.32 | 78.3 | 87 | 81.6 | 1 | 1.07 | quiet |
 | TriviaQA, Zipf 0.6 | 10% | QVCache | 24.6 | 0.921 | 0.94 | 74 | 57.1 | 0.84 | 74.8 | 81.8 | 81.6 | 1.3 | 1.33 | contended |
-| TriviaQA, Zipf 0.99 | 1% | Ours | 59.9 | 0.915 | 0.925 | 74.5 | 31.8 | 3.1 | 78.1 | 84.3 | 83.5 | 2.34 | 2.49 | contended |
-| TriviaQA, Zipf 0.99 | 10% | Ours | 59.5 | 0.956 | 0.953 | 74.5 | 40.2 | 11.5 | 86.5 | 94.9 | 83.5 | 1.85 | 2.47 | contended |
-| TriviaQA, Zipf 0.99 | 1% | Ours (drift handling) | 60.5 | 0.91 | 0.922 | 74.5 | 37.1 | 12.2 | 78.2 | 84.8 | 83.5 | 2.01 | 2.19 | contended |
-| TriviaQA, Zipf 0.99 | 10% | Ours (drift handling) | 73.1 | 0.912 | 0.92 | 74.5 | 37.3 | 20.2 | 87.9 | 96.1 | 83.5 | 2 | 2.91 | contended |
-| TriviaQA, Zipf 0.99 | 1% | Ours (continuous greedy) | 62.7 | 0.914 | 0.923 | 74.5 | 34.7 | 10.7 | 78.1 | 85.4 | 83.5 | 2.15 | 2.29 | contended |
-| TriviaQA, Zipf 0.99 | 10% | Ours (continuous greedy) | 85.4 | 0.915 | 0.914 | 74.5 | 31.8 | 21.9 | 90.8 | 100 | 83.5 | 2.34 | 4.3 | contended |
-| TriviaQA, Zipf 0.99 | 1% | LRU | 57.8 | 0.905 | 0.919 | 74.5 | 39.6 | 12.1 | 78.9 | 86.2 | 83.5 | 1.88 | 2.08 | contended |
-| TriviaQA, Zipf 0.99 | 10% | LRU | 86.7 | 0.911 | 0.911 | 74.5 | 30.1 | 20.9 | 90 | 97.8 | 83.5 | 2.47 | 4.52 | contended |
+| TriviaQA, Zipf 0.99 | 1% | Ours | 59.9 | 0.912 | 0.923 | 74.5 | 30.5 | 2.05 | 76.9 | 83.2 | 83.5 | 2.44 | 2.49 | contended |
+| TriviaQA, Zipf 0.99 | 10% | Ours | 73.6 | 0.908 | 0.913 | 74.5 | 24.3 | 5.61 | 80.5 | 87.1 | 83.5 | 3.07 | 3.78 | contended |
+| TriviaQA, Zipf 0.99 | 1% | Ours (drift handling) | 59.9 | 0.912 | 0.922 | 74.5 | 35.9 | 10.8 | 77.1 | 84.4 | 83.5 | 2.07 | 2.16 | contended |
+| TriviaQA, Zipf 0.99 | 10% | Ours (drift handling) | 74.1 | 0.911 | 0.919 | 74.5 | 37.7 | 21.5 | 87.7 | 95.5 | 83.5 | 1.98 | 2.99 | contended |
+| TriviaQA, Zipf 0.99 | 1% | Ours (continuous greedy) | 63.5 | 0.909 | 0.919 | 74.5 | 34.9 | 11.5 | 78 | 84.9 | 83.5 | 2.13 | 2.33 | contended |
+| TriviaQA, Zipf 0.99 | 10% | Ours (continuous greedy) | 85.8 | 0.91 | 0.91 | 74.5 | 31.4 | 22.1 | 90.2 | 99.6 | 83.5 | 2.37 | 4.35 | contended |
+| TriviaQA, Zipf 0.99 | 1% | LRU | 57.6 | 0.909 | 0.922 | 74.5 | 38.6 | 10.4 | 78.9 | 86.5 | 83.5 | 1.93 | 2.07 | contended |
+| TriviaQA, Zipf 0.99 | 10% | LRU | 86 | 0.908 | 0.904 | 74.5 | 24 | 14.7 | 81.9 | 87.9 | 83.5 | 3.11 | 4.39 | contended |
 | TriviaQA, Zipf 0.99 | 1% | Aker | 43.2 | 0.93 | 0.925 | 74.5 | 41.8 | 0.0346 | 74.6 | 81.9 | 83.5 | 1.78 | 1.76 | contended |
 | TriviaQA, Zipf 0.99 | 10% | Aker | 59.2 | 0.937 | 0.918 | 74.5 | 29.2 | 0.0273 | 74.6 | 81.1 | 83.5 | 2.55 | 2.45 | contended |
 | TriviaQA, Zipf 0.99 | 1% | QVCache | 59.4 | 0.903 | 0.918 | 74.5 | 33.7 | 4.97 | 79.7 | 86.8 | 83.5 | 2.21 | 2.46 | contended |
 | TriviaQA, Zipf 0.99 | 10% | QVCache | 59.7 | 0.945 | 0.939 | 74.5 | 29.3 | 0.814 | 75.4 | 81.6 | 83.5 | 2.55 | 2.48 | contended |
-| SPACEV real query log | 1% | Ours (drift handling) (cutoff lost 39k requests) | 2.55 | 0.934 | 0.913 | 64.3 | 64.8 | 12.5 | 66.1 | 78.5 | 77.6 | 0.993 | 1.02 | contended |
-| SPACEV real query log | 10% | Ours (drift handling) (cutoff lost 39k requests) (cutoff lost 30k requests) | 4.29 | 0.915 | 0.914 | 64.3 | 71.9 | 17.7 | 74.2 | 86.5 | 77.6 | 0.895 | 1.04 | contended |
-| SPACEV real query log | 1% | Ours (continuous greedy) (cutoff lost 20k requests) | 4.09 | 0.922 | 0.913 | 64.3 | 64.1 | 11.8 | 66.1 | 78.7 | 77.6 | 1 | 1.04 | contended |
-| SPACEV real query log | 10% | Ours (continuous greedy) (cutoff lost 20k requests) (cutoff lost 45k requests) | 3.51 | 0.918 | 0.914 | 64.3 | 72.6 | 17.5 | 74.5 | 89.6 | 77.6 | 0.887 | 1.03 | contended |
-| SPACEV real query log | 1% | LRU (cutoff lost 27k requests) | 2.56 | 0.932 | 0.913 | 64.3 | 67.2 | 11.6 | 68.8 | 110 | 77.6 | 0.957 | 1.02 | contended |
-| SPACEV real query log | 10% | LRU (cutoff lost 27k requests) (cutoff lost 16k requests) | 6.35 | 0.921 | 0.914 | 64.3 | 73.3 | 24.7 | 76.8 | 105 | 77.6 | 0.877 | 1.06 | contended |
+| SPACEV real query log | 1% | Ours (drift handling) (cutoff lost 29k requests) | 3.09 | 0.925 | 0.913 | 64.3 | 64.7 | 9.48 | 66.3 | 78.8 | 77.6 | 0.995 | 1.03 | contended |
+| SPACEV real query log | 10% | Ours (drift handling) (cutoff lost 29k requests) (cutoff lost 35k requests) | 3.68 | 0.919 | 0.914 | 64.3 | 71.7 | 12.9 | 73.7 | 86.7 | 77.6 | 0.897 | 1.03 | contended |
+| SPACEV real query log | 1% | Ours (continuous greedy) (cutoff lost 24k requests) | 4.27 | 0.921 | 0.913 | 64.3 | 63.8 | 10.7 | 66 | 78.2 | 77.6 | 1.01 | 1.04 | contended |
+| SPACEV real query log | 10% | Ours (continuous greedy) (cutoff lost 24k requests) (cutoff lost 43k requests) | 3.93 | 0.915 | 0.914 | 64.3 | 72.5 | 18.3 | 74.4 | 88.2 | 77.6 | 0.887 | 1.04 | contended |
+| SPACEV real query log | 1% | LRU (cutoff lost 29k requests) | 2.62 | 0.925 | 0.913 | 64.3 | 67.6 | 11.2 | 69.3 | 119 | 77.6 | 0.952 | 1.02 | contended |
+| SPACEV real query log | 10% | LRU (cutoff lost 29k requests) (cutoff lost 15k requests) | 6.14 | 0.922 | 0.915 | 64.3 | 72.4 | 19.4 | 75.9 | 102 | 77.6 | 0.888 | 1.06 | contended |
 | SPACEV real query log | 1% | Aker | 3.25 | 0.944 | 0.911 | 64.3 | 61.9 | 0.0215 | 64.3 | 76.7 | 77.6 | 1.04 | 1.03 | contended |
 | SPACEV real query log | 10% | Aker | 8.25 | 0.915 | 0.907 | 64.3 | 59.1 | 0.0233 | 64.3 | 76.3 | 77.6 | 1.09 | 1.09 | contended |
 | SPACEV real query log | 1% | QVCache | 2.39 | 0.959 | 0.913 | 64.3 | 64.1 | 1.44 | 65.7 | 79 | 77.6 | 1 | 1.02 | contended |
