@@ -249,10 +249,14 @@ def open_diskann(path, nodes, init_threads=32):
                                      cache_mechanism=1 if nodes else 0, index_prefix="ann")
 
 
-def time_backend(ix, xs, k, L, beam=2):
-    """Latency of one DiskANN search per query (xs already in the index's dtype)."""
+def time_backend(ix, xs, k, L, beam=2, gap_ms=0.0):
+    """Latency of one DiskANN search per query (xs already in the index's dtype). gap_ms: pause
+    before each search (not timed): back-to-back searches on a fast index exhaust the volume's read
+    budget and run ~50% slower than the same searches spread out (SPACEV, 15,000 reads/s; doc 9ad)."""
     lat = np.empty(len(xs))
     for i, x in enumerate(xs):
+        if gap_ms:
+            time.sleep(gap_ms / 1000)
         a = time.perf_counter()
         ix.search(x, k_neighbors=k, complexity=L, beam_width=beam)
         lat[i] = time.perf_counter() - a

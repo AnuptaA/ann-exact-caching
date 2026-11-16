@@ -3147,3 +3147,15 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   request's DiskANN-alone latency measured by eval_timing_backend.py. Check on a quiet machine:
   run_compose_check.sh (SPACEV Zipf 0.99 1% and TriviaQA Zipf 0.6 1%, six techniques): live vs
   composed sequential vs composed with 12 jobs at once, 4 cores each.
+- Composed-timing check (11-16 00:00-00:25; SPACEV Zipf 0.99 and TriviaQA Zipf 0.6, 1%, six techniques):
+  hit rates equal (<= 0.8 points; FAISS's multi-threaded HNSW build is nondeterministic). TriviaQA:
+  composed = live within 1.5% (sequential and 12 jobs at once, 4 cores each: parallel does not
+  distort). SPACEV: composed 8-9.6 ms vs live 5.3-6.4 ms. Cause: DiskANN's latency depends on request
+  spacing. Misses inside technique runs cost ~10 ms, the DiskANN-alone arm (back to back) ~15 ms:
+  the volume sustains ~15,000 reads/s (measured 14,996/s during the answer jobs); a SPACEV search
+  (~200 reads) run back to back is read-budget bound (~13 ms), spread out it takes ~10 ms.
+  Gap test (spacev-aker-0.99, 300 requests): gap 0 -> 14.7 ms; 10 / 30 / 60 / 120 ms -> 9.9 / 9.7 /
+  9.8 / 9.8 ms. ESCI 0 / 10 / 60 ms: 10.7 / 9.0 / 8.8. TriviaQA 0.6 (~1,000 reads per search): 77.6 /
+  75.0 / 76.4 (no effect: read-bound either way). The original method had the same mismatch (alone
+  back to back, techniques' misses spread out), so SPACEV / ESCI speedups were inflated.
+  Fix: eval_timing_backend.py --gap-ms (default 10; also time_backend(gap_ms)); arms to be rerun.

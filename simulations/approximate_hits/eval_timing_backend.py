@@ -37,6 +37,9 @@ def main():
     ap.add_argument("--stream", default="trace")
     ap.add_argument("--sample-every", type=int, default=50)
     ap.add_argument("--warm", type=int, default=200)
+    ap.add_argument("--gap-ms", type=float, default=10.0,
+                    help="pause before every timed search, as between a technique run's timed requests "
+                         "(they are separated by ~50 untimed requests); 0 = back to back (doc 9ad)")
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--out", required=True)
     from simulations.approximate_hits.timing_env import add_args, make_guard
@@ -67,9 +70,9 @@ def main():
     warm = np.ascontiguousarray(xs[np.asarray(stream[max(0, w - args.warm):w], dtype=np.int64)])
     logger.info(f"{prep.name}: {len(timed)} timed requests (1 in {args.sample_every}), search list {L}, beam {beam}")
     ix = open_diskann(index, 0)
-    time_backend(ix, warm, args.k, L, beam)
-    lat = time_backend(ix, xq, args.k, L, beam)
-    res = {"prep": prep.name, "search_list": L, "beam": beam, "index": index, "sample_every": args.sample_every,
+    time_backend(ix, warm, args.k, L, beam, args.gap_ms)
+    lat = time_backend(ix, xq, args.k, L, beam, args.gap_ms)
+    res = {"prep": prep.name, "search_list": L, "beam": beam, "index": index, "sample_every": args.sample_every, "gap_ms": args.gap_ms,
            "warmup": w, "n_timed": int(len(timed)), "backend": dict(summary(lat)), "per_budget": {}}
     logger.info(f"DiskANN alone: {res['backend']['mean_ms']:.2f} ms")
     del ix
@@ -80,8 +83,8 @@ def main():
         del hp
         nodes = int(mem0 // node_bytes)
         ix2 = open_diskann(index, nodes)
-        time_backend(ix2, warm, args.k, L, beam)
-        lat_m = time_backend(ix2, xq, args.k, L, beam)
+        time_backend(ix2, warm, args.k, L, beam, args.gap_ms)
+        lat_m = time_backend(ix2, xq, args.k, L, beam, args.gap_ms)
         res["per_budget"][f"{b:g}"] = dict(summary(lat_m), nodes_cached=nodes, cache_memory_bytes=mem0)
         logger.info(f"budget {b:g}: equal memory ({nodes} nodes) {res['per_budget'][f'{b:g}']['mean_ms']:.2f} ms")
         del ix2
