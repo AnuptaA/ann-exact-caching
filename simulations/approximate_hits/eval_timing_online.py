@@ -73,6 +73,8 @@ def tune_ef(m, q, warm_q, target=0.975, n=300, tune_only=False):
         setters = [lambda e: setattr(m.hnsw.hnsw, "efSearch", e)]
     else:
         return None
+    if not len(warm_q):
+        return None
     xq = np.ascontiguousarray(np.asarray(q[np.asarray(warm_q[-n:], dtype=np.int64)], dtype=np.float32))
     faiss.omp_set_num_threads(4)
     _, gt = faiss.knn(xq, np.ascontiguousarray(cv), 10)
@@ -196,6 +198,7 @@ class Ours:
         self.audits = self.recal = bool(getattr(args, "ours_recal", False))
         from simulations.approximate_hits.eval_timing import FastHitPath
         self.hp = FastHitPath(db, q, st, f"hnsw{KNN_EF}", "balls10")
+        self.ef_info = tune_ef(self, q, st["cal_q"] if "cal_q" in st else np.empty(0, dtype=np.int64))
         self.k = int(st["k"])
         self.cached = np.zeros(len(db), dtype=bool)
         self.cached[st["cached_ids"]] = True
@@ -555,6 +558,7 @@ class LRU(Ours):
         self._rebuild()                       # one multi-threaded graph build over the warm-up cache
         self.background = self.rebuild_s = 0.0
         self._arr_build()
+        self.ef_info = tune_ef(self, self.q, st["cal_q"] if "cal_q" in st else np.empty(0, dtype=np.int64))
         self.memory_bytes = self._bytes()
         self._now = int(st["warmup"])
         recalibrate_on_serving_path(self, st, self.q, self._args)
@@ -1070,7 +1074,7 @@ def main():
     del args._answers
     if deep is None and max(getattr(m, "miss_k", args.k), args.k) > ans.shape[1]:
         deep = np.load(RES / "backends" / prep.name / "diskann.npz")[f"deep_{args.target_recall}"]
-    ef_info = tune_ef(m, q, warm_q)
+    ef_info = getattr(m, "ef_info", None)       # chosen in the constructors, before the warm-up calibration
     if args.tune_only:
         print(json.dumps({"prep": prep.name, "budget": args.budget, "method": args.method, **(ef_info or {})}))
         return

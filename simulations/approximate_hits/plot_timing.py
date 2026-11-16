@@ -161,7 +161,7 @@ def main():
         st.set_xlabel("cache size (fraction of the dataset)", fontsize=9)
     fig.legend(loc="lower center", ncol=5, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
     fig.text(0.5, 0.955, "DiskANN tuned per workload (search list x beam width, recall@10 0.95 or 0.9 if 0.95 > 100 ms), same index for every technique; whole stream after "
-             "warm-up, 1 in 20 requests timed end to end; cache updates are background work.\n"
+             "warm-up, 1 in 50 requests timed end to end (DiskANN baselines with a 10 ms gap between searches; technique runs composed: backend calls charged the request's measured DiskANN time, hit path with a per-cache search list); cache updates are background work.\n"
              "Filled: mean retention of hits (served answer vs DiskANN's top-10) >= 0.89 in this run; hollow: below. "
              "Strip: recall vs exact over all requests (grey dashed: DiskANN alone, .953).",
              ha="center", fontsize=7.5)

@@ -3188,3 +3188,15 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
 - Partial timing plot (before the fix): SPACEV Zipf 0.3 / 0.6 speedups ~0.9-1.1 (DiskANN with the
   cache's memory as a node cache is 1.4-1.5 there, the gap-baseline effect plus memory), SPACEV 0.99
   1.3-1.8, ESCI ~1.0 (LRU 0.74-0.87: its cache updates), TriviaQA 0.99 1% up to 2.4.
+- Final-batch bug (11-16 10:40): `tune_ef` ran after the harness's warm-up calibration on the
+  serving path, so the cutoff was calibrated with the 256-search-list path and then used with the
+  larger list: static ours at TriviaQA 0.6 10% served 7.7% at retention 0.995 (simulator 52.6% at
+  0.9; cutoff 3.2 vs the simulator's 1.06). Fixed (tuning in the constructors, before the warm-up
+  calibration); the 41 runs with a list > 256 (ours, drift, continuous, LRU; mostly 10% cells, TriviaQA
+  1%) archived in timing_v4/ef_order_old and rerun. Runs with list 256 unaffected.
+  Search lists chosen: 256 (53 runs), 512 (25), 1024 (1), 2048 (14), 4096 (1).
+- Reading the first complete timing plot (before this rerun): (a) at SPACEV Zipf 0.3 / 0.6 and ESCI
+  every technique is at 0.8-1.1x: hit rates are 10-30%, a hit still costs 1-3 ms of in-cache search
+  vs a 9.6 ms DiskANN search, and a miss pays the failed lookup too (10.5-11.7 ms vs 9.6); (b) DiskANN
+  with the cache's memory as a node cache (grey dashed) is 1.4-1.5x there, above every technique;
+  (c) SPACEV Zipf 0.99: 1.5-1.8x; TriviaQA 0.99 1%: 2.0-2.4x.
