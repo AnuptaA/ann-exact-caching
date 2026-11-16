@@ -1,6 +1,6 @@
 #!/bin/sh
 # Phase 2 (doc 9ae), unattended, after the TripClick chain's timing finished:
-#   1. MedRAG DiskANN-only arm (gap 10 ms) that crashed on AIO contexts (quiet, sequential);
+#   (TripClick / MedRAG timing under the old setup was stopped and set aside: the setup is being changed)
 #   2. node-cache curve per index (quiet, sequential): where the latency gain saturates;
 #   3. adaptive stage-1 tuning (CPU only, 3 cells at a time) on the 10% states of a first set of cells.
 cd /local/home/jialind/ann-exact-caching || exit 1
@@ -10,13 +10,6 @@ R=$S/results
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
 REG=$M/registry; mkdir -p $REG
 reg() { sh -c "$1" & j=$!; sleep 6; for c in $(pgrep -P $j); do echo "p2|-|phase2 timing 0" > $REG/$c; done; wait $j; }
-while ! grep -q "tripclick-ip: done" $M/timing_chain_tripclick-ip.log 2>/dev/null; do sleep 120; done
-echo "$(date +%T) tripclick chain done"
-.venv/bin/python -c "
-import sys; sys.path.insert(0, '.')
-from simulations.approximate_hits import timing_jobs as tj
-print('\n'.join(tj.arm_lines('medrag-ip', 50)))" > $M/p2_arm.txt
-while IFS= read -r l; do echo "$(date +%T) arm medrag"; reg "$l"; done < $M/p2_arm.txt
 for P in spacev-aker-0.6 spacev-aker-0.3 spacev-real esci1m triviaqa-ip-0.6 tripclick-ip medrag-ip; do
   S2=trace; [ $P = esci1m ] && S2=random
   TR=0.95; [ $P = spacev-real ] && TR=0.9

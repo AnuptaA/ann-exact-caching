@@ -105,40 +105,48 @@ def beam_for(prep, tgt="0.95"):
     return min(ok, key=lambda g: g["mean_ms"])["W"] if ok else 2
 
 
-def arm_lines(prep, every, stream="trace", out_root="timing_v4"):
+V5_FLAGS = "--node-cache auto"     # v5 (doc 9af): the workload's base node cache under every arm
+
+
+def arm_lines(prep, every, stream="trace", out_root="timing_v4", state_root=None):
     """The DiskANN-only arms of a workload (alone; equal memory per cache size), measured once
-    (eval_timing_backend.py, doc 9ad), over the cache sizes whose warm-up states exist."""
+    (eval_timing_backend.py, doc 9ad), over the cache sizes whose warm-up states exist. v5: states
+    from timing_v4, base node cache in both arms."""
     import glob
     out = f"{R}/{out_root}/{prep}"
-    sts = sorted(glob.glob(f"{out}/state_b*.npz"))
+    sts = sorted(glob.glob(f"{R}/{state_root or out_root}/{prep}/state_b*.npz"))
     if not sts:
         return []
     js = f"{out}/backend_s{every}.json"
     return [f"mkdir -p {out}/logs && [ -f {js} ] || .venv-ann/bin/python -u {S}/eval_timing_backend.py "
             f"--prep {R}/online/{prep} --states {' '.join(sts)} --target-recall {target_of(prep)} --stream {stream} "
-            f"--sample-every {every} --wait-quiet 30 --out {js} > {out}/logs/backend_s{every}.txt 2>&1"]
+            f"--sample-every {every} --wait-quiet 30 {V5_FLAGS if out_root == 'timing_v5' else ''} "
+            f"--out {js} > {out}/logs/backend_s{every}.txt 2>&1"]
 
 
-def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="timing_v4", stream="trace"):
+def lines(prep, b, every, techs=("ours", "lru", "aker", "qvcache"), out_root="timing_v4", stream="trace",
+          state_root=None):
     """Full-stream runs (doc 9m): the whole stream after warm-up, every `every`-th request timed
     live, cache updates as background work for every technique; ours static (no recalibration /
     audits), LRU recalibrating, seeded with the warm-up's labels."""
     pick = collect(prep, stream, b, True)
-    state = f"{R}/{out_root}/{prep}/state_b{b:g}.npz"
+    state = f"{R}/{state_root or out_root}/{prep}/state_b{b:g}.npz"
     out = f"{R}/{out_root}/{prep}"
+    v5 = out_root == "timing_v5"
+    ts = " --two-stage auto" if v5 else ""        # ours / LRU hit path (doc 9af)
     base = (f".venv-ann/bin/python -u {S}/eval_timing_online.py --prep {R}/online/{prep} "
             f"--budget {b:g} --sample-every {every} --maintenance background --wait-quiet 30 --stream {stream} "
-            f"--no-backend-arms "
+            f"--no-backend-arms {V5_FLAGS + ' ' if v5 else ''}"
             f"--target-recall {target_of(prep)}")
     jobs = []
     if "ours" in techs:
-        jobs.append((f"ours_s{every}_b{b:g}", f"--method ours --state {state}", ""))
+        jobs.append((f"ours_s{every}_b{b:g}", f"--method ours --state {state}{ts}", ""))
     if "ours_drift" in techs:   # drift detection + shadow rebuild, run live (doc 9ac)
-        jobs.append((f"oursdrift_s{every}_b{b:g}", f"--method ours_drift --state {state}", ""))
+        jobs.append((f"oursdrift_s{every}_b{b:g}", f"--method ours_drift --state {state}{ts}", ""))
     if "ours_online" in techs:  # continuous greedy (ogreedy), run live (doc 9ac)
-        jobs.append((f"oursonline_s{every}_b{b:g}", f"--method ours_online --state {state}", ""))
+        jobs.append((f"oursonline_s{every}_b{b:g}", f"--method ours_online --state {state}{ts}", ""))
     if "lru" in techs:      # CAL_DEBUG: dump the labels if the cutoff is ever lost (doc 9o)
-        jobs.append((f"lru_s{every}_b{b:g}", f"--method lru --state {state}", "",
+        jobs.append((f"lru_s{every}_b{b:g}", f"--method lru --state {state}{ts}", "",
                      f"CAL_DEBUG={out}/lru_s{every}_b{b:g}_caldbg.npz "))
     if "aker" in techs and pick.get("aker"):
         a, lib = aker_args(pick["aker"]["name"])
@@ -166,7 +174,7 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--v2", action="store_true", help="the first batch (2,000 requests after warm-up)")
-    ap.add_argument("--set", choices=["matrix", "lru_retime", "retime", "sizes", "final", "probe", "new"], default="matrix",
+    ap.add_argument("--set", choices=["matrix", "lru_retime", "retime", "sizes", "final", "probe", "new", "v5"], default="matrix",
                     help="lru_retime: LRU again after the empty-search fix (doc 9n); sizes: the extra "
                          "cache sizes 0.3% and 3%, every technique, 1 in 20")
     a = ap.parse_args()
@@ -189,6 +197,34 @@ def main():
         return
     if a.set == "probe":
         print("\n".join(probe_lines()))
+        return
+    if a.set == "v5":           # doc 9af: two-stage hit path, base node cache in every arm, audits apart;
+        out = []                # the final set's workloads and techniques, plus TripClick and MedRAG
+        V = dict(out_root="timing_v5", state_root="timing_v4")
+        main = ("ours", "ours_drift", "ours_online", "lru", "aker", "qvcache")
+        real_log = ("ours_drift", "ours_online", "lru", "aker", "qvcache")
+        paper = ("aker_paper", "qvcache_paper")
+        work = [(f"spacev-aker-{z}", "trace", True) for z in ("0.99", "0.6", "0.3")] + \
+            [("esci1m", "random", True)] + [(f"triviaqa-ip-{z}", "trace", False) for z in ("0.99", "0.6", "0.3")] + \
+            [("spacev-real", "trace", False)]
+        sizes = {p_: ((0.01, 0.1, 0.003, 0.03) if ex else (0.01, 0.1)) for p_, _, ex in work}
+        sizes.update({"tripclick-ip": (0.01, 0.1, 0.003, 0.03), "medrag-ip": (0.001, 0.0001, 0.0003, 0.003)})
+        streams = {p_: st_ for p_, st_, _ in work}
+        techs = {p_: real_log if p_ in ("spacev-real", "tripclick-ip") else main for p_ in sizes}
+        E = 50
+        for p_ in sizes:
+            out += arm_lines(p_, E, stream=streams.get(p_, "trace"), **V)
+        for p_ in sizes:                        # main sizes first, so the plot fills in early
+            for b in sizes[p_][:2]:
+                out += lines(p_, b, E, stream=streams.get(p_, "trace"), techs=techs[p_], **V)
+        for p_, _, ex in work:
+            if ex:
+                for b in (0.01, 0.1):
+                    out += lines(p_, b, E, stream=streams[p_], techs=paper, **V)
+        for p_ in sizes:
+            for b in sizes[p_][2:]:
+                out += lines(p_, b, E, stream=streams.get(p_, "trace"), techs=techs[p_], **V)
+        print("\n".join(out))
         return
     if a.set == "final":        # v4 (doc 9u): tuned DiskANN (search list x beam width); ordered so the
         out = []                # plot fills in early: (11-14) every workload's 1% / 10% main cells

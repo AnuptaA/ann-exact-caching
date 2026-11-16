@@ -3232,3 +3232,62 @@ d. The 100 ms rule is no longer a hard limit. BACKEND-RECALL SENSITIVITY TEST (m
    reported as a sensitivity result; main numbers stay at 0.95.
 e. No heuristic pre-check with new parameters. Exact bound (skip the kNN when the best-case score
    cannot reach the cutoff) kept as an idea, only if it prunes enough (to be measured).
+
+### 9af. Phase 2 results and the v5 timing harness (11-16 night)
+
+Goal reminder (Jialin): every caching technique was losing to "DiskANN + node cache" in some cells,
+which looks bad. v5 therefore gives every arm (baseline, every technique's misses) a base node cache
+outside the cache budget; speedups shrink, and can later be raised again by tuning the backend to a
+higher recall (dearer misses). The two-stage hit path removes ours' main handicap: the every-request
+kNN over the cache.
+
+Node cache per workload (node_cache_curve.py, quiet, 10 ms gap, 400 requests; start 0.03% of points,
+x4 per step, stop at the first step that gains < 3%; backends/<prep>/node_cache.json):
+| workload | none | chosen | ms |
+| SPACEV Zipf 0.6 | 9.69 | 11,996 nodes (4.3 MB) | 7.08 |
+| SPACEV Zipf 0.3 (pq110 index) | 9.99 | 11,996 | 7.59 |
+| SPACEV real log | 64.98 | 2,999 | 61.35 |
+| ESCI | 8.67 | 300 | 6.82 |
+| TriviaQA 0.6 | 75.42 | 2,999 (10 MB) | 73.79 |
+| TripClick | 11.39 | 1,828 | 9.42 |
+| MedRAG | 13.24 | 7,166 (24 MB) | 11.48 |
+SPACEV Zipf 0.99 uses 0.6's choice, TriviaQA 0.3 / 0.99 use 0.6's (same index; eval_timing.base_node_cache).
+OPEN: the stop rule ends at the first flat step. SPACEV real gains little from 3k to 12k nodes but a
+lot further out (57.7 ms at 54k, 45.6 ms at 10% of points, doc 9ae), so its base cache is probably
+too small: the equal-memory arm can still beat the techniques there. Needs Jialin's call (a large
+base node cache outside the budget is a design choice).
+
+Stage-1 / stage-2 tuning (stage1_tune.py; 11-16 fixes: index builds were single-threaded, ~2 h per
+TriviaQA 10% build -> --threads; the stage-2 reference was brute force, which SPACEV's integer vectors
+(exact distance ties) make unreachable at any search list (gap 0.012 at 2048) -> reference = search list
+2048, brute-force retention still recorded; tuning requests: n doubled from 600 until >= 200 exact hits
+(SPACEV Zipf 0.3 1% / 3% had 0 hits in 600: vacuous stage 1, no stage 2); --precisions):
+- Quantized graphs (sq8 / sq6 / sq4, exact re-rank of 5x candidates) were never clearly cheaper than
+  fp32 at a lower search list on the 6 cells tuned with all precisions (differences < 0.1 ms, within
+  noise of 6 concurrent runs); the full set is tuned fp32-only.
+- Stage 1 (hit decision): search list 16 passes nearly everywhere (agreement >= 0.99, |dhit| <= 0.005),
+  0.1-0.5 ms per request; TriviaQA 0.6 needs 64 (1%) / 128 (10%), SPACEV real 10% 256.
+- Stage 2 (served points on hits): 32-128 on ESCI / TripClick / MedRAG / SPACEV Zipf, 256-512 at
+  SPACEV 0.6 3-10% and SPACEV real, 512 TriviaQA 1%, 2048 TriviaQA 10% (1024 loses 0.006).
+- (Tables in timing_v4/<prep>/stage1_b<b>.json; the 600-request versions in stage1_first_version/.)
+
+v5 harness (eval_timing_online.py / eval_timing.py / eval_timing_backend.py):
+- --two-stage auto: stage 1 = lowest accepted fp32 search list, stage 2 = its choice. Stage 1 decides;
+  on a hit, stage 2 is searched (timed, stage_ms["serve"]) and its points are served; on a miss the
+  stage-2 answer is computed only when a label needs it (served-answer labels, doc 9o), as background
+  work. Same in all three hit paths (FastHitPath: ours / drift; LRU._knn: LRU / continuous greedy).
+- --node-cache auto: base node cache in the technique run's DiskANN and in both DiskANN-only arms; the
+  equal-memory arm = base + the cache's memory.
+- Audits: their backend call (composed: that request's DiskANN latency) and label are timed apart,
+  never charged to a request; reported as audits_timed {n, total_s, mean_ms_per_audit,
+  ms_per_timed_request}.
+- Check (SPACEV 0.6 1%, 3,000 requests, busy machine): static ours one-stage (search list 512) kNN 0.97
+  ms per request, hit rate 0.108, retention of hits 0.935; two-stage (16 / 32) kNN 0.08 + serve 0.01 ms
+  per request, hit rate 0.111, retention 0.932. LRU / drift / continuous run (0.087 / 0.114 / 0.116 hit
+  rate, retention 0.91-0.94). Audit accounting checked with audit rate 0.5 (12 audits, 9.7 ms each,
+  excluded; hits 0.52 ms).
+- timing_jobs.py --set v5 (results/timing_v5/<prep>/, states from timing_v4): the final set's workloads
+  and techniques plus TripClick (real log: no static ours) and MedRAG (0.01-0.3%); 10 arm jobs + 202
+  technique runs. run_timing_v5.sh: tuning (run_stage1_all.sh) -> quiet arms one at a time -> composed
+  runs 12 at once (run_timing_composed.py --set v5 --version timing_v5). Flag /tmp/mx/TIMING_V5.DONE.
+- Not yet: plot_timing.py still reads timing_v4; backend-recall sensitivity test (9ae d) after v5.

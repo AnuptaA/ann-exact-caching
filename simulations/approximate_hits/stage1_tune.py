@@ -17,7 +17,7 @@ of searching a grid:
            tried only while the finer one still passed at its lowest search list; the cheapest
            accepted setting (measured ms per request) wins;
   stage 2: lowest search list (fp32 graph, exact re-rank of 5x candidates) whose served points keep the
-           mean retention of the exact-hit queries within 0.003 of exact search's.
+           mean retention of the exact-hit queries within 0.003 of the highest search list (2048)'s.
 
   .venv-ann/bin/python simulations/approximate_hits/stage1_tune.py --prep .../spacev-aker-0.6 \
       --state .../timing_v4/spacev-aker-0.6/state_b0.1.npz --out .../stage1_b0.1.json
@@ -37,12 +37,17 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 RES = Path("simulations/approximate_hits/results")
 AGREE, HIT_TOL, RET_TOL = 0.99, 0.005, 0.003
+MIN_HITS = 200        # exact hits the tuning requests must hold
 PRECISIONS = ["fp32", "sq8", "sq6", "sq4"]
 K_FACTOR = 5          # candidates re-ranked exactly: K_FACTOR x k
 
 
+BUILD_THREADS = 8
+
+
 def build_index(cv, precision, M=32, ef_construction=200):
     import faiss
+    faiss.omp_set_num_threads(BUILD_THREADS)       # builds only; every timed search below runs on 1 thread
     d = cv.shape[1]
     if precision == "fp32":
         ix = faiss.IndexHNSWFlat(d, M)
@@ -53,6 +58,7 @@ def build_index(cv, precision, M=32, ef_construction=200):
         ix.train(cv[np.random.default_rng(0).choice(len(cv), min(len(cv), 100000), replace=False)])
     ix.hnsw.efConstruction = ef_construction
     ix.add(cv)
+    faiss.omp_set_num_threads(1)
     return ix
 
 
@@ -79,8 +85,13 @@ def main():
     ap.add_argument("--target-recall", default="0.95")
     ap.add_argument("--n", type=int, default=600, help="warm-up requests used")
     ap.add_argument("--threads", type=int, default=8)
+    ap.add_argument("--precisions", default=",".join(PRECISIONS),
+                    help="stage-1 precisions tried, finest first (fp32 only for the full timing set: on the 6 "
+                         "tuned cells quantized graphs were never clearly cheaper, doc 9af)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+    global BUILD_THREADS
+    BUILD_THREADS = args.threads
     import faiss
     from simulations.approximate_hits.eval_timing import FastHitPath
     from simulations.approximate_hits.prep_io import load_prep
@@ -89,16 +100,11 @@ def main():
     st = dict(np.load(args.state, allow_pickle=False))
     ans = np.load(RES / "backends" / prep.name / "diskann.npz")[f"answer_{args.target_recall}"][:, :10]
     w = int(st["warmup"])
-    req = np.asarray(np.load(prep / "streams.npz")[args.stream][:w], dtype=np.int64)[-args.n:]
-    xq = np.ascontiguousarray(np.asarray(q[req], dtype=np.float32))
+    warm_all = np.asarray(np.load(prep / "streams.npz")[args.stream][:w], dtype=np.int64)
     hp = FastHitPath(db, q, st, "brute", "balls10")       # balls / shell parts and the model (no graph built)
     cv = np.ascontiguousarray(hp.cv, dtype=np.float32)
     ids_of = hp.ids
     lam = float(st["lam"])
-    faiss.omp_set_num_threads(args.threads)
-    _, gt = faiss.knn(xq, cv, 10)
-    d2_ex = ((cv[gt] - xq[:, None, :]) ** 2).sum(axis=2)
-    faiss.omp_set_num_threads(1)
     T = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0}
 
     def scores(d2):
@@ -107,16 +113,31 @@ def main():
             out.append(_score(hp, x, float(np.sqrt(max(dd.max(), 0.0))) + 1e-9, T))
         return np.array(out)
 
-    s_ex = scores(d2_ex)
-    hit_ex = s_ex >= lam
+    # the last n warm-up requests, n doubled from --n until they hold MIN_HITS exact hits (or the whole
+    # warm-up): with few hits the agreement and hit-rate tests cannot tell search lists apart (doc 9af)
+    n = args.n
+    while True:
+        req = warm_all[-n:]
+        xq = np.ascontiguousarray(np.asarray(q[req], dtype=np.float32))
+        faiss.omp_set_num_threads(args.threads)
+        _, gt = faiss.knn(xq, cv, 10)
+        faiss.omp_set_num_threads(1)
+        d2_ex = ((cv[gt] - xq[:, None, :]) ** 2).sum(axis=2)
+        s_ex = scores(d2_ex)
+        hit_ex = s_ex >= lam
+        if hit_ex.sum() >= MIN_HITS or n >= len(warm_all):
+            break
+        logger.info(f"{n} requests: {int(hit_ex.sum())} exact hits (< {MIN_HITS}), doubling")
+        n = min(2 * n, len(warm_all))
     ov_ex = np.array([len(set(ids_of[g].tolist()) & set(ans[qi].tolist())) / 10 for g, qi in zip(gt, req)])
     logger.info(f"{prep.name}: {len(cv)} cached vectors; exact hit rate on {len(req)} warm-up requests {hit_ex.mean():.3f}")
     res = {"prep": prep.name, "n_cached": int(len(cv)), "n_requests": int(len(req)), "exact_hit_rate": float(hit_ex.mean()),
-           "stage1_trials": [], "stage2_trials": []}
+           "n_exact_hits": int(hit_ex.sum()), "stage1_trials": [], "stage2_trials": []}
 
     # ---- stage 1: descend in search list, then in precision
     best = None
-    for prec in PRECISIONS:
+    prec_ix = None
+    for prec in args.precisions.split(","):
         t0 = time.time()
         ix = build_index(cv, prec)
         logger.info(f"stage 1, {prec}: index built in {time.time() - t0:.0f} s")
@@ -141,25 +162,36 @@ def main():
             if best is None or ms < best["ms"]:
                 best = dict(last_ok)
             ef //= 2
-        del ix
+        if prec == "fp32":
+            prec_ix = ix
+        else:
+            del ix
         if last_ok is None:
             break                                      # even the highest search list failed: coarser will too
     res["stage1"] = best
     logger.info(f"stage 1 choice: {best}")
 
-    # ---- stage 2: served points of the exact-hit queries, fp32 graph, exact re-rank
-    ix = build_index(cv, "fp32")
+    # ---- stage 2: served points of the exact-hit queries, fp32 graph, exact re-rank of 5x candidates.
+    # Reference = the highest search list (not brute force: SPACEV's integer vectors have exact ties, so
+    # a graph search and brute force can pick different but equally near points, a gap no search list closes).
+    ix = build_index(cv, "fp32") if prec_ix is None else prec_ix
     mask = hit_ex
+    ref_ret = None
     for ef in (2048, 1024, 512, 256, 128, 64, 32):
         ids, d2 = search(ix, cv, xq, ef)
         ov = np.array([len(set(ids_of[g].tolist()) & set(ans[qi].tolist())) / 10 for g, qi in zip(ids, req)])
-        gap = float(ov_ex[mask].mean() - ov[mask].mean())
+        if ref_ret is None:
+            ref_ret = float(ov[mask].mean())
+        gap = ref_ret - float(ov[mask].mean())
         ok = gap <= RET_TOL
-        res["stage2_trials"].append({"ef": ef, "retention_gap": gap, "ok": ok})
-        logger.info(f"stage 2 ef {ef}: retention of exact-hit queries {ov[mask].mean():.4f} (exact {ov_ex[mask].mean():.4f}) -> {'ok' if ok else 'FAIL'}")
+        res["stage2_trials"].append({"ef": ef, "retention": float(ov[mask].mean()), "retention_exact_knn": float(ov_ex[mask].mean()),
+                                     "retention_gap_vs_highest_ef": gap, "ok": ok})
+        logger.info(f"stage 2 ef {ef}: retention of exact-hit queries {ov[mask].mean():.4f} (exact kNN {ov_ex[mask].mean():.4f}, "
+                    f"highest ef {ref_ret:.4f}) -> {'ok' if ok else 'FAIL'}")
         if not ok:
             break
-        res["stage2"] = {"ef": ef, "retention_gap": gap}
+        res["stage2"] = {"ef": ef, "retention_gap_vs_highest_ef": gap, "highest_ef_retention": ref_ret,
+                         "exact_knn_retention": float(ov_ex[mask].mean())}
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(res, indent=1))
     logger.info(f"wrote {args.out}")

@@ -3,10 +3,10 @@
 DiskANN-only arms of the timing plot, measured ONCE per workload (doc 9ad) instead of inside every
 technique's run (eval_timing_online.py --no-backend-arms): the arms do not depend on the technique.
 
-  alone         DiskANN without node cache on the timed requests (every --sample-every-th request
+  alone         DiskANN with the workload's base node cache (--node-cache; 0 before doc 9af) on the timed requests (every --sample-every-th request
                 after the warm-up, by position: the same requests the technique runs time), at the
                 workload's chosen search list and beam width (backends/<prep>/diskann.json);
-  equal memory  per cache size: DiskANN with its node cache given the memory of the static ours
+  equal memory  per cache size: DiskANN with the base node cache plus the memory of the static ours
                 cache at that size (FastHitPath bytes of the warm-up state; every technique has the
                 same vector budget), same requests.
 One query at a time, single thread, quiet-machine guard (timing_env.py), as eval_timing_online.py.
@@ -41,13 +41,16 @@ def main():
                     help="pause before every timed search, as between a technique run's timed requests "
                          "(they are separated by ~50 untimed requests); 0 = back to back (doc 9ad)")
     ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--node-cache", default="0",
+                    help="base DiskANN node cache in both arms (doc 9af): a node count or 'auto' (the workload's "
+                         "choice, eval_timing.base_node_cache); the equal-memory arm adds the cache's memory to it")
     ap.add_argument("--out", required=True)
     from simulations.approximate_hits.timing_env import add_args, make_guard
     add_args(ap)
     args = ap.parse_args()
     guard = make_guard(args)
     guard.start()
-    from simulations.approximate_hits.eval_timing import open_diskann, time_backend, FastHitPath
+    from simulations.approximate_hits.eval_timing import open_diskann, time_backend, FastHitPath, base_node_cache
     from simulations.approximate_hits.eval_timing_online import summary, KNN_EF
     from simulations.approximate_hits.prep_io import load_prep
     prep = Path(args.prep)
@@ -69,19 +72,20 @@ def main():
     xq = np.ascontiguousarray(xs[req[timed]])
     warm = np.ascontiguousarray(xs[np.asarray(stream[max(0, w - args.warm):w], dtype=np.int64)])
     logger.info(f"{prep.name}: {len(timed)} timed requests (1 in {args.sample_every}), search list {L}, beam {beam}")
-    ix = open_diskann(index, 0)
+    nodes0, nodes0_from = base_node_cache(prep.name) if args.node_cache == "auto" else (int(args.node_cache), None)
+    ix = open_diskann(index, nodes0)
     time_backend(ix, warm, args.k, L, beam, args.gap_ms)
     lat = time_backend(ix, xq, args.k, L, beam, args.gap_ms)
     res = {"prep": prep.name, "search_list": L, "beam": beam, "index": index, "sample_every": args.sample_every, "gap_ms": args.gap_ms,
-           "warmup": w, "n_timed": int(len(timed)), "backend": dict(summary(lat)), "per_budget": {}}
-    logger.info(f"DiskANN alone: {res['backend']['mean_ms']:.2f} ms")
+           "node_cache": {"nodes": nodes0, "chosen_for": nodes0_from}, "warmup": w, "n_timed": int(len(timed)), "backend": dict(summary(lat)), "per_budget": {}}
+    logger.info(f"DiskANN alone ({nodes0} nodes cached): {res['backend']['mean_ms']:.2f} ms")
     del ix
     node_bytes = db_native.shape[1] * np.dtype(db_native.dtype).itemsize + 4 + 64 * 4
     for b, st in sorted(sts.items()):
         hp = FastHitPath(db, q, st, f"hnsw{KNN_EF}", "balls10")
         mem0 = int(sum(hp.bytes.values()) + hp.extra_bytes)
         del hp
-        nodes = int(mem0 // node_bytes)
+        nodes = int(mem0 // node_bytes) + nodes0
         ix2 = open_diskann(index, nodes)
         time_backend(ix2, warm, args.k, L, beam, args.gap_ms)
         lat_m = time_backend(ix2, xq, args.k, L, beam, args.gap_ms)

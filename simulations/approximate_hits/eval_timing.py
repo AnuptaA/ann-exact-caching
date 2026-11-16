@@ -127,11 +127,15 @@ class FastHitPath(HitPath):
              the sampled shell vectors of the n best-fitting balls; "balls" = 3)
     """
 
-    def __init__(self, db, q, st, knn, shell):
+    def __init__(self, db, q, st, knn, shell, ef2=None):
         super().__init__(db, q, st)
         import faiss
         faiss.omp_set_num_threads(32)       # building only; searches below use 1
         self.knn_mode, self.shell_mode = knn, shell
+        # two-stage hit path (doc 9af): the graph search at search list ef (stage 1) gives the
+        # neighborhood radius and so the hit decision; serve() searches again at ef2 for the
+        # points served on a hit (None: one stage, the stage-1 neighbors are served)
+        self.ef2 = ef2
         self.extra_bytes = 0
         if knn.startswith("hnsw"):
             self.hnsw = faiss.IndexHNSWFlat(self.cv.shape[1], 32)
@@ -201,6 +205,30 @@ class FastHitPath(HitPath):
         t["shell"] += d - c
         t["model"] += e - d
         return hit, score, near
+
+    def serve(self, x):
+        """Stage 2: the k nearest cached ids at search list ef2 (the points served on a hit)."""
+        h = self.hnsw.hnsw
+        ef1 = h.efSearch
+        h.efSearch = int(self.ef2)
+        _, ii = self.hnsw.search(x[None], self.k)
+        h.efSearch = ef1
+        return self.ids[ii[0]]
+
+
+def base_node_cache(prep_name):
+    """The workload's node cache (doc 9af): nodes chosen by node_cache_curve.py
+    (backends/<prep>/node_cache.json), else those of a workload on the same DiskANN index
+    (SPACEV Zipf 0.99 shares Zipf 0.6's, TriviaQA 0.3 / 0.99 share 0.6's). Raises if none."""
+    own = RES / "backends" / prep_name / "node_cache.json"
+    if own.exists():
+        return int(json.loads(own.read_text())["chosen"]["nodes"]), prep_name
+    idx = json.loads((RES / "backends" / prep_name / "diskann.json").read_text()).get("index_dir")
+    for f in sorted((RES / "backends").glob("*/node_cache.json")):
+        other = json.loads((f.parent / "diskann.json").read_text()).get("index_dir")
+        if idx and other == idx:
+            return int(json.loads(f.read_text())["chosen"]["nodes"]), f.parent.name
+    raise SystemExit(f"no node cache chosen for {prep_name} (run node_cache_curve.py)")
 
 
 def run_variants(args, db, q, st, xs):

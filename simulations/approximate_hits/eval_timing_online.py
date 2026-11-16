@@ -54,6 +54,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 RES = Path("simulations/approximate_hits/results")
 KNN_EF = int(os.environ.get("KNN_EF", 256))    # in-cache HNSW search list: 0.975-0.985 neighbor recall at 10% (32: 0.83-0.89; doc 9o)
+KNN_EF2 = None        # two-stage hit path (--two-stage, doc 9af): search list of the served points; KNN_EF = stage 1
 SHELL_BALLS = 10      # the hit path's shell scope (FastHitPath "balls10", online_sim --shell-balls 10)
 
 
@@ -73,6 +74,10 @@ def tune_ef(m, q, warm_q, target=0.975, n=300, tune_only=False):
         setters = [lambda e: setattr(m.hnsw.hnsw, "efSearch", e)]
     else:
         return None
+    if KNN_EF2:                           # two-stage: both search lists from stage1_tune.py (--two-stage)
+        for f in setters:
+            f(KNN_EF)
+        return {"two_stage": True, "ef_stage1": KNN_EF, "ef_stage2": KNN_EF2}
     if not len(warm_q):
         return None
     xq = np.ascontiguousarray(np.asarray(q[np.asarray(warm_q[-n:], dtype=np.int64)], dtype=np.float32))
@@ -197,7 +202,7 @@ class Ours:
     def __init__(self, args, db, q, st):
         self.audits = self.recal = bool(getattr(args, "ours_recal", False))
         from simulations.approximate_hits.eval_timing import FastHitPath
-        self.hp = FastHitPath(db, q, st, f"hnsw{KNN_EF}", "balls10")
+        self.hp = FastHitPath(db, q, st, f"hnsw{KNN_EF}", "balls10", ef2=KNN_EF2)
         self.ef_info = tune_ef(self, q, st["cal_q"] if "cal_q" in st else np.empty(0, dtype=np.int64))
         self.k = int(st["k"])
         self.cached = np.zeros(len(db), dtype=bool)
@@ -207,18 +212,60 @@ class Ours:
                               args.cal_span, args.cal_every)
         self.miss_k = self.k
         self.memory_bytes = int(sum(self.hp.bytes.values()) + self.hp.extra_bytes)
-        self.t = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0}
+        self.t = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0, "serve": 0.0}
         recalibrate_on_serving_path(self, st, q, args)
+
+    # two-stage hit path (doc 9af): the hit decision from the stage-1 search; on a hit, the served
+    # points from a stage-2 search (timed, part of the request); on a miss, the stage-2 answer is
+    # computed only if a label needs it (the would-be served answer, as the calibration requires),
+    # as background work: the request is answered by the backend, the label is off its path
+    background = 0.0
+    _x = None
+    _near_v = None
+
+    @property
+    def _near(self):
+        if self._x is not None:
+            a = time.perf_counter()
+            self._near_v = np.asarray(self._serve(self._x))
+            self._x = None
+            self.background += time.perf_counter() - a
+        return self._near_v
+
+    @_near.setter
+    def _near(self, v):
+        self._near_v, self._x = v, None
+
+    def _serve(self, x):
+        return self.hp.serve(x)
+
+    def _stage2(self, hit, near, x):
+        """After the stage-1 decision: the served points on a hit (timed), a deferred stage 2 on a miss."""
+        if not KNN_EF2:
+            self._near = near
+            return hit, near
+        if hit:
+            a = time.perf_counter()
+            near = np.asarray(self._serve(x))
+            self.t["serve"] += time.perf_counter() - a
+            if len(near) < self.k or np.any(near < 0):
+                hit = False
+                self.fallbacks = getattr(self, "fallbacks", 0) + 1
+            self._near = near
+        else:
+            self._near = near
+            self._x = x
+        return hit, near
 
     def lookup(self, qi, x):
         self.hp.lam = np.inf if self.cal.lam is None else self.cal.lam
         hit, s, near = self.hp.decide(x, self.t)
         near = np.asarray(near)
-        self._near = near
         if len(near) < self.k or np.any(near < 0) or not np.isfinite(s):
             hit = False        # graph search came back short (never seen for the static graph)
             self.fallbacks = getattr(self, "fallbacks", 0) + 1
         self._s = s
+        hit, near = self._stage2(bool(hit), near, x)
         return bool(hit), near
 
     def label(self, t, answer, w):
@@ -372,7 +419,7 @@ class OursDrift(Ours):
         """A rebuilt cache from the controller: new hit path; held-out labels re-scored on it."""
         sim = self.sim
         st2 = sim.cache_state()
-        self.hp = self._FastHitPath(self._db, self._q, st2, f"hnsw{KNN_EF}", "balls10")
+        self.hp = self._FastHitPath(self._db, self._q, st2, f"hnsw{KNN_EF}", "balls10", ef2=KNN_EF2)
         self.cached = np.zeros(len(self._db), dtype=bool)
         self.cached[st2["cached_ids"]] = True
         hq, hl, w = sim.last_hold
@@ -430,7 +477,7 @@ class LRU(Ours):
         self.fallbacks = 0
         self.hnsw = None
         self._rebuild()
-        self.t = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0, "insert": 0.0, "evict": 0.0}
+        self.t = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0, "serve": 0.0, "insert": 0.0, "evict": 0.0}
         self._load_state(st)
 
     # vectors
@@ -601,10 +648,12 @@ class LRU(Ours):
         return int(self.n_cached() * self.dim * 4 + self.n_samp * self.dim * self.bits / 8
                    + self.hnsw.ntotal * 32 * 2 * 4 + len(self.entries) * (self.dim * 4 + 8))
 
-    def lookup(self, qi, x):
-        from simulations.approximate_hits.eval_timing import N_BALLS, POOR_FIT, EPS
-        k, t = self.k, self.t
-        a = time.perf_counter()
+    def _knn(self, x, ef=None):
+        """Rows (in cv) and squared distances of the k nearest live cached vectors: graph search at
+        search list ef (None: as set), dead rows skipped."""
+        k = self.k
+        if ef is not None:
+            self.hnsw.hnsw.efSearch = int(ef)
         kk = k + 8
         while True:
             dd, ii = self.hnsw.search(x[None], min(kk, max(self.hnsw.ntotal, 1)))
@@ -625,6 +674,18 @@ class LRU(Ours):
             o = np.argpartition(d2, k - 1)[:k]
             o = o[np.argsort(d2[o])]
             ii, dd = rows[o], d2[o]
+        return ii, dd
+
+    def _serve(self, x):
+        ii, _ = self._knn(x, KNN_EF2)
+        self.hnsw.hnsw.efSearch = KNN_EF
+        return self.cv_id[ii]
+
+    def lookup(self, qi, x):
+        from simulations.approximate_hits.eval_timing import N_BALLS, POOR_FIT, EPS
+        k, t = self.k, self.t
+        a = time.perf_counter()
+        ii, dd = self._knn(x, KNN_EF if KNN_EF2 else None)
         near = self.cv_id[ii]
         nr = float(np.sqrt(max(dd.max(), 0.0))) + EPS if len(dd) else np.inf
         b = time.perf_counter()
@@ -667,7 +728,7 @@ class LRU(Ours):
         t["shell"] += d - c
         t["model"] += e - d
         self._s = s
-        self._near = near
+        hit, near = self._stage2(bool(hit), near, x)
         if hit:      # LRU: entries supplying a served vector were used now
             for v in near.tolist():
                 for cc in self.holders.get(v, ()):
@@ -1001,6 +1062,13 @@ def main():
                          "backend_s<every>_lat.npy, one per timed request). Timed requests then use the stored "
                          "answers, and a request that needs the backend (miss, audited hit) is charged that "
                          "request's measured DiskANN latency instead of a live call: the run touches no disk")
+    ap.add_argument("--two-stage", default=None,
+                    help="two-stage hit path (doc 9af): 'auto' = timing_v4/<prep>/stage1_b<budget>.json of "
+                         "stage1_tune.py (stage 1: lowest fp32 search list that passed; stage 2: its choice), or a "
+                         "path to such a file; off when omitted (one search list, tuned by tune_ef)")
+    ap.add_argument("--node-cache", default="0",
+                    help="DiskANN node cache under every arm (doc 9af), outside the cache budget: a node count, "
+                         "or 'auto' = the workload's choice (node_cache_curve.py, eval_timing.base_node_cache)")
     ap.add_argument("--no-backend-arms", action="store_true",
                     help="skip DiskANN alone / equal memory (measured once per workload by "
                          "eval_timing_backend.py, doc 9ad); speedups are then computed by plot_timing")
@@ -1028,6 +1096,21 @@ def main():
         own = RES / "backends" / prep.name / "diskann"
         args.diskann = str(own if (own / "ann_disk.index").exists() else RES / "backends" / "spacev10m" / "diskann")
     ans = np.load(RES / "backends" / prep.name / "diskann.npz")[f"answer_{args.target_recall}"]
+    from simulations.approximate_hits.eval_timing import base_node_cache
+    nodes0, nodes0_from = (base_node_cache(prep.name) if args.node_cache == "auto"
+                           else (int(args.node_cache), None))
+    two = None
+    if args.two_stage:
+        global KNN_EF, KNN_EF2
+        f = (RES / "timing_v4" / prep.name / f"stage1_b{args.budget:g}.json" if args.two_stage == "auto"
+             else Path(args.two_stage))
+        tj = json.loads(f.read_text())
+        ok1 = [t_["ef"] for t_ in tj["stage1_trials"] if t_["precision"] == "fp32" and t_["ok"]]
+        if not ok1 or "stage2" not in tj:
+            raise SystemExit(f"{f}: no accepted fp32 stage-1 search list or no stage-2 choice")
+        KNN_EF, KNN_EF2 = int(min(ok1)), int(tj["stage2"]["ef"])
+        two = {"file": str(f), "ef_stage1": KNN_EF, "ef_stage2": KNN_EF2}
+        logger.info(f"two-stage hit path: stage 1 search list {KNN_EF}, stage 2 (hits) {KNN_EF2} ({f.name})")
     st = dict(np.load(args.state, allow_pickle=False)) if args.state else None
     if st is not None:                  # ours / LRU: the requests after the state's warm-up
         args.warmup = int(st["warmup"])
@@ -1082,7 +1165,9 @@ def main():
     for s_ in getattr(m, "t", {}):            # stage times: per request, over all requests
         m.t[s_] = 0.0
     logger.info(f"cache ready: {mem0 / 1e6:.1f} MB")
-    ix = open_diskann(args.diskann, 0)
+    ix = open_diskann(args.diskann, nodes0)
+    if nodes0:
+        logger.info(f"DiskANN node cache: {nodes0} nodes (chosen for {nodes0_from or 'this run'})")
     xs_native = q.astype(db_native.dtype) if db_native.dtype != np.float32 else q
 
     def live(qi, kk):
@@ -1104,6 +1189,7 @@ def main():
     ret, ret_b, ret_sim = np.zeros(n), np.zeros(n), np.full(n, np.nan)
     total = []
     maint = 0.0
+    audit_s, n_audit_timed = 0.0, 0
     trace = []
     t0 = time.time()
     for i, qi in enumerate(req.tolist()):
@@ -1121,13 +1207,26 @@ def main():
         if hasattr(m, "retention"):      # not timed: the cache's content before this request
             ret_sim[i] = m.retention(ans[qi])
         bg0 = getattr(m, "background", 0.0) + maint
+        total_excl = 0.0
         a = time.perf_counter()
         hit, near = m.lookup(qi, x)
         audited = False
         if hit:
             if m.audits and rng.random() < args.audit_rate:
+                # an audit is off the request's path (doc 9af): its backend call (composed: that
+                # request's DiskANN latency) and its label are timed apart and not charged
+                a_ = time.perf_counter()
+                c0 = chg[1]
                 m.label(t_req, backend(qi, args.k), 1.0 / args.audit_rate)
+                d_ = time.perf_counter() - a_
+                if chg[1] and not c0:
+                    d_ += chg[0]
+                    chg[0], chg[1] = 0.0, False
+                if timed:
+                    audit_s += d_
+                    n_audit_timed += 1
                 audited = True
+                total_excl = d_
             answer = near[:args.k]
         elif args.maintenance == "background":
             # answer from the normal top-k search; the cache's update after it (LRU: the top-500
@@ -1145,7 +1244,8 @@ def main():
             answer = ids[:args.k]
         m.after(t_req)
         if timed:
-            total.append(time.perf_counter() - a - (getattr(m, "background", 0.0) + maint - bg0) + chg[0])
+            total.append(time.perf_counter() - a - (getattr(m, "background", 0.0) + maint - bg0) + chg[0]
+                         - total_excl)
         hits[i], audited_all[i] = hit, audited
         ret[i] = float(np.isin(answer, top[qi, :args.k]).mean())           # vs exact (not timed)
         ret_b[i] = float(np.isin(answer, ans[qi, :args.k]).mean())         # vs DiskANN's answer
@@ -1173,6 +1273,11 @@ def main():
            "cache_memory_bytes": int(mem0),
            "background_rebuild_s": float(getattr(m, "rebuild_s", 0.0)),
            "background_maintenance_s_timed": float(maint),
+           # audits (doc 9af): not in any request's latency; their own cost, over the timed requests
+           "audits_timed": {"n": n_audit_timed, "total_s": audit_s,
+                            "mean_ms_per_audit": audit_s / n_audit_timed * 1e3 if n_audit_timed else None,
+                            "ms_per_timed_request": audit_s / max(int(timed_mask.sum()), 1) * 1e3},
+           "two_stage": two, "node_cache": {"nodes": nodes0, "chosen_for": nodes0_from},
            "cache": dict(summary(total), hits_ms=summary(total[th]), misses_ms=summary(total[~th])),
            "stage_ms": {s_: v / n * 1e3 for s_, v in getattr(m, "t", {}).items()},
            "replay_s": time.time() - t0, "trace": trace,
@@ -1203,7 +1308,7 @@ def main():
     lat_mem = None
     if not args.no_equal_memory:
         node_bytes = db_native.shape[1] * np.dtype(db_native.dtype).itemsize + 4 + 64 * 4
-        nodes = int(mem0 // node_bytes)
+        nodes = int(mem0 // node_bytes) + nodes0       # the cache's memory on top of the base node cache
         del ix
         ix2 = open_diskann(args.diskann, nodes)
         time_backend(ix2, xq[:args.warm], args.k, L, args.beam)

@@ -32,7 +32,7 @@ def json_of(line):
 
 
 def prep_of(line):
-    m = re.search(r"timing_v4/([^/ ]+)/", line)
+    m = re.search(r"timing_v[0-9]+/([^/ ]+)/", line)
     return m.group(1)
 
 
@@ -47,6 +47,7 @@ def main():
     ap.add_argument("--cores-per-job", type=int, default=4)
     ap.add_argument("--first-core", type=int, default=8)
     ap.add_argument("--set", default="final")
+    ap.add_argument("--version", default="timing_v4", help="where the baseline latencies are (v5: timing_v5, doc 9af)")
     a = ap.parse_args()
     import io
     import contextlib
@@ -62,7 +63,7 @@ def main():
             continue
         if "_s20_" in j.name:               # sample-rate check cells: not part of the composed set
             continue
-        lat = Path(tj.R) / "timing_v4" / prep_of(l) / "backend_s50_lat.npy"
+        lat = Path(tj.R) / a.version / prep_of(l) / "backend_s50_lat.npy"
         if not lat.exists():
             print(f"skip (no baseline latencies yet): {j}", flush=True)
             continue
