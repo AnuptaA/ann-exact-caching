@@ -85,6 +85,7 @@ def main():
     ap.add_argument("--target-recall", default="0.95")
     ap.add_argument("--n", type=int, default=600, help="warm-up requests used")
     ap.add_argument("--threads", type=int, default=8)
+    ap.add_argument("--lam", default=None, help="comma-separated cutoffs to tune at instead of the state's")
     ap.add_argument("--precisions", default=",".join(PRECISIONS),
                     help="stage-1 precisions tried, finest first (fp32 only for the full timing set: on the 6 "
                          "tuned cells quantized graphs were never clearly cheaper, doc 9af)")
@@ -104,7 +105,11 @@ def main():
     hp = FastHitPath(db, q, st, "brute", "balls10")       # balls / shell parts and the model (no graph built)
     cv = np.ascontiguousarray(hp.cv, dtype=np.float32)
     ids_of = hp.ids
-    lam = float(st["lam"])
+    # cutoff(s) the decision must be accurate at: the state's; --lam when it has none (no feasible cutoff
+    # at the end of the warm-up: static ours never hits, the recalibrating controllers choose cutoffs
+    # later; doc 9af). Stage 1 must pass at every one; stage 2 and MIN_HITS use the lowest.
+    lams = [float(v) for v in args.lam.split(",")] if args.lam else [float(st["lam"])]
+    lam = min(lams)
     T = {"knn": 0.0, "balls": 0.0, "shell": 0.0, "model": 0.0}
 
     def scores(d2):
@@ -132,7 +137,7 @@ def main():
     ov_ex = np.array([len(set(ids_of[g].tolist()) & set(ans[qi].tolist())) / 10 for g, qi in zip(gt, req)])
     logger.info(f"{prep.name}: {len(cv)} cached vectors; exact hit rate on {len(req)} warm-up requests {hit_ex.mean():.3f}")
     res = {"prep": prep.name, "n_cached": int(len(cv)), "n_requests": int(len(req)), "exact_hit_rate": float(hit_ex.mean()),
-           "n_exact_hits": int(hit_ex.sum()), "stage1_trials": [], "stage2_trials": []}
+           "n_exact_hits": int(hit_ex.sum()), "cutoffs": lams, "stage1_trials": [], "stage2_trials": []}
 
     # ---- stage 1: descend in search list, then in precision
     best = None
@@ -150,6 +155,9 @@ def main():
             s = scores(d2)
             hit = s >= lam
             agree, dh = float((hit == hit_ex).mean()), float(hit.mean() - hit_ex.mean())
+            for l_ in lams:                          # the worst over the cutoffs
+                a_, d_ = float(((s >= l_) == (s_ex >= l_)).mean()), float((s >= l_).mean() - (s_ex >= l_).mean())
+                agree, dh = min(agree, a_), (dh if abs(dh) >= abs(d_) else d_)
             ratio = np.sqrt(d2.max(axis=1) / np.maximum(d2_ex.max(axis=1), 1e-12))
             ok = agree >= AGREE and abs(dh) <= HIT_TOL
             res["stage1_trials"].append({"precision": prec, "ef": ef, "ms": ms, "agree": agree, "dhit": dh,

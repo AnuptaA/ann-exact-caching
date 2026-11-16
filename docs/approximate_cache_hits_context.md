@@ -3291,3 +3291,16 @@ v5 harness (eval_timing_online.py / eval_timing.py / eval_timing_backend.py):
   technique runs. run_timing_v5.sh: tuning (run_stage1_all.sh) -> quiet arms one at a time -> composed
   runs 12 at once (run_timing_composed.py --set v5 --version timing_v5). Flag /tmp/mx/TIMING_V5.DONE.
 - Not yet: plot_timing.py still reads timing_v4; backend-recall sensitivity test (9ae d) after v5.
+- Tuning, final (22:15): >= 200 exact hits in every cell (n 600-4,800 requests). Stage 1 = 16 everywhere
+  except TriviaQA 10% (128 / 128 / 64 at Zipf 0.3 / 0.6 / 0.99), SPACEV real (64 at 1%, 512 at 10%).
+  Stage 2 = 32-128 (ESCI, TripClick, MedRAG, SPACEV Zipf), 256 (SPACEV 0.6 3-10%), 512 (TriviaQA 1%,
+  SPACEV real 1%), 1024 (SPACEV real 10%), 2048 (TriviaQA 10%). With 600 requests TriviaQA 0.6 1% had
+  picked 64 for stage 1; with 1,200 (304 hits) 16 passes.
+- SPACEV Zipf 0.3 1% / 3%: the state has no cutoff (no feasible one at the end of the warm-up: static
+  ours serves nothing there; v4 hit rate 0.000), so no request is an exact hit at any n. The
+  recalibrating controllers pick cutoffs later (v4 traces, median: 1%: drift 2.04, LRU 2.40, continuous
+  1.79; 3%: 2.39 / 1.70 / 1.64). Tuned with stage1_tune.py --lam <those three>: stage 1 must pass at
+  every cutoff, stage 2 checked on the hits of the lowest. Result: stage 1 16, stage 2 64.
+- The SPACEV Zipf 0.99 v5 arm (first arm, 22:10) overlapped these two tunings for ~1-2 min: check its
+  environment verdict; rerun it if contended.
+- plot_timing.py: TIMING_VERSION=timing_v5 selects the v5 results.

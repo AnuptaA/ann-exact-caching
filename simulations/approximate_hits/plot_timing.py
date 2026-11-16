@@ -15,6 +15,7 @@ Also writes a table (results/latest/timing_table.md) with per-hit / per-miss cos
 """
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -48,7 +49,7 @@ HEADLINE_KEY = {"ours": "ours", "ours_drift": "ours_drift", "ours_online": "ours
                 "aker_paper": "aker_paper", "qvcache_paper": "qvcache_paper"}
 
 
-VERSION, EVERY = "timing_v4", 50     # full-stream runs, 1 request in EVERY timed; tuned DiskANN (doc 9u)
+VERSION, EVERY = os.environ.get("TIMING_VERSION", "timing_v4"), 50   # 1 request in EVERY timed; v5: doc 9af
 
 
 def load(prep, budget, every=None):
