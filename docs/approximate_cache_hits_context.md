@@ -3159,3 +3159,16 @@ Redo (Jialin: go ahead), run_backend_redo.sh:
   75.0 / 76.4 (no effect: read-bound either way). The original method had the same mismatch (alone
   back to back, techniques' misses spread out), so SPACEV / ESCI speedups were inflated.
   Fix: eval_timing_backend.py --gap-ms (default 10; also time_backend(gap_ms)); arms to be rerun.
+- Composed timing validated (11-16 01:30). DiskANN-alone arm with the 10 ms gap, SPACEV Zipf 0.99:
+  alone 14.72 -> 9.53 ms; equal memory (0.3 / 1 / 3 / 10%) 8.96 / 8.19 / 7.22 / 6.13 -> 6.74 / 6.54 /
+  6.57 / 6.40 (old files kept as backend_s50_nogap.json). SPACEV 0.99 1%, composed vs live mean ms:
+  Aker 6.26 / 6.10, LRU 6.17 / 6.16, ours 5.46 / 5.31, ours-drift 5.97 / 5.76, continuous 5.70 / 5.59,
+  QVCache 6.23 / 6.40 (<= 3.7%); six at once = one at a time within 2%; p99 within 7%. TriviaQA 0.6
+  (no gap needed): LRU 66.5 / 66.8 (par / live), continuous 61.9 / 62.4. The TriviaQA live runs are
+  the real results of those cells.
+- Estimate for the rest of the final set (138 technique jobs): live ~12 h sequential vs composed ~2-3 h
+  at 12 at once; baselines (~3.4 h) needed either way. Launched 01:33: run_timing_final.sh = the 7
+  remaining DiskANN-only arms (quiet, sequential) then run_timing_composed.py (12 workers x 4 cores).
+  Final timing results mix 29 live runs (SPACEV 0.99, 0.6 partly, TriviaQA 0.6 1%) and composed
+  runs; the JSON args record --compose-backend. Then: TripClick / MedRAG chains (their waiting
+  scripts need TIMING4.DONE, which the killed live batch never set).
