@@ -1206,14 +1206,16 @@ class Sim:
             # --update-every U (doc 9ag): LRU / ogreedy admit and evict after every U requests of the
             # batch (U = 1: every request, as the timing harness's LRU and Aker do); labels, calibration
             # and drift tests stay per batch. Default: once per batch.
-            U = getattr(a, "update_every", 0) or len(qb)
+            # policy updates (LRU / ogreedy admission and eviction) every UE requests of the batch
+            # (--update-every; default once per batch); lookups one request at a time when timed
+            UE = getattr(a, "update_every", 0) or len(qb)
             timed = self.timing is not None
-            if timed:
-                U = 1                        # every request is decided (and timed) on its own
-            upd = method in ("lru", "ogreedy") and U < len(qb)
-            parts = []
-            for u0 in range(0, len(qb), U if (upd or timed) else len(qb)):
-                qs = qb[u0:u0 + U] if (upd or timed) else qb
+            UL = 1 if timed else UE
+            upd = method in ("lru", "ogreedy") and UE < len(qb)
+            parts, pend = [], []
+            step = UL if (upd or timed) else len(qb)
+            for u0 in range(0, len(qb), step):
+                qs = qb[u0:u0 + step]
                 if timed:
                     sc, sv, ns = self._timed_lookup(int(qs[0]), s + u0)
                 else:
@@ -1227,12 +1229,16 @@ class Sim:
                     else cache.retention_exact(qs))
                 parts.append((sc, sv, ys, ye, ns))
                 if upd:
-                    tt = s + u0 + len(qs)
-                    if method == "lru":
-                        self.lru_update(qs, sv, ns, tt, p_lru)
-                    else:
-                        self.ogreedy_update(qs, sv, ns, tt)
-                    self.cal_stale = True
+                    pend.append((qs, sv, ns))
+                    if sum(len(p_[0]) for p_ in pend) >= UE or u0 + len(qs) >= len(qb):
+                        q_, s_, n_ = (np.concatenate([p_[i] for p_ in pend]) for i in range(3))
+                        tt = s + u0 + len(qs)
+                        if method == "lru":
+                            self.lru_update(q_, s_, n_, tt, p_lru)
+                        else:
+                            self.ogreedy_update(q_, s_, n_, tt)
+                        self.cal_stale = True
+                        pend = []
             score, serve, y, y_exact = (np.concatenate([p_[i] for p_ in parts]) for i in range(4))
             near = np.concatenate([p_[4] for p_ in parts])
             if self.D["truth"] is self.D["answer"]:
