@@ -209,8 +209,11 @@ def main():
             [("spacev-real", "trace", False)]
         sizes = {p_: ((0.01, 0.1, 0.003, 0.03) if ex else (0.01, 0.1)) for p_, _, ex in work}
         sizes.update({"tripclick-ip": (0.01, 0.1, 0.003, 0.03), "medrag-ip": (0.001, 0.0001, 0.0003, 0.003)})
+        import os
+        if os.path.exists(f"{R}/timing_v4/spacev-real95/state_b0.1.npz"):    # SPACEV real at recall 0.95 (doc 9af)
+            sizes["spacev-real95"] = (0.01, 0.1)
         streams = {p_: st_ for p_, st_, _ in work}
-        techs = {p_: real_log if p_ in ("spacev-real", "tripclick-ip") else main for p_ in sizes}
+        techs = {p_: real_log if p_ in ("spacev-real", "spacev-real95", "tripclick-ip") else main for p_ in sizes}
         E = 50
         for p_ in sizes:
             out += arm_lines(p_, E, stream=streams.get(p_, "trace"), **V)

@@ -39,7 +39,7 @@ def prep_of(line):
 # v5 (doc 9af): one workload at a time, main cache sizes first, so complete workloads appear early; the
 # shared warm-up products already exist (timing_v4/<prep>/warm_b*.pkl), drift still before continuous
 WORKLOADS = ["spacev-aker-0.99", "esci1m", "triviaqa-ip-0.99", "spacev-aker-0.6", "triviaqa-ip-0.6", "spacev-real",
-             "tripclick-ip", "spacev-aker-0.3", "triviaqa-ip-0.3", "medrag-ip"]
+             "tripclick-ip", "spacev-aker-0.3", "triviaqa-ip-0.3", "medrag-ip", "spacev-real95"]
 MAIN = {"medrag-ip": ("0.001", "0.0001")}
 
 

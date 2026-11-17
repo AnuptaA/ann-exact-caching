@@ -30,6 +30,8 @@ TRACES = [("Zipf 0.3", "spacev-aker-0.3"), ("Zipf 0.6", "spacev-aker-0.6"), ("Zi
           ("TriviaQA, Zipf 0.3", "triviaqa-ip-0.3"), ("TriviaQA, Zipf 0.6", "triviaqa-ip-0.6"),
           ("TriviaQA, Zipf 0.99", "triviaqa-ip-0.99"), ("SPACEV real query log", "spacev-real"),
           ("TripClick real health-search log", "tripclick-ip"), ("MedRAG-Zipf (Proximity)", "medrag-ip")]
+if (RES / os.environ.get("TIMING_VERSION", "timing_v4") / "spacev-real95" / "backend_s50.json").exists():
+    TRACES.append(("SPACEV real log, DiskANN recall 0.95", "spacev-real95"))      # doc 9af
 BUDGETS = [0.003, 0.01, 0.03, 0.1]
 SIZES = {"medrag-ip": [0.0001, 0.0003, 0.001, 0.003]}   # 0.3% already holds MedRAG-Zipf's working set
 # LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
