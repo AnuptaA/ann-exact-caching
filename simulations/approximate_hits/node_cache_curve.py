@@ -37,6 +37,10 @@ def main():
     ap.add_argument("--tol", type=float, default=0.03)
     ap.add_argument("--max-frac", type=float, default=0.2)
     ap.add_argument("--gap-ms", type=float, default=10.0)
+    ap.add_argument("--full", action="store_true",
+                    help="measure every size up to --max-frac (no early stop); also report the smallest size within "
+                         "--tol of the best measured latency (doc 9ag: the first-flat-step rule stops too early on "
+                         "ESCI / SPACEV real)")
     ap.add_argument("--out", required=True)
     from simulations.approximate_hits.timing_env import add_args, make_guard
     add_args(ap)
@@ -76,15 +80,20 @@ def main():
         curve.append({"nodes": nodes, "frac": nodes / N, "mean_ms": ms, "memory_mb": nodes * node_bytes / 1e6})
         logger.info(f"{nodes} nodes ({100 * nodes / N:.3f}%): {ms:.2f} ms")
         del ix
-        if len(curve) >= 3 and curve[-2]["mean_ms"] - ms < args.tol * curve[-2]["mean_ms"]:
+        if not args.full and len(curve) >= 3 and curve[-2]["mean_ms"] - ms < args.tol * curve[-2]["mean_ms"]:
             chosen = curve[-2]          # the previous size already got (almost) all the gain
             break
         nodes = int(nodes * args.factor)
+    first_flat = next((curve[i - 1] for i in range(2, len(curve))
+                       if curve[i - 1]["mean_ms"] - curve[i]["mean_ms"] < args.tol * curve[i - 1]["mean_ms"]), curve[-1])
+    best = min(c["mean_ms"] for c in curve)
+    near_best = next(c for c in curve if c["mean_ms"] <= best * (1 + args.tol))
     if chosen is None:
-        chosen = curve[-1]
+        chosen = first_flat if not args.full else first_flat
     guard.stop()
     res = {"prep": prep.name, "points": N, "search_list": L, "beam": beam, "gap_ms": args.gap_ms, "tol": args.tol,
-           "curve": curve, "chosen": chosen, "environment": guard.report()}
+           "curve": curve, "chosen": chosen, "first_flat_step": first_flat, "within_tol_of_best": near_best,
+           "environment": guard.report()}
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(res, indent=1))
     logger.info(f"chosen node cache: {chosen}")

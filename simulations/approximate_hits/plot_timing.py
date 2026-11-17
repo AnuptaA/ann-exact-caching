@@ -103,7 +103,7 @@ def main():
     ncol = 4
     nrow = (len(TRACES) + ncol - 1) // ncol
     fig = plt.figure(figsize=(5.0 * ncol, 4.4 * nrow + 0.8))
-    gs = GridSpec(2 * nrow, ncol, height_ratios=[3.2, 1.2] * nrow, hspace=0.12, wspace=0.28, figure=fig,
+    gs = GridSpec(2 * nrow, ncol, height_ratios=[3.2, 1.2] * nrow, hspace=0.3, wspace=0.28, figure=fig,
                   top=0.9, bottom=0.1)
     rows = []
     for j, (title, prep) in enumerate(TRACES):
@@ -140,7 +140,7 @@ def main():
             xs, ys, rs, oks = zip(*pts)
             ax.plot(xs, ys, color=color, lw=lw, zorder=3, label=name if j == 0 else None,
                     ls=(0, (5, 2.5)) if hk.endswith("_paper") else "-")
-            st.plot(xs, rs, color=color, lw=1, alpha=0.7)
+            st.plot(xs, rs, color=color, lw=1, alpha=0.7, ls=(0, (5, 2.5)) if hk.endswith("_paper") else "-")
             for x, y, rr, ok in pts:
                 kw = dict(marker=marker, ms=8 if hk == "ours" else 6.5, color=color, zorder=4,
                           mfc=color if ok else "white", mec=color, mew=1.5)
@@ -203,11 +203,13 @@ def main():
     fig.legend(loc="lower center", ncol=5, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
     v5 = ("v5: every arm's DiskANN has the workload's base node cache (outside the cache budget); ours / LRU hit path in two stages "
           "(hit decision from a small in-cache search, served points searched again on hits); audits timed apart, not charged. ") if VERSION == "timing_v5" else ""
-    fig.text(0.5, 0.955, v5 + "DiskANN tuned per workload (search list x beam width, recall@10 0.95; SPACEV real: 0.95 at 130 ms), same index for every technique; whole stream after "
+    cap = (v5 + "DiskANN tuned per workload (search list x beam width, recall@10 0.95; SPACEV real: 0.95 at 130 ms), same index for every technique; whole stream after "
              "warm-up, 1 in 50 requests timed end to end (DiskANN baselines with a 10 ms gap between searches; technique runs composed: backend calls charged the request's measured DiskANN time, hit path with a per-cache search list); cache updates are background work.\n"
              "Filled: mean retention of hits (served answer vs DiskANN's top-10) >= 0.89 in this run; hollow: below. "
-             "Strip: mean retention of hits (served answer vs DiskANN's top-10; grey dashed: the target 0.9). Recall over all requests is in timing_table.md.",
-             ha="center", fontsize=7.5)
+             "Strip: mean retention of hits (served answer vs DiskANN's top-10; grey dashed: the target 0.9). Recall over all requests is in timing_table.md.")
+    import textwrap
+    cap = "\n".join(textwrap.fill(par, 260) for par in cap.split("\n"))   # wrapped to the figure's width
+    fig.text(0.5, 0.995, cap, va="top", ha="center", fontsize=7.5)
     out = RES / "latest" / "timing.png"          # latest plots only (11-14)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150, bbox_inches="tight")
