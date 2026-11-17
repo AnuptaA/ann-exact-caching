@@ -3492,3 +3492,19 @@ path 0.25).
 Not yet: database changes (inserts / deletes, the data-change experiments) are not supported by the
 core; those stay on the old simulator. Quantization range is fixed per run (from the warm-up sample)
 instead of recomputed at every rebuild as online_sim.prepare does.
+
+#### 9ah (cont.). Node-cache full curves; decision (11-17 19:10)
+
+node_cache_curve.py --full (to 10% of the points, quiet): ESCI 0 / 300 / 1,200 / 4,800 / 19,200 /
+76,800 nodes = 8.69 / 6.80 / 6.58 / 6.47 / 6.15 / 5.62 ms: no saturation below the cache budget (within 3%
+of the best only at 76,800 nodes = 7.7% of the points, ~140 MB). SPACEV real at recall 0.95 (search list
+2000): 129.7 ms without, 127-130 ms at every size up to 1.9%: the node cache does not matter there.
+Decided (Jialin): keep the small base node caches (ESCI 300 nodes); the equal-memory line shows what the
+rest of the memory would buy DiskANN.
+Milestones 2-5 code (committed): core_cache.CoreCache (online_sim --cache-impl core), per-request
+admission (--update-every 1), timed per-request mode (--timing-compose / --timing-every, --core-ef1 /
+--core-ef2), QVCacheCore (simulator QVCache on cachecore.QVCore, per-request inserts; timed mode with
+hnswlib mini-indexes, search list 64), workloads.py registry. Parity / validation runs queued:
+run_core_parity.sh (TripClick 1%, python vs core: greedy, LRU, continuous greedy; LRU per request),
+run_core_timing_check.sh (timed mode vs v5 harness: SPACEV 0.6 1% static / LRU; TripClick 10% LRU /
+continuous / drift).
