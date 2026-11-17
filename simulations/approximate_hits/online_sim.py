@@ -500,8 +500,13 @@ class Sim:
         self.k, self.T = args.k, args.target
         self.rng = np.random.default_rng(args.seed)
         self.M = args.budget * len(D["db"])
-        self.cache = Cache(D, args.k, args.R, args.bits, self.M,
-                           maintain=not getattr(args, "no_maintain", False))
+        if getattr(args, "cache_impl", "python") == "core":     # the C++ core (doc 9ah), .venv-core
+            from simulations.approximate_hits.core_cache import CoreCache
+            self.cache = CoreCache(D, args.k, args.R, args.bits, self.M,
+                                   maintain=not getattr(args, "no_maintain", False), threads=args.core_threads)
+        else:
+            self.cache = Cache(D, args.k, args.R, args.bits, self.M,
+                               maintain=not getattr(args, "no_maintain", False))
         self.cache.shell_scope = getattr(args, "shell_scope", "all")
         self.cache.shell_balls = getattr(args, "shell_balls", 3)
         self.log = []
@@ -1110,7 +1115,7 @@ class Sim:
         cached vector ids, entry centers and radii, the shell sample (ids and the b-bit vectors as
         used), model coefficients, lambda, k, sampling rate, budget."""
         c = self.cache
-        c.prepare()
+        (c.full_prepare if hasattr(c, "full_prepare") else c.prepare)()
         mp = self.model.params
         return dict(cached_ids=c.cached_ids, centers=c.centers, radius=c.radius,
                     samp_ids=c.samp_ids, sv=c.sv, mu=mp["mu"], sd=mp["sd"], coef=mp["coef"],
@@ -1458,6 +1463,10 @@ def make_parser():
     ap.add_argument("--c-max", type=int, default=3000)
     ap.add_argument("--s-max", type=int, default=25000)
     ap.add_argument("--k-lru", type=int, default=50)
+    ap.add_argument("--cache-impl", choices=["python", "core"], default="python",
+                    help="core: the cache's request path in the C++ core (core_cache.CoreCache; Python 3.11 / "
+                         ".venv-core; doc 9ah); python: online_sim.Cache (arrays rebuilt after every change)")
+    ap.add_argument("--core-threads", type=int, default=8, help="--cache-impl core: threads of batch lookups")
     ap.add_argument("--update-every", type=int, default=0,
                     help="lru / ogreedy: admit and evict after every this many requests (1 = every request; "
                          "0 = once per --batch); calibration and drift tests stay per batch (doc 9ag)")

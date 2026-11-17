@@ -152,3 +152,78 @@ def test_lru_order_and_mark_used(world):
     order = core.lru_order()
     assert order[-1] == c0 or core.last_used(c0) == 1000.0
     assert core.last_used(c0) == 1000.0
+
+
+class RefQV:
+    """NumPy reference of QVCache (online_baselines.QVCache logic, per-request inserts, exact search)."""
+
+    def __init__(self, db, k, n_mini, cap, Dm, alpha, mu, P, lo, hi, nb):
+        self.db, self.k, self.n, self.cap, self.Dm, self.alpha = db, k, n_mini, cap, Dm, alpha
+        self.mu, self.P, self.lo, self.hi, self.nb = mu, P, lo, hi, nb
+        self.mini = [[] for _ in range(n_mini)]
+        self.used = [0.0] * n_mini
+        self.owner, self.theta, self.fill = {}, {}, 0
+
+    def region(self, x):
+        z = (x.astype(np.float64) - self.mu) @ self.P
+        b = np.floor((z - self.lo) / np.maximum(self.hi - self.lo, 1e-12) * self.nb)
+        return tuple(np.clip(b, 0, self.nb - 1).astype(int))
+
+    def lookup(self, x, t):
+        ids = np.array([i for m in self.mini for i in m], dtype=np.int64)
+        if len(ids) < self.k:
+            return False, ids
+        d2 = ((self.db[ids] - x) ** 2).sum(axis=1)
+        o = np.argsort(d2, kind="stable")[:self.k]
+        dk = float(np.sqrt(d2[o[-1]]))
+        th = self.theta.get(self.region(x))
+        hit = th is not None and dk <= (1 + self.Dm) * th
+        if hit:
+            for v in ids[o].tolist():
+                self.used[self.owner[v]] = t
+        return hit, ids[o]
+
+    def on_miss(self, x, ans, t):
+        dk = float(np.sqrt(((self.db[ans[-1]] - x) ** 2).sum()))
+        key = self.region(x)
+        th = self.theta.get(key)
+        self.theta[key] = dk if th is None else (1 - self.alpha) * th + self.alpha * dk
+        new = [v for v in ans.tolist() if v not in self.owner]
+        if len(self.mini[self.fill]) + len(new) > self.cap:
+            empty = [i for i in range(self.n) if not self.mini[i]]
+            v = empty[0] if empty else min(range(self.n), key=lambda i: self.used[i])
+            for i in self.mini[v]:
+                if self.owner.get(i) == v:
+                    del self.owner[i]
+            self.mini[v], self.fill = [], v
+        for v in new:
+            self.owner[v] = self.fill
+            self.mini[self.fill].append(v)
+        self.used[self.fill] = t
+
+
+def test_qvcache_exact_matches_reference():
+    rng, db, q = make_world(3)
+    stream = np.concatenate([rng.choice(len(q), 600), rng.choice(60, 600)])   # some repetition
+    w = q[stream[:200]].astype(np.float64)
+    mu = w.mean(axis=0)
+    _, _, vt = np.linalg.svd(w - mu, full_matrices=False)
+    P = vt[:4].T
+    z = (w - mu) @ P
+    lo, hi = z.min(axis=0), z.max(axis=0)
+    args = (K, 4, 120, 0.15, 0.9, mu, P, lo, hi, 4)
+    ref = RefQV(db, *args)
+    core = cc.QVCore(D, K, 4, 120, 0.15, 0.9, mu, np.ascontiguousarray(P), lo, hi, 4, False)
+    n_hit = 0
+    for t, qi in enumerate(stream.tolist()):
+        x = q[qi]
+        h_r, near_r = ref.lookup(x, float(t))
+        h_c, near_c, _ = core.lookup(x, float(t))
+        assert h_r == h_c and sorted(near_r.tolist()) == sorted(near_c)
+        n_hit += h_c
+        if not h_c:
+            ans = np.argsort(((db - x) ** 2).sum(axis=1))[:K].astype(np.int64)
+            ref.on_miss(x, ans, float(t))
+            core.on_miss(x, ans, db[ans], float(t))
+        assert core.n_cached() == len(ref.owner)
+    assert n_hit > 20

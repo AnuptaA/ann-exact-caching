@@ -565,6 +565,8 @@ private:
     std::unordered_map<i64, std::vector<i64>> holders_;
 };
 
+#include "qvcache.h"
+
 PYBIND11_MODULE(_cachecore, m) {
     m.doc() = "Cache core: incremental cache state and the two-stage hit path (doc 9ah)";
     py::class_<LookupResult>(m, "LookupResult")
@@ -610,4 +612,16 @@ PYBIND11_MODULE(_cachecore, m) {
         .def("lookup", &Core::lookup, py::arg("x"), py::arg("lam"), py::arg("ef1"), py::arg("ef2") = 0)
         .def("lookup_batch", &Core::lookup_batch, py::arg("xs"), py::arg("lam"), py::arg("ef1"), py::arg("ef2") = 0)
         .def("serve", &Core::serve);
+    py::class_<QVCore>(m, "QVCore")
+        .def(py::init<int, int, int, size_t, double, double, py::array_t<double>, py::array_t<double>,
+                      py::array_t<double>, py::array_t<double>, int, bool, int, int, int>(),
+             py::arg("dim"), py::arg("k"), py::arg("n_mini"), py::arg("cap"), py::arg("D"), py::arg("alpha"),
+             py::arg("mu"), py::arg("P"), py::arg("lo"), py::arg("hi"), py::arg("nb"), py::arg("graph"),
+             py::arg("M") = 16, py::arg("ef_construction") = 64, py::arg("ef") = 64)
+        .def("lookup", &QVCore::lookup)
+        .def("on_miss", &QVCore::on_miss)
+        .def("n_cached", &QVCore::n_cached)
+        .def("n_minis_used", &QVCore::n_minis_used)
+        .def("n_regions", &QVCore::n_regions)
+        .def("cached_ids", &QVCore::cached_ids);
 }
