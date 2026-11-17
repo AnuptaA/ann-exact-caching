@@ -1165,8 +1165,11 @@ def main():
     for s_ in getattr(m, "t", {}):            # stage times: per request, over all requests
         m.t[s_] = 0.0
     logger.info(f"cache ready: {mem0 / 1e6:.1f} MB")
-    ix = open_diskann(args.diskann, nodes0)
-    if nodes0:
+    # composed runs make no timed DiskANN call (each backend call is charged the measured baseline
+    # latency, which includes the base node cache): open without node cache, 2 AIO contexts, as in v4
+    # (32 contexts per run x 12 runs exhausted the machine's AIO limit, doc 9af)
+    ix = open_diskann(args.diskann, 0 if compose is not None else nodes0)
+    if nodes0 and compose is None:
         logger.info(f"DiskANN node cache: {nodes0} nodes (chosen for {nodes0_from or 'this run'})")
     xs_native = q.astype(db_native.dtype) if db_native.dtype != np.float32 else q
 
