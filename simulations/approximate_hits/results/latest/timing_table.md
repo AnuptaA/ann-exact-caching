@@ -212,6 +212,18 @@
 | SPACEV real log, DiskANN recall 0.95 | 10% | Aker | 8.25 | 0.916 | 0.949 | 130 | 119 | 0.0199 | 130 | 142 | 142 | 1.09 | 1.09 | contended |
 | SPACEV real log, DiskANN recall 0.95 | 1% | QVCache | 2.16 | 0.978 | 0.955 | 130 | 128 | 1.29 | 131 | 144 | 142 | 1.01 | 1.02 | contended |
 | SPACEV real log, DiskANN recall 0.95 | 10% | QVCache | 7.54 | 0.723 | 0.936 | 130 | 121 | 0.456 | 130 | 143 | 142 | 1.07 | 1.08 | contended |
+| ESCI, DiskANN recall 0.97 | 1% | Ours | 10.4 | 0.896 | 0.963 | 11.7 | 10.9 | 0.384 | 12 | 15.6 | 15.4 | 1.08 | 1.12 | contended |
+| ESCI, DiskANN recall 0.97 | 10% | Ours | 24.6 | 0.896 | 0.951 | 11.7 | 9.55 | 0.55 | 12.2 | 15.7 | 15.4 | 1.23 | 1.33 | contended |
+| ESCI, DiskANN recall 0.97 | 1% | Ours (drift handling) | 8.76 | 0.919 | 0.966 | 11.7 | 11.1 | 0.378 | 12 | 15.6 | 15.4 | 1.05 | 1.09 | contended |
+| ESCI, DiskANN recall 0.97 | 10% | Ours (drift handling) | 21.1 | 0.916 | 0.958 | 11.7 | 9.92 | 0.542 | 12.2 | 15.7 | 15.4 | 1.18 | 1.23 | contended |
+| ESCI, DiskANN recall 0.97 | 1% | Ours (continuous greedy) (cutoff lost 2k requests) | 9.58 | 0.924 | 0.966 | 11.7 | 11.1 | 0.564 | 12 | 15.7 | 15.4 | 1.05 | 1.09 | contended |
+| ESCI, DiskANN recall 0.97 | 10% | Ours (continuous greedy) (cutoff lost 2k requests) | 23.9 | 0.913 | 0.956 | 11.7 | 9.65 | 0.706 | 12.2 | 15.7 | 15.4 | 1.21 | 1.27 | contended |
+| ESCI, DiskANN recall 0.97 | 1% | LRU (cutoff lost 89k requests) | 1.15 | 0.89 | 0.971 | 11.7 | 12.7 | 0.562 | 12.9 | 30.1 | 15.4 | 0.918 | 1.01 | contended |
+| ESCI, DiskANN recall 0.97 | 10% | LRU (cutoff lost 89k requests) | 16.8 | 0.913 | 0.96 | 11.7 | 11.8 | 1.76 | 13.7 | 31.3 | 15.4 | 0.99 | 1.18 | contended |
+| ESCI, DiskANN recall 0.97 | 1% | Aker | 0.0145 | 0.919 | 0.972 | 11.7 | 11.7 | 0.0368 | 11.7 | 15.4 | 15.4 | 0.997 | 1 | contended |
+| ESCI, DiskANN recall 0.97 | 10% | Aker | 0.102 | 0.925 | 0.972 | 11.7 | 11.7 | 0.077 | 11.8 | 15.5 | 15.4 | 0.996 | 1 | contended |
+| ESCI, DiskANN recall 0.97 | 1% | QVCache | 0.269 | 0.627 | 0.971 | 11.7 | 12 | 0.231 | 12 | 15.7 | 15.4 | 0.975 | 1 | contended |
+| ESCI, DiskANN recall 0.97 | 10% | QVCache | 0.678 | 0.903 | 0.971 | 11.7 | 13.5 | 1.57 | 13.6 | 17.4 | 15.4 | 0.865 | 1.01 | contended |
 
 Sample-rate check (mean ms, cache + DiskANN / DiskANN alone / speedup; whole-run hit rate)
 

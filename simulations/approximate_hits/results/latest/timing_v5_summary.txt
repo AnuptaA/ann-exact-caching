@@ -34,6 +34,22 @@
     QVCache           0.80x  hit rate 0.007  retention of hits 0.894  (retention below 0.9)
     LRU (our rule)    0.76x  hit rate 0.159  retention of hits 0.914  audits 0.08 ms/request apart
 
+== esci1m-r97: DiskANN + base node cache (300 nodes) 11.69 ms
+  cache 1%: DiskANN + cache memory as node cache 1.05x
+    ours static       1.08x  hit rate 0.104  retention of hits 0.896  (retention below 0.9)
+    ours cont.        1.05x  hit rate 0.096  retention of hits 0.924  audits 0.10 ms/request apart
+    ours drift        1.05x  hit rate 0.088  retention of hits 0.919  audits 0.09 ms/request apart
+    Aker              1.00x  hit rate 0.000  retention of hits 0.919
+    QVCache           0.98x  hit rate 0.003  retention of hits 0.627  (retention below 0.9)
+    LRU (our rule)    0.92x  hit rate 0.011  retention of hits 0.890  (retention below 0.9)  audits 0.01 ms/request apart
+  cache 10%: DiskANN + cache memory as node cache 1.13x
+    ours static       1.23x  hit rate 0.246  retention of hits 0.896  (retention below 0.9)
+    ours cont.        1.21x  hit rate 0.239  retention of hits 0.913  audits 0.28 ms/request apart
+    ours drift        1.18x  hit rate 0.211  retention of hits 0.916  audits 0.22 ms/request apart
+    Aker              1.00x  hit rate 0.001  retention of hits 0.925
+    LRU (our rule)    0.99x  hit rate 0.168  retention of hits 0.913  audits 0.19 ms/request apart
+    QVCache           0.87x  hit rate 0.007  retention of hits 0.903
+
 == medrag-ip: DiskANN + base node cache (7166 nodes) 11.49 ms
   cache 0.01%: DiskANN + cache memory as node cache 1.01x
     ours cont.        1.79x  hit rate 0.491  retention of hits 0.921  audits 0.65 ms/request apart

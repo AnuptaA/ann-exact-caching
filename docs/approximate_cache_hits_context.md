@@ -3397,3 +3397,16 @@ rates rose (drift 3.6 -> 5.4%, cont. 5.3 -> 7.9%) but stay at or below Aker's; i
 simulator cont. reaches 10.5% vs Aker 8.3%, so the remaining gap is the DiskANN-relative labels.
 Our hits cost ~9-11 ms (stage 2 at search list 2048 over 850k vectors: ~8 ms), irrelevant here.
 Plot: 11th panel "SPACEV real log, DiskANN recall 0.95".
+
+#### 9ae d. Backend-recall sensitivity, first cell: ESCI at DiskANN recall 0.97 (alias esci1m-r97, 11-17)
+
+run_recall_variant.sh (generic alias pipeline). ESCI: search list 160, beam 16, recall@10 0.974 over
+all 130,652 queries (answers 1.8 h). DiskANN + base node cache 11.69 ms (6.73 at 0.95). The arm's
+guard said "contended" (3.1% of samples over the 1-core limit, mean other load 0.25 cores): kept.
+| ESCI | 0.95: best ours / Aker / node$ | 0.97: best ours / Aker / node$ |
+| 1% | 1.04 / 0.99 / 1.09 | static 1.08 (ret 0.896), cont. 1.05 / 1.00 / 1.05 |
+| 10% | 1.16 / 0.99 / 1.26 | static 1.23 (ret 0.896), cont. 1.21 / 1.00 / 1.13 |
+With dearer misses ours overtakes node$ on ESCI (the node cache's gain shrinks with the larger search
+list: 1.26 -> 1.13 at 10%; SPACEV real 0.9 -> 0.95: 1.33 -> 1.05). Aker never hits ESCI (no repeats).
+Next: SPACEV Zipf 0.6 at 0.97 (search list 256, beam 16, spacev10m index; alias spacev-aker-0.6-r97),
+started 14:25. 0.98 / 0.99 not started (settings not probed for ESCI beyond 0.9775 at search list 200).
