@@ -1164,14 +1164,32 @@ class Sim:
                 self.events.append({"t": t, "event": "known_change", "n": n_ev})
                 self.reset_detection()
                 self.window = []
-            X, near = cache.features(qb)
-            score = self.model(X)
-            serve = (score >= self.lam if self.lam is not None and cache.n_cached() >= self.k
-                     else np.zeros(len(qb), bool))
-            y = self.y(qb, near)
-            y_exact = y if self.D["truth"] is self.D["answer"] else (
-                cache.served_retention(qb, near, key="truth") if self.a.label == "served"
-                else cache.retention_exact(qb))
+            # --update-every U (doc 9ag): LRU / ogreedy admit and evict after every U requests of the
+            # batch (U = 1: every request, as the timing harness's LRU and Aker do); labels, calibration
+            # and drift tests stay per batch. Default: once per batch.
+            U = getattr(a, "update_every", 0) or len(qb)
+            upd = method in ("lru", "ogreedy") and U < len(qb)
+            parts = []
+            for u0 in range(0, len(qb), U if upd else len(qb)):
+                qs = qb[u0:u0 + U] if upd else qb
+                Xs, ns = cache.features(qs)
+                sc = self.model(Xs)
+                sv = (sc >= self.lam if self.lam is not None and cache.n_cached() >= self.k
+                      else np.zeros(len(qs), bool))
+                ys = self.y(qs, ns)
+                ye = ys if self.D["truth"] is self.D["answer"] else (
+                    cache.served_retention(qs, ns, key="truth") if self.a.label == "served"
+                    else cache.retention_exact(qs))
+                parts.append((sc, sv, ys, ye, ns))
+                if upd:
+                    tt = s + u0 + len(qs)
+                    if method == "lru":
+                        self.lru_update(qs, sv, ns, tt, p_lru)
+                    else:
+                        self.ogreedy_update(qs, sv, ns, tt)
+                    self.cal_stale = True
+            score, serve, y, y_exact = (np.concatenate([p_[i] for p_ in parts]) for i in range(4))
+            near = np.concatenate([p_[4] for p_ in parts])
             if self.D["truth"] is self.D["answer"]:
                 b_rec = np.ones(len(qb))
             else:
@@ -1221,7 +1239,9 @@ class Sim:
                 self.audits.append((t, y[audit], np.full(int(audit.sum()), 1 / rate)))
                 self.window = (self.window + [(int(q), bool(v), bool(u), rate)
                                               for q, v, u in zip(qb, serve, audit)])[-a.window:]
-                if method == "lru":
+                if upd:
+                    pass                                    # applied per U requests above
+                elif method == "lru":
                     self.lru_update(qb, serve, near, t, p_lru)
                     self.cal_stale = True
                 elif method == "ogreedy":
@@ -1438,6 +1458,9 @@ def make_parser():
     ap.add_argument("--c-max", type=int, default=3000)
     ap.add_argument("--s-max", type=int, default=25000)
     ap.add_argument("--k-lru", type=int, default=50)
+    ap.add_argument("--update-every", type=int, default=0,
+                    help="lru / ogreedy: admit and evict after every this many requests (1 = every request; "
+                         "0 = once per --batch); calibration and drift tests stay per batch (doc 9ag)")
     ap.add_argument("--aker-alpha-l", type=float, default=1.1)
     ap.add_argument("--aker-alpha-t", type=float, default=0.25)
     ap.add_argument("--aker-tau-init", type=float, default=0.25)

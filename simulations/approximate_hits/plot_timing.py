@@ -31,8 +31,10 @@ TRACES = [("Zipf 0.3", "spacev-aker-0.3"), ("Zipf 0.6", "spacev-aker-0.6"), ("Zi
           ("TriviaQA, Zipf 0.99", "triviaqa-ip-0.99"), ("SPACEV real query log", "spacev-real"),
           ("TripClick real health-search log", "tripclick-ip"), ("MedRAG-Zipf (Proximity)", "medrag-ip")]
 if (RES / os.environ.get("TIMING_VERSION", "timing_v4") / "spacev-real95" / "backend_s50.json").exists():
-    TRACES.append(("SPACEV real log, DiskANN recall 0.95", "spacev-real95"))      # doc 9af
-for _t, _p in (("ESCI, DiskANN recall 0.97", "esci1m-r97"), ("SPACEV Zipf 0.6, DiskANN recall 0.97", "spacev-aker-0.6-r97")):
+    # decided with Jialin 11-17: SPACEV real's main numbers at DiskANN recall 0.95 (the 0.9 runs stay on disk)
+    TRACES = [("SPACEV real query log (DiskANN recall 0.95)", "spacev-real95") if p_ == "spacev-real" else (t_, p_)
+              for t_, p_ in TRACES]
+for _t, _p in (("ESCI, DiskANN recall 0.97", "esci1m-r97"), ("Zipf 0.6, DiskANN recall 0.97", "spacev-aker-0.6-r97")):
     if (RES / os.environ.get("TIMING_VERSION", "timing_v4") / _p / "backend_s50.json").exists():
         TRACES.append((_t, _p))
 BUDGETS = [0.003, 0.01, 0.03, 0.1]
@@ -148,6 +150,39 @@ def main():
             eb = sorted(set(b for b, _ in eq_pts))
             ax.plot(eb, [np.mean([v for b2, v in eq_pts if b2 == b]) for b in eb], color="grey", ls="--",
                     lw=1.2, marker="x", ms=5, label="DiskANN, cache's memory as node cache" if j == 0 else None)
+        # best case of our hit rule (doc 9ag): the same timed requests and hits, misses charged exactly their
+        # DiskANN time; (a) hit decision free, hits cost their measured stage-2 serve; (b) hits cost nothing.
+        # Best over ours / drift / continuous / LRU (our rule) runs that meet the target.
+        comp_f = RES / VERSION / prep / f"backend_s{EVERY}_lat.npy"
+        if comp_f.exists():
+            comp = np.load(comp_f) * 1e3
+            base = float(comp.mean())
+            best = {"a": [], "b": []}
+            for b in bs:
+                va, vb = [], []
+                for key in ("ours", "ours_drift", "ours_online", "lru_bg"):
+                    r = per_b[b].get(key)
+                    if r is None or (ret_of(r) or 0) < T - TOL:
+                        continue
+                    lf = RES / VERSION / prep / f"{r['file']}_lat.npz"
+                    if not lf.exists():
+                        continue
+                    hit = np.load(lf)["hit"]
+                    if len(hit) != len(comp):
+                        continue
+                    h = float(r["hit_rate"])
+                    serve = r.get("stage_ms", {}).get("serve", 0.0) / h if h else 0.0
+                    va.append(base / float(np.where(hit, serve, comp).mean()))
+                    vb.append(base / float(np.where(hit, 0.0, comp).mean()))
+                if va:
+                    best["a"].append((b, max(va)))
+                    best["b"].append((b, max(vb)))
+            oc = STYLE["ours"][1]
+            for k_, ls_, lw_, al_, lab in (("a", (0, (1, 1.5)), 1.8, 1.0, "Ours, best case: hit decision free"),
+                                           ("b", (0, (4, 2, 1, 2)), 1.2, 0.6, "Ours, best case: hit decision and serving free")):
+                if best[k_]:
+                    xs_, ys_ = zip(*best[k_])
+                    ax.plot(xs_, ys_, color=oc, ls=ls_, lw=lw_, alpha=al_, zorder=2, label=lab if j == 0 else None)
         ax.axhline(1.0, color="k", lw=0.8)
         ax.set_xscale("log")
         ax.set_title(title if not prep.startswith("spacev-aker") else f"SPACEV, {title}", fontsize=10,
@@ -168,7 +203,7 @@ def main():
     fig.legend(loc="lower center", ncol=5, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
     v5 = ("v5: every arm's DiskANN has the workload's base node cache (outside the cache budget); ours / LRU hit path in two stages "
           "(hit decision from a small in-cache search, served points searched again on hits); audits timed apart, not charged. ") if VERSION == "timing_v5" else ""
-    fig.text(0.5, 0.955, v5 + "DiskANN tuned per workload (search list x beam width, recall@10 0.95 or 0.9 if 0.95 > 100 ms), same index for every technique; whole stream after "
+    fig.text(0.5, 0.955, v5 + "DiskANN tuned per workload (search list x beam width, recall@10 0.95; SPACEV real: 0.95 at 130 ms), same index for every technique; whole stream after "
              "warm-up, 1 in 50 requests timed end to end (DiskANN baselines with a 10 ms gap between searches; technique runs composed: backend calls charged the request's measured DiskANN time, hit path with a per-cache search list); cache updates are background work.\n"
              "Filled: mean retention of hits (served answer vs DiskANN's top-10) >= 0.89 in this run; hollow: below. "
              "Strip: mean retention of hits (served answer vs DiskANN's top-10; grey dashed: the target 0.9). Recall over all requests is in timing_table.md.",

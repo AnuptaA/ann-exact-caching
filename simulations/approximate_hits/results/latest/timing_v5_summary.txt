@@ -148,6 +148,22 @@
     QVCache           1.07x  hit rate 0.106  retention of hits 0.958
     QVCache paper     1.04x  hit rate 0.101  retention of hits 0.971
 
+== spacev-aker-0.6-r97: DiskANN + base node cache (11996 nodes) 18.17 ms
+  cache 1%: DiskANN + cache memory as node cache 1.02x
+    ours cont.        1.13x  hit rate 0.142  retention of hits 0.923  audits 0.26 ms/request apart
+    ours static       1.09x  hit rate 0.106  retention of hits 0.931
+    ours drift        1.09x  hit rate 0.108  retention of hits 0.926  audits 0.21 ms/request apart
+    LRU (our rule)    1.07x  hit rate 0.098  retention of hits 0.922  audits 0.20 ms/request apart
+    Aker              1.03x  hit rate 0.038  retention of hits 0.892  (retention below 0.9)
+    QVCache           1.03x  hit rate 0.049  retention of hits 0.881  (retention below 0.9)
+  cache 10%: DiskANN + cache memory as node cache 1.09x
+    LRU (our rule)    1.28x  hit rate 0.322  retention of hits 0.916  audits 0.56 ms/request apart
+    ours cont.        1.27x  hit rate 0.279  retention of hits 0.921  audits 0.44 ms/request apart
+    ours static       1.19x  hit rate 0.218  retention of hits 0.916
+    ours drift        1.19x  hit rate 0.215  retention of hits 0.919  audits 0.37 ms/request apart
+    Aker              1.13x  hit rate 0.126  retention of hits 0.920
+    QVCache           1.10x  hit rate 0.106  retention of hits 0.960
+
 == spacev-aker-0.99: DiskANN + base node cache (11996 nodes) 7.24 ms
   cache 0.3%: DiskANN + cache memory as node cache 1.03x
     ours cont.        1.74x  hit rate 0.483  retention of hits 0.912  audits 0.32 ms/request apart

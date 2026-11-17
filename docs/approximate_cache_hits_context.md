@@ -3410,3 +3410,44 @@ With dearer misses ours overtakes node$ on ESCI (the node cache's gain shrinks w
 list: 1.26 -> 1.13 at 10%; SPACEV real 0.9 -> 0.95: 1.33 -> 1.05). Aker never hits ESCI (no repeats).
 Next: SPACEV Zipf 0.6 at 0.97 (search list 256, beam 16, spacev10m index; alias spacev-aker-0.6-r97),
 started 14:25. 0.98 / 0.99 not started (settings not probed for ESCI beyond 0.9775 at search list 200).
+
+### 9ag. Why ours loses to Aker on TripClick (11-17 afternoon, with Jialin)
+
+Decided: SPACEV real's main numbers use DiskANN recall 0.95 (spacev-real95; the plot's SPACEV real panel
+now shows it). Sensitivity so far: only ESCI and SPACEV Zipf 0.6 at 0.97, 1% and 10%, every main
+technique (ours x3, LRU, Aker / QVCache with the settings picked for 0.95, not retuned); no more queued.
+SPACEV Zipf 0.6 at 0.97 (search list 256, beam 16, DiskANN 18.2 ms): 1%: cont. 1.13, static / drift
+1.09, LRU 1.07, Aker 1.03 (ret 0.89), node$ 1.02; 10%: LRU 1.28, cont. 1.27, static 1.19, Aker 1.13,
+node$ 1.09.
+
+Cost side (aker_gap.py): DiskANN is fast on TripClick (9.4 ms) because 0.95 needs only search list 128
+(beam 32), like ESCI / SPACEV Zipf (100), not because of the node cache (1,828 nodes; 11.4 ms without).
+Our lookup costs twice as much there (1.01 ms per request at 10%: kNN 0.26, balls 0.32, shell 0.43) as on
+SPACEV (0.47) since vectors are 769-d float32 (SPACEV 100-d int8, ESCI 384-d), and Aker gets many hits
+(18.3% vs ours 25.2% at 10%: ratio 1.4, vs 2.2 on SPACEV 0.6 and ~inf on ESCI). LRU (our rule) gets
+1.5-1.8x Aker's hits at every size but paid ~1.2-1.5 ms per request outside the stage timers. Diagnosis
+(TripClick 10%, LRU, run alone): batch run hits 4.82 / misses 13.48 ms (0.87x) -> alone 2.71 / 11.45
+(1.08x) -> alone, gc disabled 1.99 / 10.89 (1.16x; Aker 1.20). Python cyclic GC ~0.6 ms per request;
+12 concurrent composed runs with heavy background HNSW inserts ~2 ms per miss (memory bandwidth; the
+11-15 composed-vs-alone check covered static runs only). NO_GC=1 env switch added (diagnostic).
+
+Hit side. TripClick timed requests: 68% new, 14% near-duplicates, 18% exact repeats (6.6% of requests
+repeat within 2,000 requests, 2.8% within 10). Hit rate per class at 1%: Aker recent repeats 88%, near-
+dups 29%; ours drift 11% / 4%; cont. 36% / 11%; LRU (our rule) 80% / 61% (all: 16.8% vs Aker 10.1%).
+Offline / windowed population (greedy + rebuild, continuous greedy) misses short-term repetition; LRU
+admission catches it. Why the headline (simulator) disagrees (LRU 7.0% vs harness 16.6%): the simulator
+updates LRU / ogreedy once per 1,000-request batch, so a repeat within the batch can never hit; 5.5% of
+TripClick requests repeat a query from the same batch (other workloads <= 0.7%). Simulator LRU 1%:
+batch 1000 7.0%, batch 100 9.9% (retention 0.92-0.93). Drift detection on LRU: 15 alarms in 80 batches
+(each discards all labels -> next batch no cutoff, then a strict cutoff from one batch of labels); LRU's
+own churn moves the score / hit-rate distributions, so the tests mostly false-alarm (headline runs have
+detection off for LRU / ogreedy).
+Fix 1 (in progress): online_sim --update-every U (admission / eviction every U requests; calibration and
+drift per batch). Continuous greedy scores a candidate on earlier misses only, so a first occurrence is
+not admitted even per request (admitted after its 2nd, hits from its 3rd).
+
+Plot: dotted lines "Ours, best case": the best (target-meeting) ours / drift / continuous / LRU run's
+same timed requests and hits, misses charged exactly their DiskANN time, (a) hits at their measured
+stage-2 serve time, (b) hits free. Reading (v5): TripClick best case 1.15-1.43x > Aker 1.09-1.20x at every
+size (current LRU hits suffice); SPACEV real 0.95 best case = Aker (1.04 / 1.09): hit rate, not cost;
+ESCI 0.95 best case ~= node$ (ties), at 0.97 above it; SPACEV Zipf 0.3 1-3% best case <= node$ (low reuse).

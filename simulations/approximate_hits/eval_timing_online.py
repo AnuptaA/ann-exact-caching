@@ -1076,6 +1076,9 @@ def main():
     from simulations.approximate_hits.timing_env import add_args, make_guard
     add_args(ap)
     args = ap.parse_args()
+    if os.environ.get("NO_GC"):           # diagnostic (doc 9ag): no cyclic GC pauses inside timed requests
+        import gc
+        gc.disable()
     guard = make_guard(args)
     guard.start()
     from simulations.approximate_hits.eval_timing import open_diskann

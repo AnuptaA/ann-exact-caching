@@ -148,16 +148,16 @@
 | TriviaQA, Zipf 0.99 | 10% | Aker | 59.2 | 0.937 | 0.918 | 74.3 | 29.1 | 0.0276 | 74.5 | 81.6 | 84.6 | 2.55 | 2.45 | contended |
 | TriviaQA, Zipf 0.99 | 1% | QVCache | 59.4 | 0.903 | 0.918 | 74.3 | 33.1 | 4.46 | 78.9 | 86.6 | 84.6 | 2.25 | 2.46 | contended |
 | TriviaQA, Zipf 0.99 | 10% | QVCache | 59.7 | 0.945 | 0.939 | 74.3 | 29.2 | 0.821 | 75.2 | 82.3 | 84.6 | 2.55 | 2.48 | contended |
-| SPACEV real query log | 1% | Ours (drift handling) (cutoff lost 50k requests) | 2.6 | 0.919 | 0.913 | 60.6 | 59.8 | 1.76 | 61.1 | 73.1 | 73.6 | 1.01 | 1.02 | contended |
-| SPACEV real query log | 10% | Ours (drift handling) (cutoff lost 50k requests) (cutoff lost 32k requests) | 3.57 | 0.921 | 0.913 | 60.6 | 61.1 | 6.49 | 63.2 | 75.4 | 73.6 | 0.992 | 1.03 | contended |
-| SPACEV real query log | 1% | Ours (continuous greedy) (cutoff lost 19k requests) | 3.96 | 0.922 | 0.913 | 60.6 | 58.8 | 1.81 | 61 | 72.7 | 73.6 | 1.03 | 1.04 | contended |
-| SPACEV real query log | 10% | Ours (continuous greedy) (cutoff lost 19k requests) (cutoff lost 12k requests) | 5.32 | 0.923 | 0.914 | 60.6 | 60.5 | 7.08 | 63.3 | 75.1 | 73.6 | 1 | 1.05 | contended |
-| SPACEV real query log | 1% | LRU (cutoff lost 27k requests) | 2.61 | 0.926 | 0.913 | 60.6 | 61.7 | 5.12 | 63.4 | 103 | 73.6 | 0.982 | 1.02 | contended |
-| SPACEV real query log | 10% | LRU (cutoff lost 27k requests) (cutoff lost 5k requests) | 6.92 | 0.924 | 0.914 | 60.6 | 63.3 | 12.2 | 67.1 | 97.7 | 73.6 | 0.957 | 1.07 | contended |
-| SPACEV real query log | 1% | Aker | 3.25 | 0.944 | 0.911 | 60.6 | 58.3 | 0.0218 | 60.6 | 72.7 | 73.6 | 1.04 | 1.03 | contended |
-| SPACEV real query log | 10% | Aker | 8.25 | 0.915 | 0.907 | 60.6 | 55.7 | 0.0227 | 60.6 | 72.3 | 73.6 | 1.09 | 1.09 | contended |
-| SPACEV real query log | 1% | QVCache | 2.39 | 0.959 | 0.913 | 60.6 | 60.5 | 1.51 | 62.1 | 75.2 | 73.6 | 1 | 1.02 | contended |
-| SPACEV real query log | 10% | QVCache | 7.54 | 0.738 | 0.897 | 60.6 | 56.6 | 0.499 | 61.1 | 73.3 | 73.6 | 1.07 | 1.08 | contended |
+| SPACEV real query log (DiskANN recall 0.95) | 1% | Ours (drift handling) (cutoff lost 31k requests) | 3.84 | 0.926 | 0.954 | 130 | 125 | 1.71 | 130 | 143 | 142 | 1.03 | 1.04 | contended |
+| SPACEV real query log (DiskANN recall 0.95) | 10% | Ours (drift handling) (cutoff lost 31k requests) (cutoff lost 18k requests) | 5.4 | 0.922 | 0.954 | 130 | 125 | 9.24 | 131 | 143 | 142 | 1.04 | 1.05 | contended |
+| SPACEV real query log (DiskANN recall 0.95) | 1% | Ours (continuous greedy) (cutoff lost 15k requests) | 4.39 | 0.934 | 0.954 | 130 | 124 | 1.58 | 130 | 143 | 142 | 1.04 | 1.04 | contended |
+| SPACEV real query log (DiskANN recall 0.95) | 10% | Ours (continuous greedy) (cutoff lost 15k requests) (cutoff lost 9k requests) | 7.88 | 0.916 | 0.953 | 130 | 123 | 9.42 | 131 | 144 | 142 | 1.06 | 1.08 | contended |
+| SPACEV real query log (DiskANN recall 0.95) | 1% | LRU (cutoff lost 29k requests) | 2.82 | 0.931 | 0.954 | 130 | 128 | 4.6 | 131 | 160 | 142 | 1.01 | 1.03 | contended |
+| SPACEV real query log (DiskANN recall 0.95) | 10% | LRU (cutoff lost 29k requests) (cutoff lost 4k requests) | 8.58 | 0.917 | 0.953 | 130 | 124 | 10.8 | 134 | 157 | 142 | 1.05 | 1.08 | contended |
+| SPACEV real query log (DiskANN recall 0.95) | 1% | Aker | 3.25 | 0.945 | 0.954 | 130 | 125 | 0.0192 | 130 | 142 | 142 | 1.04 | 1.03 | contended |
+| SPACEV real query log (DiskANN recall 0.95) | 10% | Aker | 8.25 | 0.916 | 0.949 | 130 | 119 | 0.0199 | 130 | 142 | 142 | 1.09 | 1.09 | contended |
+| SPACEV real query log (DiskANN recall 0.95) | 1% | QVCache | 2.16 | 0.978 | 0.955 | 130 | 128 | 1.29 | 131 | 144 | 142 | 1.01 | 1.02 | contended |
+| SPACEV real query log (DiskANN recall 0.95) | 10% | QVCache | 7.54 | 0.723 | 0.936 | 130 | 121 | 0.456 | 130 | 143 | 142 | 1.07 | 1.08 | contended |
 | TripClick real health-search log | 0.3% | Ours (drift handling) (cutoff lost 28k requests) | 1.49 | 0.928 | 0.982 | 9.42 | 9.6 | 0.397 | 9.75 | 14 | 13.6 | 0.981 | 1.01 | contended |
 | TripClick real health-search log | 1% | Ours (drift handling) (cutoff lost 28k requests) (cutoff lost 21k requests) | 2.7 | 0.928 | 0.981 | 9.42 | 9.72 | 0.658 | 9.97 | 14.2 | 13.6 | 0.969 | 1.02 | contended |
 | TripClick real health-search log | 3% | Ours (drift handling) (cutoff lost 28k requests) (cutoff lost 21k requests) (cutoff lost 22k requests) | 5.91 | 0.92 | 0.979 | 9.42 | 9.87 | 1.36 | 10.5 | 14.4 | 13.6 | 0.954 | 1.06 | contended |
@@ -202,16 +202,6 @@
 | MedRAG-Zipf (Proximity) | 0.03% | QVCache | 29.6 | 0.907 | 0.957 | 11.5 | 9.63 | 1.59 | 13.1 | 15.7 | 15.1 | 1.19 | 1.42 | contended |
 | MedRAG-Zipf (Proximity) | 0.1% | QVCache | 46.4 | 0.956 | 0.968 | 11.5 | 6.88 | 0.526 | 11.9 | 15.2 | 15.1 | 1.67 | 1.86 | contended |
 | MedRAG-Zipf (Proximity) | 0.3% | QVCache | 46.4 | 0.956 | 0.968 | 11.5 | 6.72 | 0.37 | 11.8 | 15 | 15.1 | 1.71 | 1.86 | contended |
-| SPACEV real log, DiskANN recall 0.95 | 1% | Ours (drift handling) (cutoff lost 31k requests) | 3.84 | 0.926 | 0.954 | 130 | 125 | 1.71 | 130 | 143 | 142 | 1.03 | 1.04 | contended |
-| SPACEV real log, DiskANN recall 0.95 | 10% | Ours (drift handling) (cutoff lost 31k requests) (cutoff lost 18k requests) | 5.4 | 0.922 | 0.954 | 130 | 125 | 9.24 | 131 | 143 | 142 | 1.04 | 1.05 | contended |
-| SPACEV real log, DiskANN recall 0.95 | 1% | Ours (continuous greedy) (cutoff lost 15k requests) | 4.39 | 0.934 | 0.954 | 130 | 124 | 1.58 | 130 | 143 | 142 | 1.04 | 1.04 | contended |
-| SPACEV real log, DiskANN recall 0.95 | 10% | Ours (continuous greedy) (cutoff lost 15k requests) (cutoff lost 9k requests) | 7.88 | 0.916 | 0.953 | 130 | 123 | 9.42 | 131 | 144 | 142 | 1.06 | 1.08 | contended |
-| SPACEV real log, DiskANN recall 0.95 | 1% | LRU (cutoff lost 29k requests) | 2.82 | 0.931 | 0.954 | 130 | 128 | 4.6 | 131 | 160 | 142 | 1.01 | 1.03 | contended |
-| SPACEV real log, DiskANN recall 0.95 | 10% | LRU (cutoff lost 29k requests) (cutoff lost 4k requests) | 8.58 | 0.917 | 0.953 | 130 | 124 | 10.8 | 134 | 157 | 142 | 1.05 | 1.08 | contended |
-| SPACEV real log, DiskANN recall 0.95 | 1% | Aker | 3.25 | 0.945 | 0.954 | 130 | 125 | 0.0192 | 130 | 142 | 142 | 1.04 | 1.03 | contended |
-| SPACEV real log, DiskANN recall 0.95 | 10% | Aker | 8.25 | 0.916 | 0.949 | 130 | 119 | 0.0199 | 130 | 142 | 142 | 1.09 | 1.09 | contended |
-| SPACEV real log, DiskANN recall 0.95 | 1% | QVCache | 2.16 | 0.978 | 0.955 | 130 | 128 | 1.29 | 131 | 144 | 142 | 1.01 | 1.02 | contended |
-| SPACEV real log, DiskANN recall 0.95 | 10% | QVCache | 7.54 | 0.723 | 0.936 | 130 | 121 | 0.456 | 130 | 143 | 142 | 1.07 | 1.08 | contended |
 | ESCI, DiskANN recall 0.97 | 1% | Ours | 10.4 | 0.896 | 0.963 | 11.7 | 10.9 | 0.384 | 12 | 15.6 | 15.4 | 1.08 | 1.12 | contended |
 | ESCI, DiskANN recall 0.97 | 10% | Ours | 24.6 | 0.896 | 0.951 | 11.7 | 9.55 | 0.55 | 12.2 | 15.7 | 15.4 | 1.23 | 1.33 | contended |
 | ESCI, DiskANN recall 0.97 | 1% | Ours (drift handling) | 8.76 | 0.919 | 0.966 | 11.7 | 11.1 | 0.378 | 12 | 15.6 | 15.4 | 1.05 | 1.09 | contended |
@@ -224,6 +214,18 @@
 | ESCI, DiskANN recall 0.97 | 10% | Aker | 0.102 | 0.925 | 0.972 | 11.7 | 11.7 | 0.077 | 11.8 | 15.5 | 15.4 | 0.996 | 1 | contended |
 | ESCI, DiskANN recall 0.97 | 1% | QVCache | 0.269 | 0.627 | 0.971 | 11.7 | 12 | 0.231 | 12 | 15.7 | 15.4 | 0.975 | 1 | contended |
 | ESCI, DiskANN recall 0.97 | 10% | QVCache | 0.678 | 0.903 | 0.971 | 11.7 | 13.5 | 1.57 | 13.6 | 17.4 | 15.4 | 0.865 | 1.01 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 1% | Ours | 10.6 | 0.931 | 0.967 | 18.2 | 16.6 | 0.31 | 18.4 | 23.6 | 23.4 | 1.09 | 1.12 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 10% | Ours | 21.8 | 0.916 | 0.958 | 18.2 | 15.3 | 3.06 | 18.6 | 23.7 | 23.4 | 1.19 | 1.28 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 1% | Ours (drift handling) | 10.8 | 0.926 | 0.966 | 18.2 | 16.7 | 0.341 | 18.4 | 23.6 | 23.4 | 1.09 | 1.11 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 10% | Ours (drift handling) | 21.5 | 0.919 | 0.959 | 18.2 | 15.3 | 3.04 | 18.6 | 23.7 | 23.4 | 1.19 | 1.24 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 1% | Ours (continuous greedy) | 14.2 | 0.923 | 0.964 | 18.2 | 16 | 0.378 | 18.5 | 23.7 | 23.4 | 1.13 | 1.15 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 10% | Ours (continuous greedy) | 27.9 | 0.921 | 0.955 | 18.2 | 14.3 | 3.16 | 18.8 | 23.6 | 23.4 | 1.27 | 1.33 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 1% | LRU | 9.77 | 0.922 | 0.967 | 18.2 | 17 | 0.592 | 18.7 | 23.8 | 23.4 | 1.07 | 1.1 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 10% | LRU | 32.2 | 0.916 | 0.951 | 18.2 | 14.2 | 3.65 | 19.1 | 24 | 23.4 | 1.28 | 1.41 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 1% | Aker | 3.77 | 0.892 | 0.969 | 18.2 | 17.6 | 0.0309 | 18.2 | 23.4 | 23.4 | 1.03 | 1.04 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 10% | Aker | 12.6 | 0.92 | 0.963 | 18.2 | 16 | 0.029 | 18.3 | 23.4 | 23.4 | 1.13 | 1.14 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 1% | QVCache | 4.95 | 0.881 | 0.968 | 18.2 | 17.7 | 0.347 | 18.5 | 23.7 | 23.4 | 1.03 | 1.05 | contended |
+| Zipf 0.6, DiskANN recall 0.97 | 10% | QVCache | 10.6 | 0.96 | 0.97 | 18.2 | 16.5 | 0.243 | 18.4 | 23.5 | 23.4 | 1.1 | 1.12 | contended |
 
 Sample-rate check (mean ms, cache + DiskANN / DiskANN alone / speedup; whole-run hit rate)
 
