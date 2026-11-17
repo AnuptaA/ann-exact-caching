@@ -516,3 +516,64 @@ class QVCacheCore(QVCache):
         self.ref[ids] = 1
         self.n_c = len(ids)
         return served, ret, ret_x
+
+
+class AkerRealSim(Base):
+    """The real Aker library (aker_real/libakershim*.so, ctypes; doc 9q) in the shared driver (doc 9ah), one
+    request at a time as eval_aker_real.run_quality: lookup; on a miss, insert the backend's top k + delta.
+    Settings: --aker-real-delta, --aker-real-at (alpha tighten), --aker-real-al (alpha loosen), risk 0.35,
+    or Proximity mode (--aker-real-prox f: global threshold f x the median squared exact-NN distance of
+    5,000 queries; needs the proximity build first in LD_LIBRARY_PATH). Timed mode as QVCacheCore."""
+
+    def __init__(self, D, stream, args):
+        super().__init__(D, stream, args)
+        import os
+        import sys as _sys
+        from pathlib import Path as _P
+        _sys.path.insert(0, str(_P(__file__).parent / "aker_real"))
+        from eval_aker_real import Aker as _Aker
+        if args.aker_real_prox is not None:
+            q, db, top = self.D["q"], self.D["db"], self.D["truth"]
+            rows = np.random.default_rng(0).choice(len(q), min(5000, len(q)), replace=False)
+            nn = np.asarray(db[np.asarray(top[rows, 0], dtype=np.int64)], dtype=np.float32)
+            thr = args.aker_real_prox * float(np.median(((np.asarray(q[rows], np.float32) - nn) ** 2).sum(axis=1)))
+            os.environ["AKER_GLOBAL_THRESH"] = repr(thr)
+        self.delta = args.aker_real_delta
+        self.ak = _Aker(self.D["q"].shape[1], int(args.budget * len(self.D["db"])), self.k, self.delta, 0.35,
+                        args.aker_real_at, args.aker_real_al)
+        self.timing = None
+        if getattr(args, "timing_compose", None):
+            self.timing = {"compose": np.load(args.timing_compose), "every": args.timing_every, "lat": [], "hit": []}
+
+    def n_entries(self):
+        return 0
+
+    def batch(self, qb, s, truth, truth_x=None):
+        import time as _t
+        n = len(qb)
+        served = np.zeros(n, dtype=bool)
+        ret = np.zeros(n)
+        ret_x = ret if truth_x is None else np.zeros(n)
+        Q, db, T = self.D["q"], self.D["db"], self.timing
+        for i, q in enumerate(qb):
+            q = int(q)
+            x = np.ascontiguousarray(np.asarray(Q[q], np.float32))
+            a0 = _t.perf_counter()
+            kind, ids, _, _ = self.ak.lookup(q + 1, x)
+            dt = _t.perf_counter() - a0
+            hit = kind in (1, 2, 4)
+            pos = s + i - self.a.warmup
+            if T is not None and pos >= 0 and pos % T["every"] == 0:
+                j = pos // T["every"]
+                T["lat"].append(dt + (0.0 if hit else float(T["compose"][j]) if j < len(T["compose"]) else np.nan))
+                T["hit"].append(bool(hit))
+            if hit:
+                got = np.asarray(ids, dtype=np.int64) - 1
+                served[i] = True
+                ret[i] = np.isin(truth[i], got).mean()
+                if truth_x is not None:
+                    ret_x[i] = np.isin(truth_x[i], got).mean()
+            else:
+                nid = np.ascontiguousarray(topk_present(self.D, [q], self.k + self.delta, key="answer")[0].astype(np.int64))
+                self.ak.insert(q + 1, x, nid + 1, np.ascontiguousarray(np.asarray(db[nid], np.float32)))
+        return served, ret, ret_x

@@ -1528,6 +1528,11 @@ def make_parser():
                          "warm-up (eval_timing_backend.py backend_s<every>_lat.npy); each request's core lookup is "
                          "timed and a miss charged its DiskANN latency; needs --cache-impl core")
     ap.add_argument("--timing-every", type=int, default=50)
+    ap.add_argument("--aker-real", action="store_true", help="--method aker: the real Aker library (doc 9ah)")
+    ap.add_argument("--aker-real-delta", type=int, default=5)
+    ap.add_argument("--aker-real-at", type=float, default=0.9)
+    ap.add_argument("--aker-real-al", type=float, default=1.1)
+    ap.add_argument("--aker-real-prox", type=float, default=None)
     ap.add_argument("--update-every", type=int, default=0,
                     help="lru / ogreedy: admit and evict after every this many requests (1 = every request; "
                          "0 = once per --batch); calibration and drift tests stay per batch (doc 9ag)")
@@ -1582,7 +1587,7 @@ def main():
         args.response = "recal"
     if args.method in ("aker", "qvcache"):
         from simulations.approximate_hits import online_baselines as ob
-        cls = ob.Aker if args.method == "aker" else (
+        cls = (ob.AkerRealSim if getattr(args, "aker_real", False) else ob.Aker) if args.method == "aker" else (
             ob.QVCacheCore if getattr(args, "cache_impl", "python") == "core" else ob.QVCache)
         res = dict(cls(D, stream, args).run(), method=args.method, args=vars(args))
     else:
