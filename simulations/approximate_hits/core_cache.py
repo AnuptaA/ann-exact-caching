@@ -33,7 +33,8 @@ class CoreCache(Cache):
         self._db = self.D["db"]
         self._q = self.D["q"]
         self.dim = self._db.shape[1]
-        self.core = Core(self.dim, k, 0, capacity=int(max(budget, 1024)) + 1024)
+        # exact search (headline, ef1 = 0) needs no graph: none is maintained
+        self.core = Core(self.dim, k, 0, capacity=int(max(budget, 1024)) + 1024, graph=bool(ef1 > 0))
         self.core.set_threads(threads)
         self.ef1, self.ef2 = ef1, ef2        # 0 / 0: exact search over the cached vectors (headline)
         self.qlo = self.qhi = None           # fixed quantization range of the shell sample
@@ -80,8 +81,8 @@ class CoreCache(Cache):
                     del self._holders[v]
         self.core.remove_entry(int(c))
         # evicted vectors stay as deleted graph nodes / dead slots: compact when they pile up (background)
-        if self.core.graph_deleted() > 0.3 * max(self.core.graph_elements(), 1) and self.core.graph_deleted() > 1000:
-            self.core.rebuild_index(32)
+        if self.core.dead_slots() > 0.3 * max(self.core.n_cached(), 1) and self.core.dead_slots() > 1000:
+            self.core.rebuild_index(32)      # frees evicted vectors' slots; rebuilds the graph if there is one
 
     def _resync_samples(self):
         """p changed: every entry's sampled shell changes (warm-up, greedy rebuilds)."""

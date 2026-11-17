@@ -71,11 +71,11 @@ struct LookupResult {
 
 class Core {
 public:
-    Core(int dim, int k, int shell_balls, int M, int ef_construction, size_t capacity, int seed)
-        : d_(dim), k_(k), shell_balls_(shell_balls), M_(M), efc_(ef_construction), seed_(seed),
+    Core(int dim, int k, int shell_balls, int M, int ef_construction, size_t capacity, int seed, bool graph)
+        : d_(dim), k_(k), shell_balls_(shell_balls), M_(M), efc_(ef_construction), seed_(seed), graph_on_(graph),
           space_(dim) {
         cap_ = std::max<size_t>(capacity, 1024);
-        hnsw_.reset(new hnswlib::HierarchicalNSW<float>(&space_, cap_, M_, efc_, seed_));
+        if (graph_on_) hnsw_.reset(new hnswlib::HierarchicalNSW<float>(&space_, cap_, M_, efc_, seed_));
         mu_.assign(N_FEAT, 0.0);
         sd_.assign(N_FEAT, 1.0);
         coef_.assign(N_FEAT, 0.0);
@@ -111,7 +111,7 @@ public:
             if (vref_[s]++ == 0) {
                 ++n_cached_;
                 on_cached_change(id, true);
-                if (it != vslot_.end()) {                 // revived: was evicted, still in the graph
+                if (it != vslot_.end() && graph_on_) {    // revived: was evicted, still in the graph
                     if (in_graph_[s]) { hnsw_->unmarkDelete((size_t)id); --n_deleted_; }
                     else fresh.push_back({id, s});
                 }
@@ -227,7 +227,8 @@ public:
     size_t n_samples() const { return n_samp_eff_; }      // samples whose id is not cached
     size_t n_entries() const { return ec_.size(); }
     double memory(int bits) const { return (double)n_cached_ + (double)n_samp_eff_ * bits / 32.0; }
-    size_t graph_elements() const { return hnsw_->getCurrentElementCount(); }
+    size_t graph_elements() const { return hnsw_ ? hnsw_->getCurrentElementCount() : 0; }
+    size_t dead_slots() const { return vid_.size() - vfree_.size() - n_cached_; }
     size_t graph_deleted() const { return n_deleted_; }
     std::vector<i64> entries() const { return ec_; }
     std::vector<i64> cached_ids() const {
@@ -241,7 +242,7 @@ public:
     // rebuild the graph over the live cached vectors (background work in a real system)
     void rebuild_index(int threads) {
         cap_ = std::max<size_t>(cap_, 2 * n_cached_ + 1024);
-        hnsw_.reset(new hnswlib::HierarchicalNSW<float>(&space_, cap_, M_, efc_, seed_));
+        if (graph_on_) hnsw_.reset(new hnswlib::HierarchicalNSW<float>(&space_, cap_, M_, efc_, seed_));
         std::fill(in_graph_.begin(), in_graph_.end(), 0);
         n_deleted_ = 0;
         for (size_t s = 0; s < vid_.size(); ++s)          // evicted vectors leave the store
@@ -329,7 +330,7 @@ private:
         if (--vref_[s] == 0) {
             --n_cached_;
             on_cached_change(id, false);
-            if (in_graph_[s]) { hnsw_->markDelete((size_t)id); ++n_deleted_; }
+            if (graph_on_ && in_graph_[s]) { hnsw_->markDelete((size_t)id); ++n_deleted_; }
             // the slot keeps the vector (and the graph node) for a cheap revival; a rebuild drops it
         }
     }
@@ -372,7 +373,7 @@ private:
 
     // ---------------------------------------------------------------- graph
     void graph_insert(const std::vector<std::pair<i64, int>>& items) {
-        if (items.empty()) return;
+        if (items.empty() || !graph_on_) return;      // exact mode (headline): no graph to maintain
         size_t need = hnsw_->getCurrentElementCount() + items.size();
         if (need > cap_) { cap_ = std::max(need, 2 * cap_); hnsw_->resizeIndex(cap_); }
         auto add = [&](ssize_t j) {
@@ -437,6 +438,7 @@ private:
             r.score = model_score(r.features);
             return r;
         }
+        if (ef1 > 0 && !graph_on_) throw std::invalid_argument("graph search on a core built without graph");
         if (ef1 > 0) graph_knn(x, ef1, nn, ef_set); else exact_knn(x, nn, threads);
         double t1 = now_s();
         r.near.resize(nn.size());
@@ -530,6 +532,7 @@ private:
     }
 
     int d_, k_, shell_balls_, M_, efc_, seed_, threads_ = 1;
+    bool graph_on_ = true;
     size_t cap_;
     hnswlib::L2Space space_;
     std::unique_ptr<hnswlib::HierarchicalNSW<float>> hnsw_;
@@ -582,8 +585,9 @@ PYBIND11_MODULE(_cachecore, m) {
         .def_readonly("t_model", &LookupResult::t_model)
         .def_readonly("t_serve", &LookupResult::t_serve);
     py::class_<Core>(m, "Core")
-        .def(py::init<int, int, int, int, int, size_t, int>(), py::arg("dim"), py::arg("k"), py::arg("shell_balls"),
-             py::arg("M") = 32, py::arg("ef_construction") = 200, py::arg("capacity") = 1 << 16, py::arg("seed") = 100)
+        .def(py::init<int, int, int, int, int, size_t, int, bool>(), py::arg("dim"), py::arg("k"), py::arg("shell_balls"),
+             py::arg("M") = 32, py::arg("ef_construction") = 200, py::arg("capacity") = 1 << 16, py::arg("seed") = 100,
+             py::arg("graph") = true)
         .def("set_model", &Core::set_model)
         .def("set_shell_balls", &Core::set_shell_balls)
         .def("set_threads", &Core::set_threads)
@@ -605,6 +609,7 @@ PYBIND11_MODULE(_cachecore, m) {
         .def("memory", &Core::memory)
         .def("graph_elements", &Core::graph_elements)
         .def("graph_deleted", &Core::graph_deleted)
+        .def("dead_slots", &Core::dead_slots)
         .def("entries", &Core::entries)
         .def("cached_ids", &Core::cached_ids)
         .def("radius", &Core::radius)
