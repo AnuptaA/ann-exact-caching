@@ -70,10 +70,15 @@ class CoreCache(Cache):
                             float(self.last_used.get(c, 0)))
         for v in ball.tolist():
             self._holders.setdefault(v, set()).add(int(c))
+        fresh = np.unique(ball[self._count[ball] == 0])
+        self._fetched += len(fresh)
+        np.add.at(self._count, ball, 1)
 
     def _core_remove(self, c):
         ball, _ = self._ball_shell(int(c))
-        for v in ball[ball >= 0].tolist():
+        ball = ball[ball >= 0].astype(np.int64)
+        np.subtract.at(self._count, ball, 1)
+        for v in ball.tolist():
             h = self._holders.get(v)
             if h is not None:
                 h.discard(int(c))
@@ -87,7 +92,7 @@ class CoreCache(Cache):
     def _resync_samples(self):
         """p changed: every entry's sampled shell changes (warm-up, greedy rebuilds)."""
         if self.qlo is None and self.bits < 32:
-            sid = super().shell_ids()
+            sid = self.shell_ids()
             samp = sid[self.D["draw"][sid] < self.p]
             if len(samp):
                 x = np.asarray(self._db[samp], np.float64)
@@ -98,6 +103,25 @@ class CoreCache(Cache):
         self._core_p = self.p
 
     # -- Cache interface ------------------------------------------------------------------
+    # bookkeeping kept incrementally (Cache recomputes it from every entry after any change, which per-request
+    # updates cannot afford): vector refcounts (_count) in _core_add / _core_remove, sizes from the core
+    def _update_members(self):
+        self._members_dirty = False
+
+    def n_cached(self):
+        return int(self.core.n_cached())
+
+    def memory(self):
+        return float(self.core.memory(self.bits))
+
+    def shell_ids(self):
+        """The shell: union of the entries' shells minus cached vectors (on demand: set_p_to_fill)."""
+        if not self.entries:
+            return np.empty(0, dtype=np.int64)
+        sh = np.unique(np.concatenate([self._ball_shell(int(c))[1] for c in self.entries]))
+        sh = sh[sh >= 0]
+        return sh[self._count[sh] == 0]
+
     def add(self, c, K):
         if c in self.entries:
             self._core_remove(c)
