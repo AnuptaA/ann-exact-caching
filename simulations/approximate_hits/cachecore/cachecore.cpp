@@ -494,7 +494,8 @@ private:
         double t3 = now_s();
         double sc = model_score(r.features);
         r.score = sc;
-        r.hit = std::isfinite(lam) && std::isfinite(sc) && sc >= lam;
+        // lambda -inf: every request takes the hit path (the would-be served answer, for labels / tuning)
+        r.hit = std::isfinite(sc) && (std::isinf(lam) && lam < 0 ? true : (std::isfinite(lam) && sc >= lam));
         double t4 = now_s();
         if (r.hit && ef2 > 0) {
             std::vector<std::pair<float, i64>> nn2;

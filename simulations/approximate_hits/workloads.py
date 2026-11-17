@@ -41,6 +41,11 @@ class Workload:
         return RES / "backends" / (self.backend or self.prep)
 
     @property
+    def state_dir(self):
+        """Warm-up states (online_sim --save-state with this backend's answers): timing_v4/<backend or prep>."""
+        return RES / "timing_v4" / (self.backend or self.prep)
+
+    @property
     def answers_file(self):
         return self.backend_dir / "diskann.npz"
 
