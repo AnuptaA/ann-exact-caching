@@ -25,8 +25,7 @@ from simulations.approximate_hits.workloads import WORKLOADS, RES          # noq
 S = "simulations/approximate_hits"
 PY = ".venv-core/bin/python -u"
 EVERY = 50
-AKER_LIB = "simulations/approximate_hits/aker_real:/home/jialind/third_party/aker/build/lib"
-AKER_PROX_LIB = "/home/jialind/third_party/aker_prox/build/lib:simulations/approximate_hits/aker_real"
+from simulations.approximate_hits.timing_jobs import AKER_LIB, AKER_PROX_LIB   # noqa: E402
 T, TOL = 0.9, 0.01
 
 
@@ -137,7 +136,6 @@ def timing_lines():
                     jobs.append(("akerpaper_at0.25_d0", f"--method aker {a}", lib))
             for tag, extra, lib in jobs:
                 d = o / f"{tag}_b{b:g}"
-                js = d / ("static.json" if extra.startswith("--method static") else "")
                 env = f"LD_LIBRARY_PATH={lib} " if lib else ""
                 done = f"{d}/DONE"
                 out.append(f"[ -f {done} ] || {{ [ -f {tf} ] && PYTHONPATH=. {env}{PY} {S}/online_sim.py {prep_flags} "
