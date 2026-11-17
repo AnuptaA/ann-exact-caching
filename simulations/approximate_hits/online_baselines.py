@@ -143,8 +143,17 @@ class Base:
                     aff = (~self.D["initial"][truth]).any(axis=1) & keep
                     self.log[-1].update(aff_n=int(aff.sum()), aff_served=int((aff & served).sum()),
                                         aff_ret_sum=float(ret[aff & served].sum()))
-        return {"log": self.log, "events": self.events,
-                "cost": dict(self.cost, vectors_fetched=self.fetched)}
+        res = {"log": self.log, "events": self.events,
+               "cost": dict(self.cost, vectors_fetched=self.fetched)}
+        T = getattr(self, "timing", None)
+        if T is not None:
+            lat, hit = np.array(T["lat"]) * 1e3, np.array(T["hit"], dtype=bool)
+            summ = lambda v: None if not len(v) else {"mean_ms": float(np.mean(v)), "p50_ms": float(np.median(v)),
+                                                      "p99_ms": float(np.percentile(v, 99)), "n": int(len(v))}
+            res["timing"] = {"every": T["every"], "n_timed": int(len(lat)), "hit_rate_timed": float(hit.mean()) if len(hit) else None,
+                             "cache": dict(summ(lat) or {}, hits_ms=summ(lat[hit]), misses_ms=summ(lat[~hit])),
+                             "lat_ms": lat.tolist(), "hit": hit.tolist()}
+        return res
 
 
 class Aker(Base):
@@ -462,9 +471,15 @@ class QVCacheCore(QVCache):
     def __init__(self, D, stream, args):
         super().__init__(D, stream, args)
         from simulations.approximate_hits.cachecore import QVCore
+        # timing (--timing-compose): mini-index graphs (hnswlib, search list 64) and every request timed;
+        # headline: exact search over the cached vectors
+        self.timing = None
+        graph = bool(getattr(args, "timing_compose", None))
+        if graph:
+            self.timing = {"compose": np.load(args.timing_compose), "every": args.timing_every, "lat": [], "hit": []}
         self.core = QVCore(self.D["db"].shape[1], self.k, self.n_mini, int(self.cap), float(args.qv_D),
                            float(args.qv_alpha), self.mu, np.ascontiguousarray(self.P), self.lo, self.hi,
-                           int(args.qv_buckets), False)
+                           int(args.qv_buckets), graph)
 
     def n_entries(self):
         return self.core.n_minis_used()
@@ -475,9 +490,18 @@ class QVCacheCore(QVCache):
         ret = np.zeros(n)
         ret_x = ret if truth_x is None else np.zeros(n)
         Q, db = self.D["q"], self.D["db"]
+        import time as _t
+        T = self.timing
         for i, q in enumerate(qb):
             x = np.ascontiguousarray(np.asarray(Q[int(q)], np.float32))
+            a0 = _t.perf_counter()
             hit, near, _ = self.core.lookup(x, float(s + i))
+            dt = _t.perf_counter() - a0
+            pos = s + i - self.a.warmup
+            if T is not None and pos >= 0 and pos % T["every"] == 0:
+                j = pos // T["every"]
+                T["lat"].append(dt + (0.0 if hit else float(T["compose"][j]) if j < len(T["compose"]) else np.nan))
+                T["hit"].append(bool(hit))
             if hit:
                 served[i] = True
                 near = np.asarray(near, dtype=np.int64)
