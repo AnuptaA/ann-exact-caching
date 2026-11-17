@@ -376,6 +376,9 @@ private:
         if (items.empty() || !graph_on_) return;      // exact mode (headline): no graph to maintain
         size_t need = hnsw_->getCurrentElementCount() + items.size();
         if (need > cap_) { cap_ = std::max(need, 2 * cap_); hnsw_->resizeIndex(cap_); }
+        // bulk builds (warm-up, rebuilds) at ef_construction; incremental inserts (an entry's ball) at 40, as
+        // the Python harness did (2x cheaper, measured 11-11): background work either way
+        hnsw_->ef_construction_ = std::max<size_t>(items.size() > 256 ? (size_t)efc_ : std::min(40, efc_), (size_t)M_);
         auto add = [&](ssize_t j) {
             hnsw_->addPoint(&vstore_[(size_t)items[j].second * d_], (size_t)items[j].first);
             in_graph_[items[j].second] = 1;
