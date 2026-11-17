@@ -3508,3 +3508,37 @@ hnswlib mini-indexes, search list 64), workloads.py registry. Parity / validatio
 run_core_parity.sh (TripClick 1%, python vs core: greedy, LRU, continuous greedy; LRU per request),
 run_core_timing_check.sh (timed mode vs v5 harness: SPACEV 0.6 1% static / LRU; TripClick 10% LRU /
 continuous / drift).
+
+#### 9ah (cont.). Parity, validation and the v6 batch (11-17 evening)
+
+Parity (online_sim --cache-impl python vs core, TripClick 1%, 20 batches): greedy + rebuild identical
+(20 / 20 batches); LRU / continuous greedy within 0.002 hit rate, 0.006 retention: with --bits 32 (no
+quantization) LRU is identical (20 / 20, same memory and entries), so the only difference is the fixed
+quantization range (by design). Per-request LRU (core, --update-every 1), TripClick 1%, full stream:
+15.1% hits, retention 0.912 (per-batch headline LRU 7.0%; Aker 11.1%).
+hnswlib vs FAISS (bench_hnsw_libs.py, 10% caches of SPACEV / TripClick / TriviaQA): within ~10% in
+time and recall at every search list; hnswlib slightly faster at the small stage-1 lists.
+Core per stage, 10% caches (state of the static warm-up cache, one thread): TripClick ef1 16: kNN 0.13,
+balls 0.23, shell 0.29, serve 0.16 ms per request (v5 Python: 0.26 / 0.32 / 0.43, serve 0.71 per hit);
+SPACEV 0.6: 0.08 / 0.13 / 0.004 / 0.06.
+Timed-mode validation vs v5 (same answers, baseline latencies, search lists): SPACEV 0.6 1% static:
+hit 0.108 both, 6.69 vs 6.73 ms (1.064x vs 1.057x); TripClick 10% drift: 1.02x vs 0.94x (hits 1.38 vs
+2.06 ms, misses 10.35 vs 10.97); SPACEV 0.6 1% LRU: 0.98x vs 0.99x; TripClick 10% LRU: 1.045x vs 0.87x
+(with the 36 tuning jobs running), 1.125x alone (hits 2.00, misses 11.27; Aker 1.20x). LRU's remaining cost
+is algorithmic: ~4,000 small entries at 10%, balls 0.75-1.09 ms and shell 0.77-0.89 ms per request
+(entries x 769-d, memory-bandwidth bound, so also sensitive to concurrent jobs).
+Fixes found on the way: lambda -inf now = every request takes the hit path (labels / tuning got
+stage-1 answers before); exact mode keeps no graph (was ~4x slower, 2.8 GB reserved at TriviaQA 10%);
+CoreCache bookkeeping incremental (Cache recomputed refcounts / shell union per call: per-request LRU
+10k requests > 25 min -> ~2 min); incremental graph inserts at efConstruction 40 (as the harness);
+continuous greedy keeps per-batch policy updates (its update re-scores 20,000 requests' misses, ~4 s per
+call; per-request admission for it needs an incremental implementation: open), lookups per request.
+Tuning on the core (tune_core.py, 36 cells): stage-1 lists differ from the FAISS tuning, which re-ranked
+5x candidates exactly (the harness never did): e.g. TripClick 10% 64 (FAISS tuning 16), stage 2 128 (same).
+v6 batch (jobs_v6.py, run_jobs.py, 8 at a time, 4 cores each): 340 timed runs: ours static / drift /
+continuous, LRU (k 20, per request), QVCache (core, hnswlib mini-indexes) and real Aker, Aker / QVCache
+at up to 3 candidate settings (best in the headline among those meeting the target) so the plot picks the
+best meeting the target in the timed run; arms from v5. First Aker runs failed (library path) and are
+rerun by run_v6_after.sh, which then times the two heaviest LRU cells alone, runs the headline per-request
+reruns (LRU k10 / k20 x 2 seeds, QVCache 16x8 grid, on TripClick, SPACEV real, SPACEV 0.99, TriviaQA 0.99:
+same-batch repeats 5.5% / 0.7% / 4.1% / 10.8% of requests; others <= 0.12%) and the plots.
