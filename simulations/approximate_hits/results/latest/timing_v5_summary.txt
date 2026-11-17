@@ -180,6 +180,20 @@
     ours drift        0.99x  hit rate 0.036  retention of hits 0.921  audits 0.32 ms/request apart
     LRU (our rule)    0.96x  hit rate 0.069  retention of hits 0.924  audits 0.57 ms/request apart
 
+== spacev-real95: DiskANN + base node cache (2999 nodes) 129.50 ms
+  cache 1%: DiskANN + cache memory as node cache 1.02x
+    ours cont.        1.04x  hit rate 0.044  retention of hits 0.934  audits 0.31 ms/request apart
+    Aker              1.04x  hit rate 0.033  retention of hits 0.945
+    ours drift        1.03x  hit rate 0.038  retention of hits 0.926  audits 0.70 ms/request apart
+    LRU (our rule)    1.01x  hit rate 0.028  retention of hits 0.931  audits 0.62 ms/request apart
+    QVCache           1.01x  hit rate 0.022  retention of hits 0.978
+  cache 10%: DiskANN + cache memory as node cache 1.05x
+    Aker              1.09x  hit rate 0.083  retention of hits 0.916
+    QVCache           1.07x  hit rate 0.075  retention of hits 0.723  (retention below 0.9)
+    ours cont.        1.06x  hit rate 0.079  retention of hits 0.916  audits 0.75 ms/request apart
+    LRU (our rule)    1.05x  hit rate 0.086  retention of hits 0.917  audits 1.17 ms/request apart
+    ours drift        1.04x  hit rate 0.054  retention of hits 0.922  audits 0.70 ms/request apart
+
 == tripclick-ip: DiskANN + base node cache (1828 nodes) 9.42 ms
   cache 0.3%: DiskANN + cache memory as node cache 0.99x
     Aker              1.09x  hit rate 0.092  retention of hits 0.914

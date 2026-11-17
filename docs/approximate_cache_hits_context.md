@@ -3382,3 +3382,18 @@ DiskANN, and fewer hits than Aker at 0.3-3%).
 In flight: SPACEV real at DiskANN recall 0.95 (search list 2000, beam 16): answers started 05:31
 (backends/spacev-real95/, --share-deep: one search per query; check 200/200 identical), ~10 h. Then
 it needs states, tuning, a quiet arm and composed runs as workload alias spacev-real95.
+
+#### 9af (cont.). SPACEV real log at DiskANN recall 0.95 (alias spacev-real95, 11-17 12:00)
+
+Answers: search list 2000, beam 16, recall@10 0.953 over all 114,978 queries (4.6 h with --share-deep;
+recall@500 of the deep lists 0.865). Base node cache 2,999 nodes (spacev-real's). DiskANN 129.5 ms.
+Warm-up cutoffs: 1% 1.16, 10% 1.11 (at recall 0.9: 1.00 / 1.71). Tuning: stage 1 64 / 256, stage 2
+512 / 2048. Results (speedup; hit rate):
+- 1%: ours cont. 1.04 (4.4%), Aker 1.04 (3.3%), drift 1.03 (3.8%), LRU 1.01, QVCache 1.01; node$ 1.02.
+- 10%: Aker 1.09 (8.3%), QVCache 1.07 (retention 0.72), cont. 1.06 (7.9%), LRU 1.05 (8.6%), drift
+  1.04 (5.4%); node$ 1.05 (vs 1.33 at recall 0.9: at the larger search list the node cache matters less).
+At 130 ms per DiskANN search the lookup is negligible; speedup ~ 1 / (1 - hit rate). Ours' hit
+rates rose (drift 3.6 -> 5.4%, cont. 5.3 -> 7.9%) but stay at or below Aker's; in the exact-backend
+simulator cont. reaches 10.5% vs Aker 8.3%, so the remaining gap is the DiskANN-relative labels.
+Our hits cost ~9-11 ms (stage 2 at search list 2048 over 850k vectors: ~8 ms), irrelevant here.
+Plot: 11th panel "SPACEV real log, DiskANN recall 0.95".

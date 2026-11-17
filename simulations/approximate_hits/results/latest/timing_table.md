@@ -202,6 +202,16 @@
 | MedRAG-Zipf (Proximity) | 0.03% | QVCache | 29.6 | 0.907 | 0.957 | 11.5 | 9.63 | 1.59 | 13.1 | 15.7 | 15.1 | 1.19 | 1.42 | contended |
 | MedRAG-Zipf (Proximity) | 0.1% | QVCache | 46.4 | 0.956 | 0.968 | 11.5 | 6.88 | 0.526 | 11.9 | 15.2 | 15.1 | 1.67 | 1.86 | contended |
 | MedRAG-Zipf (Proximity) | 0.3% | QVCache | 46.4 | 0.956 | 0.968 | 11.5 | 6.72 | 0.37 | 11.8 | 15 | 15.1 | 1.71 | 1.86 | contended |
+| SPACEV real log, DiskANN recall 0.95 | 1% | Ours (drift handling) (cutoff lost 31k requests) | 3.84 | 0.926 | 0.954 | 130 | 125 | 1.71 | 130 | 143 | 142 | 1.03 | 1.04 | contended |
+| SPACEV real log, DiskANN recall 0.95 | 10% | Ours (drift handling) (cutoff lost 31k requests) (cutoff lost 18k requests) | 5.4 | 0.922 | 0.954 | 130 | 125 | 9.24 | 131 | 143 | 142 | 1.04 | 1.05 | contended |
+| SPACEV real log, DiskANN recall 0.95 | 1% | Ours (continuous greedy) (cutoff lost 15k requests) | 4.39 | 0.934 | 0.954 | 130 | 124 | 1.58 | 130 | 143 | 142 | 1.04 | 1.04 | contended |
+| SPACEV real log, DiskANN recall 0.95 | 10% | Ours (continuous greedy) (cutoff lost 15k requests) (cutoff lost 9k requests) | 7.88 | 0.916 | 0.953 | 130 | 123 | 9.42 | 131 | 144 | 142 | 1.06 | 1.08 | contended |
+| SPACEV real log, DiskANN recall 0.95 | 1% | LRU (cutoff lost 29k requests) | 2.82 | 0.931 | 0.954 | 130 | 128 | 4.6 | 131 | 160 | 142 | 1.01 | 1.03 | contended |
+| SPACEV real log, DiskANN recall 0.95 | 10% | LRU (cutoff lost 29k requests) (cutoff lost 4k requests) | 8.58 | 0.917 | 0.953 | 130 | 124 | 10.8 | 134 | 157 | 142 | 1.05 | 1.08 | contended |
+| SPACEV real log, DiskANN recall 0.95 | 1% | Aker | 3.25 | 0.945 | 0.954 | 130 | 125 | 0.0192 | 130 | 142 | 142 | 1.04 | 1.03 | contended |
+| SPACEV real log, DiskANN recall 0.95 | 10% | Aker | 8.25 | 0.916 | 0.949 | 130 | 119 | 0.0199 | 130 | 142 | 142 | 1.09 | 1.09 | contended |
+| SPACEV real log, DiskANN recall 0.95 | 1% | QVCache | 2.16 | 0.978 | 0.955 | 130 | 128 | 1.29 | 131 | 144 | 142 | 1.01 | 1.02 | contended |
+| SPACEV real log, DiskANN recall 0.95 | 10% | QVCache | 7.54 | 0.723 | 0.936 | 130 | 121 | 0.456 | 130 | 143 | 142 | 1.07 | 1.08 | contended |
 
 Sample-rate check (mean ms, cache + DiskANN / DiskANN alone / speedup; whole-run hit rate)
 
