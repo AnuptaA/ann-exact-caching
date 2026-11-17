@@ -38,7 +38,14 @@ for _t, _p in (("ESCI, DiskANN recall 0.97", "esci1m-r97"), ("Zipf 0.6, DiskANN 
     if (RES / os.environ.get("TIMING_VERSION", "timing_v4") / _p / "backend_s50.json").exists():
         TRACES.append((_t, _p))
 BUDGETS = [0.003, 0.01, 0.03, 0.1]
-SIZES = {"medrag-ip": [0.0001, 0.0003, 0.001, 0.003]}   # 0.3% already holds MedRAG-Zipf's working set
+SIZES = {"medrag-ip": [0.0001, 0.0003, 0.001, 0.003]}
+if os.environ.get("TIMING_VERSION") == "timing_v6":        # v6 (doc 9ah): the registry's workloads
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+    from simulations.approximate_hits.workloads import WORKLOADS as _WL
+    TRACES = [(w.title, w.name) for w in _WL.values() if w.group == "main"] + \
+             [(w.title, w.name) for w in _WL.values() if w.group == "sensitivity"]
+    SIZES = {w.name: list(w.budgets) for w in _WL.values() if len(w.budgets) == 4 and w.budgets != tuple(BUDGETS)}   # 0.3% already holds MedRAG-Zipf's working set
 # LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
 # background work (decided with Jialin, 11-11); the sync runs stay in the table only
 TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
@@ -59,7 +66,61 @@ HEADLINE_KEY = {"ours": "ours", "ours_drift": "ours_drift", "ours_online": "ours
 VERSION, EVERY = os.environ.get("TIMING_VERSION", "timing_v4"), 50   # 1 request in EVERY timed; v5: doc 9af
 
 
+V6_TAG = {"ours": "ours", "oursdrift": "ours_drift", "oursonline": "ours_online", "lru": "lru_bg"}
+
+
+def load_v6(name, budget, every=50):
+    """v6 runs (online_sim timed mode, doc 9ah) in the v5 result schema; Aker / QVCache: of the candidate
+    settings run, the best hit rate meeting the target in this run (else the highest retention)."""
+    d = RES / "timing_v6" / name
+    arm = d / f"backend_s{every}.json"
+    if not arm.exists():
+        return {}
+    a = json.loads(arm.read_text())
+    cand = {}
+    for rd in sorted(d.glob(f"*_b{budget:g}")):
+        if not (rd / "DONE").exists():
+            continue
+        js = [f for f in rd.glob("*.json")]
+        if not js:
+            continue
+        r0 = json.loads(js[0].read_text())
+        T = r0.get("timing")
+        if not T:
+            continue
+        tag = rd.name[: -len(f"_b{budget:g}")]
+        key = V6_TAG.get(tag) or ("aker_paper" if tag.startswith("akerpaper_") else "aker" if tag.startswith("aker_")
+                                  else "qvcache" if tag.startswith("qvcache_") else None)
+        if key is None:
+            continue
+        log = r0["log"]
+        n, sv = sum(x["n"] for x in log), sum(x["served"] for x in log)
+        c = T["cache"]
+        r = {"file": rd.name, "hit_rate": sv / max(n, 1),
+             "retention_vs_backend_hits": sum(x["served_retention_sum"] for x in log) / sv if sv else None,
+             "recall_vs_exact_all": float("nan"), "audited_share": 0.0,
+             "cache": {"mean_ms": c["mean_ms"], "p99_ms": c["p99_ms"], "hits_ms": c.get("hits_ms"),
+                       "misses_ms": c.get("misses_ms")},
+             "stage_ms": T.get("stage_ms") or {}, "timing": T, "backend": a["backend"],
+             "environment": {"verdict": "composed"}}
+        if f"{budget:g}" in a["per_budget"]:
+            r["backend_mem"] = a["per_budget"][f"{budget:g}"]
+        b0 = a["backend"]["mean_ms"]
+        r["speedup"] = {"overall": b0 / c["mean_ms"], "limit_1_over_1_minus_h": 1 / max(1 - r["hit_rate"], 1e-9)}
+        cand.setdefault(key, []).append(r)
+    out = {}
+    for key, rs in cand.items():
+        ok = [r for r in rs if (r["retention_vs_backend_hits"] or 0) >= T_ - TOL_]
+        out[key] = max(ok, key=lambda r: r["hit_rate"]) if ok else max(rs, key=lambda r: r["retention_vs_backend_hits"] or 0)
+    return out
+
+
+T_, TOL_ = 0.9, 0.01
+
+
 def load(prep, budget, every=None):
+    if VERSION == "timing_v6":
+        return load_v6(prep, budget)
     every = EVERY if every is None else every
     d = RES / VERSION / prep
     out = {}
@@ -164,10 +225,13 @@ def main():
                     r = per_b[b].get(key)
                     if r is None or (ret_of(r) or 0) < T - TOL:
                         continue
-                    lf = RES / VERSION / prep / f"{r['file']}_lat.npz"
-                    if not lf.exists():
-                        continue
-                    hit = np.load(lf)["hit"]
+                    if "timing" in r:                       # v6
+                        hit = np.asarray(r["timing"]["hit"], dtype=bool)
+                    else:
+                        lf = RES / VERSION / prep / f"{r['file']}_lat.npz"
+                        if not lf.exists():
+                            continue
+                        hit = np.load(lf)["hit"]
                     if len(hit) != len(comp):
                         continue
                     h = float(r["hit_rate"])
