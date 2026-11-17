@@ -36,9 +36,21 @@ def prep_of(line):
     return m.group(1)
 
 
+# v5 (doc 9af): one workload at a time, main cache sizes first, so complete workloads appear early; the
+# shared warm-up products already exist (timing_v4/<prep>/warm_b*.pkl), drift still before continuous
+WORKLOADS = ["spacev-aker-0.99", "esci1m", "triviaqa-ip-0.99", "spacev-aker-0.6", "triviaqa-ip-0.6", "spacev-real",
+             "tripclick-ip", "spacev-aker-0.3", "triviaqa-ip-0.3", "medrag-ip"]
+MAIN = {"medrag-ip": ("0.001", "0.0001")}
+
+
 def order(line):
     n = json_of(line).name
-    return (0 if n.startswith("oursdrift") else 1 if n.startswith("oursonline") else 2 if n.startswith("lru") else 3, n)
+    tech = 0 if n.startswith("oursdrift") else 1 if n.startswith("oursonline") else 2 if n.startswith("lru") else 3
+    p = prep_of(line)
+    b = re.search(r"_b([0-9.e-]+)\.json$", json_of(line).name).group(1)
+    paper = n.startswith(("akerpaper", "qvpaper"))
+    grp = 1 if paper else 0 if b in MAIN.get(p, ("0.01", "0.1")) else 2
+    return (grp, WORKLOADS.index(p) if p in WORKLOADS else 99, tech, n)
 
 
 def main():
