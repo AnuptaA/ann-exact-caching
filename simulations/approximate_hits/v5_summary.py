@@ -18,6 +18,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default="timing_v5")
     a = ap.parse_args()
+    print("* = run made before the audit-accounting fix, corrected here (rerun pending)")
     for d in sorted((RES / a.version).iterdir()):
         bj = d / "backend_s50.json"
         if not bj.exists():
@@ -32,8 +33,14 @@ def main():
             name = next((lab for pre, lab in TECH if f.name.startswith(pre)), f.stem)
             r = json.loads(f.read_text())
             rh = r.get("retention_vs_backend_hits")
-            rows.setdefault(b, []).append((name, base / r["cache"]["mean_ms"], r["hit_rate"], rh,
-                                           r.get("audits_timed", {}).get("ms_per_timed_request")))
+            au = r.get("audits_timed", {})
+            ms = r["cache"]["mean_ms"]
+            if au.get("n", 0) and au.get("accounting") != 2:
+                # before the fix (doc 9af) each timed audit's DiskANN charge was subtracted from its request
+                # twice: add it back once (total_s = charges + microseconds of label work)
+                ms += au["total_s"] / r["n_timed"] * 1e3
+                name += "*"
+            rows.setdefault(b, []).append((name, base / ms, r["hit_rate"], rh, au.get("ms_per_timed_request")))
         if not rows:
             continue
         print(f"\n== {d.name}: DiskANN + base node cache ({bk['node_cache']['nodes']} nodes) {base:.2f} ms")

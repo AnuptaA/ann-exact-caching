@@ -1221,15 +1221,16 @@ def main():
                 a_ = time.perf_counter()
                 c0 = chg[1]
                 m.label(t_req, backend(qi, args.k), 1.0 / args.audit_rate)
-                d_ = time.perf_counter() - a_
-                if chg[1] and not c0:
-                    d_ += chg[0]
+                wall = time.perf_counter() - a_
+                charge = 0.0
+                if chg[1] and not c0:           # composed: the audit's DiskANN charge leaves the request
+                    charge = chg[0]
                     chg[0], chg[1] = 0.0, False
                 if timed:
-                    audit_s += d_
+                    audit_s += wall + charge
                     n_audit_timed += 1
                 audited = True
-                total_excl = d_
+                total_excl = wall               # only the wall time is inside the request's timer (doc 9af fix)
             answer = near[:args.k]
         elif args.maintenance == "background":
             # answer from the normal top-k search; the cache's update after it (LRU: the top-500
@@ -1277,7 +1278,7 @@ def main():
            "background_rebuild_s": float(getattr(m, "rebuild_s", 0.0)),
            "background_maintenance_s_timed": float(maint),
            # audits (doc 9af): not in any request's latency; their own cost, over the timed requests
-           "audits_timed": {"n": n_audit_timed, "total_s": audit_s,
+           "audits_timed": {"n": n_audit_timed, "total_s": audit_s, "accounting": 2,
                             "mean_ms_per_audit": audit_s / n_audit_timed * 1e3 if n_audit_timed else None,
                             "ms_per_timed_request": audit_s / max(int(timed_mask.sum()), 1) * 1e3},
            "two_stage": two, "node_cache": {"nodes": nodes0, "chosen_for": nodes0_from},

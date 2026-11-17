@@ -3304,3 +3304,55 @@ v5 harness (eval_timing_online.py / eval_timing.py / eval_timing_backend.py):
 - The SPACEV Zipf 0.99 v5 arm (first arm, 22:10) overlapped these two tunings for ~1-2 min: check its
   environment verdict; rerun it if contended.
 - plot_timing.py: TIMING_VERSION=timing_v5 selects the v5 results.
+
+#### 9af (cont.). v5 first results and two harness bugs (11-17 early morning, Jialin away)
+
+Bugs found and fixed while the batch ran:
+- AIO limit: with a node cache, open_diskann warms the cache with 32 threads = 32 AIO contexts per
+  run; 12 composed runs at once exceeded the machine's 65,536 (io_setup EAGAIN, 5 runs crashed).
+  Composed runs make no timed DiskANN call (charged the baseline latency, which includes the base node
+  cache), so they now open DiskANN without node cache (2 contexts), as in v4. Crashed runs rerun by
+  run_timing_v5_after.sh.
+- Audit double subtraction: for a composed audit, the DiskANN charge was moved to audit time AND
+  subtracted from the request's wall time, which never contained it: hits came out too cheap (SPACEV
+  real drift: mean hit latency negative), speedups of drift / continuous / LRU too high (SPACEV 0.99
+  ~10%). Fixed (audits_timed.accounting = 2). move_audit_bug.py moves the earlier audited runs to
+  timing_v5/<prep>/audit_bug/ for rerun; until then v5_summary.py corrects them (adds the charges back:
+  audits_timed.total_s = charges + microseconds of label work), marked *.
+
+First v5 results (05:40; * = corrected pre-fix run). Speedup over DiskANN + base node cache; "node$"
+= DiskANN given the cache's memory as extra node cache:
+- SPACEV Zipf 0.99: 1%: ours cont.* 1.86, drift* 1.79, static 1.77, LRU* 1.64, Aker 1.52, node$ 1.07;
+  10%: cont.* 2.04, drift* 1.94, static 1.91, Aker 1.80, QVCache 1.64, node$ 1.15. Ours wins clearly.
+- TriviaQA 0.99: 1%: drift* 2.49, static 2.47, QVCache 2.25, LRU* 2.23, Aker 1.78; 10%: cont.* 3.15,
+  LRU* 3.09, static 2.60, drift* 2.58, Aker / QVCache 2.55; node$ 1.00. Ours wins.
+- TriviaQA 0.6: 1%: cont.* 1.24, static 1.17, Aker 1.07, QVCache 0.99; 10%: LRU* 1.85, static 1.46,
+  Aker 1.35, QVCache 1.29; node$ 1.00. Ours wins.
+- SPACEV Zipf 0.6: 1%: cont.* 1.09, static 1.06, Aker 1.02 (retention 0.89), node$ 1.05; 10%: cont.*
+  1.19, static / drift* / Aker 1.13, node$ 1.11. Ours wins, narrowly.
+- SPACEV Zipf 0.3: 1%: everything <= 1.00 (static ours has no cutoff: 0 hits, pays the lookup:
+  0.97), node$ 1.07; 10%: static 1.08, Aker 1.07, node$ 1.11. node$ wins (low reuse).
+- ESCI: 1%: static 1.04, drift* 1.03, Aker 0.99, node$ 1.09; 10%: static 1.16, cont.* 1.14, node$ 1.26.
+  node$ wins: hit rates 9-24% bound any cache at ~1.25x; the extra node cache gains 26% at 10%.
+- SPACEV real log (DiskANN recall 0.9): 1%: Aker 1.04, cont.* 1.03, node$ 1.05; 10%: Aker 1.09, drift*
+  0.99, node$ 1.33. Aker / node$ win.
+- TripClick: 1%: Aker 1.10, cont.* 1.00; 10%: Aker 1.20, cont.* 1.11 (hit rate 0.246 vs Aker 0.183,
+  but its lookup costs ~1 ms per request: balls 0.31 + shell 0.43 + kNN 0.25 + serve, vs 9.4 ms
+  DiskANN; Aker's lookup ~0.04 ms). node$ < 1. Aker wins. In the simulator (headline) Aker also beats
+  ours at TripClick 1% (11.1% vs ogreedy 8.5%).
+
+Why SPACEV real is weak (not a two-stage effect; v4 had the same 3.7%): the headline plot uses an
+exact backend, the timing states a DiskANN backend at recall 0.9 (0.95 = 132 ms was over the old 100 ms
+rule). Labels are the served answer's overlap with DiskANN's top-10; the cache serves truer neighbors
+than a 0.9-recall DiskANN, so labels drop, the warm-up cutoff rises (state 1.71 vs ~1.0 in the
+exact-backend simulator run at 10%) and is lost 29% of the time: drift ours serves 3-6% in the
+stationary part vs ~10% in the simulator. Same mechanism, weaker, at recall 0.95 elsewhere. A SPACEV
+real run at 0.95 (search list 2000, beam 16, 0.953) would cut it and make misses dearer, but its answers
+take ~10 h (the 0.9 ones took 9.5 h, O_DIRECT reads at ~15k/s): not started, Jialin to decide.
+
+Where the remaining lookup cost is (two-stage made kNN small): balls (distance to every entry center)
+and shell (intruder count over 10 balls' samples) now dominate on many-entry caches (TripClick 10%:
+0.31 + 0.43 ms; LRU's many small entries: balls 1.24 ms). An index over entry centers with an exact
+bound (fit = (r_nn + d)/r >= (r_nn + d)/r_max per radius group) would cut balls without a new
+tolerance: idea, not implemented. Also: with no cutoff (cal.lam None) no request can hit, so the score
+is only needed for labels and could be background work (static SPACEV 0.3 1%: 0.97 -> ~1.0): not done.
