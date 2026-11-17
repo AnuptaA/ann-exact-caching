@@ -79,6 +79,9 @@ class CoreCache(Cache):
                 if not h:
                     del self._holders[v]
         self.core.remove_entry(int(c))
+        # evicted vectors stay as deleted graph nodes / dead slots: compact when they pile up (background)
+        if self.core.graph_deleted() > 0.3 * max(self.core.graph_elements(), 1) and self.core.graph_deleted() > 1000:
+            self.core.rebuild_index(32)
 
     def _resync_samples(self):
         """p changed: every entry's sampled shell changes (warm-up, greedy rebuilds)."""
@@ -125,12 +128,26 @@ class CoreCache(Cache):
             self._resync_samples()
         qidx = np.asarray(qidx, dtype=np.int64)
         xs = np.ascontiguousarray(np.asarray(self._q[qidx], np.float32))
-        hit, score, near, nr, feat = self.core.lookup_batch(xs, float("inf"), int(self.ef1), int(self.ef2))
+        # features for the controllers (no decision here); with a stage 2 (timing), near = the answer that
+        # would be served (lambda -inf: every query takes the stage-2 path), as the labels need
+        lam = float("-inf") if self.ef2 else float("inf")
+        hit, score, near, nr, feat = self.core.lookup_batch(xs, lam, int(self.ef1), int(self.ef2))
         X = np.asarray(feat, dtype=np.float64)
         near = np.asarray(near, dtype=np.int64)
         if self.core.n_cached() < self.k:
             near[:] = 0
         return X, near
+
+    def sync(self, model):
+        """Before core decisions: shell scope, samples (p), model coefficients."""
+        self._scope()
+        if self._core_p != self.p and len(self.entries):
+            self._resync_samples()
+        if getattr(self, "_model_id", None) != id(model):
+            mp = model.params
+            self.core.set_model(list(map(float, mp["mu"])), list(map(float, mp["sd"])),
+                                list(map(float, mp["coef"])), float(mp["intercept"]))
+            self._model_id = id(model)
 
     def mark_used(self, near_ids, t):
         """LRU: entries supplying any of the given vector ids were used at t."""

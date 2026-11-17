@@ -503,7 +503,8 @@ class Sim:
         if getattr(args, "cache_impl", "python") == "core":     # the C++ core (doc 9ah), .venv-core
             from simulations.approximate_hits.core_cache import CoreCache
             self.cache = CoreCache(D, args.k, args.R, args.bits, self.M,
-                                   maintain=not getattr(args, "no_maintain", False), threads=args.core_threads)
+                                   maintain=not getattr(args, "no_maintain", False), threads=args.core_threads,
+                                   ef1=args.core_ef1, ef2=args.core_ef2)
         else:
             self.cache = Cache(D, args.k, args.R, args.bits, self.M,
                                maintain=not getattr(args, "no_maintain", False))
@@ -519,6 +520,12 @@ class Sim:
         self.ev_i = 0
         self.events = []
         self.lam = None
+        self.timing = None
+        if getattr(args, "timing_compose", None):
+            if getattr(args, "cache_impl", "python") != "core":
+                raise SystemExit("--timing-compose needs --cache-impl core")
+            self.timing = {"compose": np.load(args.timing_compose), "every": args.timing_every,
+                           "lat": [], "hit": [], "stages": []}
         self.reset_detection()
         self.window = []            # (query, served, audited, audit rate), since the last alarm
 
@@ -1110,6 +1117,33 @@ class Sim:
 
     # -- main loop ---------------------------------------------------------
 
+    # -- timing (doc 9ah): the request path through the core, one request at a time ------------
+    def _timed_lookup(self, q, t):
+        """One request: the core's lookup (stage 1, decision, stage 2 on a hit) timed; a miss is charged that
+        request's measured DiskANN time (composed, --timing-compose); the would-be served answer of a miss
+        (its label) is computed untimed. Every --timing-every-th request after the warm-up is recorded."""
+        import time as _t
+        cache, T = self.cache, self.timing
+        cache.sync(self.model)
+        x = np.ascontiguousarray(np.asarray(self.D["q"][q], np.float32))
+        lam = self.lam if (self.lam is not None and cache.n_cached() >= self.k) else float("inf")
+        a0 = _t.perf_counter()
+        r = cache.core.lookup(x, float(lam), int(cache.ef1), int(cache.ef2))
+        dt = _t.perf_counter() - a0
+        near = np.asarray(r.near, dtype=np.int64)
+        if not r.hit and cache.ef2:
+            near = np.asarray(cache.core.serve(x, int(cache.ef2)), dtype=np.int64)
+        if len(near) < self.k:
+            near = np.concatenate([near, np.zeros(self.k - len(near), np.int64)])
+        pos = t - self.a.warmup
+        if pos % T["every"] == 0:
+            j = pos // T["every"]
+            charge = 0.0 if r.hit else float(T["compose"][j]) if j < len(T["compose"]) else np.nan
+            T["lat"].append(dt + charge)
+            T["hit"].append(bool(r.hit))
+            T["stages"].append((r.t_knn, r.t_balls, r.t_shell, r.t_model, r.t_serve))
+        return np.array([r.score]), np.array([bool(r.hit)]), near[None, :self.k]
+
     def cache_state(self):
         """The current cache as the timing harness's hit path takes it (eval_timing.FastHitPath):
         cached vector ids, entry centers and radii, the shell sample (ids and the b-bit vectors as
@@ -1173,14 +1207,20 @@ class Sim:
             # batch (U = 1: every request, as the timing harness's LRU and Aker do); labels, calibration
             # and drift tests stay per batch. Default: once per batch.
             U = getattr(a, "update_every", 0) or len(qb)
+            timed = self.timing is not None
+            if timed:
+                U = 1                        # every request is decided (and timed) on its own
             upd = method in ("lru", "ogreedy") and U < len(qb)
             parts = []
-            for u0 in range(0, len(qb), U if upd else len(qb)):
-                qs = qb[u0:u0 + U] if upd else qb
-                Xs, ns = cache.features(qs)
-                sc = self.model(Xs)
-                sv = (sc >= self.lam if self.lam is not None and cache.n_cached() >= self.k
-                      else np.zeros(len(qs), bool))
+            for u0 in range(0, len(qb), U if (upd or timed) else len(qb)):
+                qs = qb[u0:u0 + U] if (upd or timed) else qb
+                if timed:
+                    sc, sv, ns = self._timed_lookup(int(qs[0]), s + u0)
+                else:
+                    Xs, ns = cache.features(qs)
+                    sc = self.model(Xs)
+                    sv = (sc >= self.lam if self.lam is not None and cache.n_cached() >= self.k
+                          else np.zeros(len(qs), bool))
                 ys = self.y(qs, ns)
                 ye = ys if self.D["truth"] is self.D["answer"] else (
                     cache.served_retention(qs, ns, key="truth") if self.a.label == "served"
@@ -1272,10 +1312,23 @@ class Sim:
                 logger.info(f"{method} t={t}: served {done['served'] / done['n']:.3f} "
                             f"ret {done['served_retention_sum'] / max(done['served'], 1):.3f} "
                             f"lambda {self.lam} entries {len(cache.entries)} mem {done['memory']:.0f}")
-        return {"method": method, "args": vars(a), "log": self.log, "events": self.events,
-                "og_log": self.og_log, "og_fresh_log": self.og_fresh_log, "og_phi_log": self.og_phi_log,
-                "cost": dict(self.cost, vectors_fetched=cache.vectors_fetched,
-                             warmup_topR=a.warmup, short_rows=self.D["short"][0])}
+        res = {"method": method, "args": vars(a), "log": self.log, "events": self.events,
+               "og_log": self.og_log, "og_fresh_log": self.og_fresh_log, "og_phi_log": self.og_phi_log,
+               "cost": dict(self.cost, vectors_fetched=cache.vectors_fetched,
+                            warmup_topR=a.warmup, short_rows=self.D["short"][0])}
+        if self.timing is not None:
+            T = self.timing
+            lat, hit = np.array(T["lat"]) * 1e3, np.array(T["hit"], dtype=bool)
+            st = np.array(T["stages"]) * 1e3 if T["stages"] else np.zeros((0, 5))
+            summ = lambda v: None if not len(v) else {"mean_ms": float(np.mean(v)), "p50_ms": float(np.median(v)),
+                                                      "p99_ms": float(np.percentile(v, 99)), "n": int(len(v))}
+            res["timing"] = {"every": T["every"], "n_timed": int(len(lat)), "hit_rate_timed": float(hit.mean()) if len(hit) else None,
+                             "cache": dict(summ(lat) or {}, hits_ms=summ(lat[hit]), misses_ms=summ(lat[~hit])),
+                             "stage_ms": dict(zip(("knn", "balls", "shell", "model", "serve"),
+                                                  map(float, st.mean(axis=0)))) if len(st) else None,
+                             "lat_ms": lat.tolist(), "hit": hit.tolist(),
+                             "ef1": self.cache.ef1, "ef2": self.cache.ef2}
+        return res
 
 
 #-------------------------------------------------------------------------------
@@ -1467,6 +1520,14 @@ def make_parser():
                     help="core: the cache's request path in the C++ core (core_cache.CoreCache; Python 3.11 / "
                          ".venv-core; doc 9ah); python: online_sim.Cache (arrays rebuilt after every change)")
     ap.add_argument("--core-threads", type=int, default=8, help="--cache-impl core: threads of batch lookups")
+    ap.add_argument("--core-ef1", type=int, default=0,
+                    help="--cache-impl core: stage-1 search list over the cached vectors (0: exact scan, headline)")
+    ap.add_argument("--core-ef2", type=int, default=0, help="--cache-impl core: stage-2 (served points) search list")
+    ap.add_argument("--timing-compose", default=None,
+                    help="timing (doc 9ah): DiskANN-alone latency (s) of every --timing-every-th request after the "
+                         "warm-up (eval_timing_backend.py backend_s<every>_lat.npy); each request's core lookup is "
+                         "timed and a miss charged its DiskANN latency; needs --cache-impl core")
+    ap.add_argument("--timing-every", type=int, default=50)
     ap.add_argument("--update-every", type=int, default=0,
                     help="lru / ogreedy: admit and evict after every this many requests (1 = every request; "
                          "0 = once per --batch); calibration and drift tests stay per batch (doc 9ag)")
