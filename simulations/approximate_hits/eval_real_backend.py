@@ -172,6 +172,8 @@ def main():
                          "deep lists at exactly that search list and --beam (doc 9u)")
     ap.add_argument("--efforts", type=int, nargs="+", default=None,
                     help="search efforts to try (default: the index's grid, GRIDS)")
+    ap.add_argument("--share-deep", action="store_true",
+                    help="--fixed with search list >= R: one search per query for answer and deep rows (doc 9af)")
     args = ap.parse_args()
     prep = Path(args.prep)
     out = RES / "backends" / (args.out_name or prep.name)
@@ -194,8 +196,20 @@ def main():
         for pair in args.fixed:
             tgt, e = pair.split(":")
             e = int(e)
-            ans = ix.search(q, args.answer_depth, e)
-            deep = ix.search(q, args.R, e)
+            if args.share_deep and e >= args.R:
+                # one search: at search list e >= R the top-R list's first answer_depth ids are the
+                # top-answer_depth search's (k only cuts the output); checked on 200 queries first
+                chk = rng.choice(len(q), 200, replace=False)
+                same = np.mean([np.array_equal(a, b) for a, b in
+                                zip(ix.search(q[chk], args.answer_depth, e), ix.search(q[chk], args.R, e)[:, :args.answer_depth])])
+                logger.info(f"share-deep check: {same:.3f} of 200 queries identical")
+                if same < 0.99:
+                    raise SystemExit("share-deep: answers differ, run without --share-deep")
+                deep = ix.search(q, args.R, e)
+                ans = np.ascontiguousarray(deep[:, :args.answer_depth])
+            else:
+                ans = ix.search(q, args.answer_depth, e)
+                deep = ix.search(q, args.R, e)
             stats = {"effort": e, "beam": args.beam, "recall_answer_at_k": recall(truth, ans, args.k),
                      "recall_deep_at_k": recall(truth, deep, args.k),
                      "recall_deep_at_R": recall(truth, deep, args.R)}
