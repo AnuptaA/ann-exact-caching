@@ -161,7 +161,9 @@ def main():
         st.set_xlim(bs[0] * 0.75, bs[-1] * 1.35)
         st.set_xlabel("cache size (fraction of the dataset)", fontsize=9)
     fig.legend(loc="lower center", ncol=5, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
-    fig.text(0.5, 0.955, "DiskANN tuned per workload (search list x beam width, recall@10 0.95 or 0.9 if 0.95 > 100 ms), same index for every technique; whole stream after "
+    v5 = ("v5: every arm's DiskANN has the workload's base node cache (outside the cache budget); ours / LRU hit path in two stages "
+          "(hit decision from a small in-cache search, served points searched again on hits); audits timed apart, not charged. ") if VERSION == "timing_v5" else ""
+    fig.text(0.5, 0.955, v5 + "DiskANN tuned per workload (search list x beam width, recall@10 0.95 or 0.9 if 0.95 > 100 ms), same index for every technique; whole stream after "
              "warm-up, 1 in 50 requests timed end to end (DiskANN baselines with a 10 ms gap between searches; technique runs composed: backend calls charged the request's measured DiskANN time, hit path with a per-cache search list); cache updates are background work.\n"
              "Filled: mean retention of hits (served answer vs DiskANN's top-10) >= 0.89 in this run; hollow: below. "
              "Strip: mean retention of hits (served answer vs DiskANN's top-10; grey dashed: the target 0.9). Recall over all requests is in timing_table.md.",
