@@ -3356,3 +3356,29 @@ and shell (intruder count over 10 balls' samples) now dominate on many-entry cac
 bound (fit = (r_nn + d)/r >= (r_nn + d)/r_max per radius group) would cut balls without a new
 tolerance: idea, not implemented. Also: with no cutoff (cal.lam None) no request can hit, so the score
 is only needed for labels and could be background work (static SPACEV 0.3 1%: 0.97 -> ~1.0): not done.
+
+#### 9af (cont.). v5 complete (11-17 09:20): 202 runs, all audited runs rerun after the fix
+
+results/latest/timing.png, timing_table.md, timing_v5_summary.txt (v5_summary.py); v4 plot kept as
+timing_v4.png / timing_table_v4.md. Best "ours" variant (static / drift / continuous) vs the best
+other technique (Aker / QVCache tuned, meeting the target) vs DiskANN given the cache's memory as
+extra node cache ("node$"), speedup over DiskANN + base node cache:
+| workload | 1% (MedRAG 0.03%) | 10% (MedRAG 0.3%) | verdict |
+| SPACEV Zipf 0.99 | ours 1.82 / Aker 1.52 / node$ 1.07 | 1.98 / 1.80 / 1.15 | ours wins at every size |
+| TriviaQA 0.99 | 2.56 / QVCache 2.25 / 1.00 | 3.20 / 2.55 / 1.01 | ours wins |
+| TriviaQA 0.6 | 1.24 / Aker 1.07 / 0.99 | 1.80 (LRU 1.85) / 1.35 / 1.00 | ours wins |
+| TriviaQA 0.3 | 1.10 / 1.03 / 1.01 | 1.42 (LRU 1.66) / 1.19 / 1.01 | ours wins |
+| MedRAG-Zipf | 2.78 / QVCache 1.19 / 1.00 | 2.91 (LRU 3.99) / 1.71 / 1.01 | ours wins |
+| SPACEV Zipf 0.6 | 1.08 / 1.02 (ret 0.89) / 1.05 | 1.20 / 1.13 / 1.11 | ours wins, small margins |
+| SPACEV Zipf 0.3 | 0.98 / 1.00 / 1.07 | 1.11 / 1.07 / 1.11 | node$ wins (ties at 10%) |
+| ESCI (no repeats) | 1.04 / 0.99 / 1.09 | 1.16 / 0.99 / 1.26 | node$ wins; ours beats Aker / QVCache |
+| SPACEV real log (DiskANN 0.9) | 1.03 / Aker 1.04 / 1.05 | 1.00 / 1.09 / 1.33 | Aker / node$ win |
+| TripClick log | 1.00 / Aker 1.10 / 0.99 | 1.11 / 1.20 / 0.93 | Aker wins |
+Ours (some variant) beats every other technique AND node$ on 6 of 10 workloads (all with repetition
+skew: SPACEV 0.99 / 0.6, TriviaQA x3, MedRAG); continuous greedy is the best ours almost everywhere.
+Loses: low-reuse SPACEV 0.3 and ESCI to node$ (a cache cannot reach 1.26x at 9-24% hits), and the two
+real logs to Aker (SPACEV real: label vs a 0.9-recall backend, above; TripClick: ~1 ms lookup vs 9.4 ms
+DiskANN, and fewer hits than Aker at 0.3-3%).
+In flight: SPACEV real at DiskANN recall 0.95 (search list 2000, beam 16): answers started 05:31
+(backends/spacev-real95/, --share-deep: one search per query; check 200/200 identical), ~10 h. Then
+it needs states, tuning, a quiet arm and composed runs as workload alias spacev-real95.
