@@ -124,7 +124,7 @@ def timing_lines():
                 jobs.append(("ours", f"--method static --detect {ours}", ""))
             jobs.append(("oursdrift", f"--method greedy --detect score --response rebuild {ours}", ""))
             jobs.append(("oursonline", f"--method ogreedy --og-evict utility --detect {ours}", ""))
-            jobs.append(("lru", f"--method lru --k-lru 20 --detect {ours}", ""))
+            jobs.append(("lru", f"--method lru --k-lru 20 --update-every 1 --detect {ours}", ""))
             for name in candidates(w.prep, b, "qvcache"):
                 jobs.append((name, f"--method qvcache {qv_args(name)}", ""))
             for name in candidates(w.prep, b, "aker"):
