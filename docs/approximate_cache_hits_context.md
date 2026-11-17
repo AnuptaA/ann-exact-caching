@@ -3451,3 +3451,44 @@ same timed requests and hits, misses charged exactly their DiskANN time, (a) hit
 stage-2 serve time, (b) hits free. Reading (v5): TripClick best case 1.15-1.43x > Aker 1.09-1.20x at every
 size (current LRU hits suffice); SPACEV real 0.95 best case = Aker (1.04 / 1.09): hit rate, not cost;
 ESCI 0.95 best case ~= node$ (ties), at 0.97 above it; SPACEV Zipf 0.3 1-3% best case <= node$ (low reuse).
+
+### 9ah. Refactor: one cache implementation, request path in C++ (11-17 evening, decided with Jialin)
+
+Why: the simulator (online_sim.Cache, batch-vectorized, cache updated once per 1,000-request batch with
+full rebuilds) and the timing harness (eval_timing_online: own Ours / LRU / OursDrift / OursOnline,
+incremental, per request) were two implementations of the same cache; their differences caused the
+recent mismatches (TripClick LRU 7.0% vs 16.6%, labels, drift alarms, two-stage only in timing) and the
+Python request path costs ~1 ms per request on fast backends (interpreter work, cyclic GC).
+Decided: (1) the request path (cached-vector index, stage 1 / 2 search, ball fit, intruder count,
+score, serve; incremental add / evict; LRU bookkeeping) in C++ (pybind11), used by both headline and
+timing; calibration, drift detection, greedy / continuous greedy / LRU population, drivers stay in
+Python (background work, still changing); (2) graph library hnswlib 0.8.0 (vendored headers,
+Apache-2.0: markDelete / unmarkDelete for evictions; FAISS vs hnswlib benchmark only as a background
+sanity check); (3) headline runs keep exact (brute-force) search over the cached vectors, timing the
+two-stage graph path; headline backend stays exact; (4) QVCache's request path also to C++ (fairness);
+(5) a workload registry replaces the symlink aliases and per-workload special cases; (6) one replay
+driver, per-request admission, calibration / drift on the batch schedule; old code kept as the
+reference until parity tests pass, then deleted.
+Environment: Python 3.9 has no headers installed (no sudo), so the new code runs in .venv-core
+(Python 3.11; numpy 1.25.0, scipy 1.13.1, scikit-learn 1.6.1, faiss-cpu 1.8.0, diskannpy 0.7.0,
+pybind11 3.1.0, hnswlib, matplotlib, pytest).
+
+Milestone 1 (done): simulations/approximate_hits/cachecore/ (cachecore.cpp, build.sh, __init__.py).
+State: cached vectors refcounted by id (dense store + hnswlib graph; evicted -> markDelete, revived ->
+unmarkDelete; rebuild_index frees evicted slots), shell samples refcounted by id (stored as given, i.e.
+already quantized; a sample is an intruder candidate only while its id is not cached), entries (center,
+radius, ball ids, sample ids, last use; swap-remove rows), holders (vector -> entries, for LRU marks).
+lookup(x, lambda, ef1, ef2): ef1 = 0 exact scan, else graph at ef1; shell over the whole sample
+(shell_balls 0) or the n best-fitting entries' shells; stage-2 serve at ef2 on hits; per-stage times.
+lookup_batch (no cache change in between): parallel over queries, stage 2 as a second pass (hnswlib's
+search list is global). Exact distances: float32, `omp simd` reduction (-fopenmp-simd).
+Tests: tests/test_cachecore.py (8, vs a NumPy reference: scores, intruders, neighbors, add / remove round
+trip, empty cache, graph vs exact at high ef and after rebuild, batch = sequential, LRU marks).
+Parity on the saved SPACEV Zipf 0.6 1% state (parity_static.py, 1,500 requests): exact / whole sample
+vs eval_timing.HitPath and exact / 10 balls vs FastHitPath brute+balls10: 100% equal decisions, scores
+within 1e-6; graph ef 64 (hnswlib) vs FastHitPath hnsw64 (FAISS): 99.6-99.9% equal decisions, equal hit
+rate. Single thread: exact 4.9 ms (NumPy BLAS 4.3), exact 10 balls 1.9 (2.0), graph 0.16-0.18 ms (FAISS
+path 0.25).
+Not yet: database changes (inserts / deletes, the data-change experiments) are not supported by the
+core; those stay on the old simulator. Quantization range is fixed per run (from the warm-up sample)
+instead of recomputed at every rebuild as online_sim.prepare does.
