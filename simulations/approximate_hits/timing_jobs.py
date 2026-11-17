@@ -212,6 +212,10 @@ def main():
         import os
         if os.path.exists(f"{R}/timing_v4/spacev-real95/state_b0.1.npz"):    # SPACEV real at recall 0.95 (doc 9af)
             sizes["spacev-real95"] = (0.01, 0.1)
+        for alias, src in (("esci1m-r97", "esci1m"), ("spacev-aker-0.6-r97", "spacev-aker-0.6")):   # recall sensitivity
+            if os.path.exists(f"{R}/timing_v4/{alias}/state_b0.1.npz"):
+                sizes[alias] = (0.01, 0.1)
+                work.append((alias, "random" if src.startswith("esci") else "trace", False))
         streams = {p_: st_ for p_, st_, _ in work}
         techs = {p_: real_log if p_ in ("spacev-real", "spacev-real95", "tripclick-ip") else main for p_ in sizes}
         E = 50

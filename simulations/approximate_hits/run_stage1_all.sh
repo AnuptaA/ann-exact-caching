@@ -4,8 +4,8 @@ R=simulations/approximate_hits/results; S=simulations/approximate_hits
 for f in $R/timing_v4/*/state_b*.npz; do
   P=$(basename $(dirname $f)); B=$(basename $f .npz | sed 's/state_b//')
   case "$P:$B" in medrag-ip:0.01|medrag-ip:0.03|medrag-ip:0.1) continue;; esac
-  S2=trace; [ $P = esci1m ] && S2=random
-  TR=0.95; [ $P = spacev-real ] && TR=0.9
+  S2=trace; case $P in esci*) S2=random;; esac
+  TR=$(python3 -c "import json; print(f\"{json.load(open('$R/backends/$P/choice.json'))['target']:g}\")" 2>/dev/null || echo 0.95)
   O=$R/timing_v4/$P/stage1_b$B.json
   [ -f $O ] && continue
   mkdir -p $R/timing_v4/$P/logs
