@@ -1582,7 +1582,8 @@ def main():
         args.response = "recal"
     if args.method in ("aker", "qvcache"):
         from simulations.approximate_hits import online_baselines as ob
-        cls = ob.Aker if args.method == "aker" else ob.QVCache
+        cls = ob.Aker if args.method == "aker" else (
+            ob.QVCacheCore if getattr(args, "cache_impl", "python") == "core" else ob.QVCache)
         res = dict(cls(D, stream, args).run(), method=args.method, args=vars(args))
     else:
         res = Sim(D, stream, args).run(args.method)

@@ -451,3 +451,44 @@ class QVCache(Base):
         for q in misses:
             self._insert(q, s + len(qb))
         return served, ret, ret_x
+
+
+class QVCacheCore(QVCache):
+    """QVCache with its request path in the C++ core (doc 9ah; cachecore.QVCore, exact search over the cached
+    vectors, as QVCache.batch), one request at a time: a miss's answer is inserted right away (QVCache.batch
+    inserts the batch's misses at its end, so a repeat within the batch could never hit). Retention of a hit:
+    share of the backend's top-k in the served answer. Run with .venv-core (Python 3.11)."""
+
+    def __init__(self, D, stream, args):
+        super().__init__(D, stream, args)
+        from simulations.approximate_hits.cachecore import QVCore
+        self.core = QVCore(self.D["db"].shape[1], self.k, self.n_mini, int(self.cap), float(args.qv_D),
+                           float(args.qv_alpha), self.mu, np.ascontiguousarray(self.P), self.lo, self.hi,
+                           int(args.qv_buckets), False)
+
+    def n_entries(self):
+        return self.core.n_minis_used()
+
+    def batch(self, qb, s, truth, truth_x=None):
+        n = len(qb)
+        served = np.zeros(n, dtype=bool)
+        ret = np.zeros(n)
+        ret_x = ret if truth_x is None else np.zeros(n)
+        Q, db = self.D["q"], self.D["db"]
+        for i, q in enumerate(qb):
+            x = np.ascontiguousarray(np.asarray(Q[int(q)], np.float32))
+            hit, near, _ = self.core.lookup(x, float(s + i))
+            if hit:
+                served[i] = True
+                near = np.asarray(near, dtype=np.int64)
+                ret[i] = np.isin(truth[i], near).mean()
+                if truth_x is not None:
+                    ret_x[i] = np.isin(truth_x[i], near).mean()
+            else:
+                ans = np.ascontiguousarray(np.asarray(truth[i], dtype=np.int64))
+                self.core.on_miss(x, ans, np.ascontiguousarray(np.asarray(db[ans], np.float32)), float(s + i))
+        ids = np.asarray(self.core.cached_ids(), dtype=np.int64)       # for the oracle reference counts
+        self.ref[:] = 0
+        self.ref[ids] = 1
+        self.n_c = len(ids)
+        return served, ret, ret_x
