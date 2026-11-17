@@ -59,8 +59,20 @@ OURS_NAMES = ["greedy_score_rebuild", "greedy_none", "static_default"]
 LRU_NAMES = ["lru_k10_none", "lru_k20_none", "lru_k20_all"]     # configurations kept at every budget
 
 
+def v6(path):
+    """HEADLINE_V6=1 (doc 9ah): the per-request rerun of a result (results/online_v6/, LRU / QVCache on the
+    workloads with same-batch repeats) when it exists."""
+    import os
+    if os.environ.get("HEADLINE_V6") and "online" in path.parts:
+        p6 = Path(*[("online_v6" if x == "online" else x) for x in path.parts])
+        if p6.exists():
+            return p6
+    return path
+
+
 def sim_stats(path):
     """(hit rate %, mean retention of hits) of a simulator result, or None."""
+    path = v6(path)
     if not path.exists():
         return None
     log = json.loads(path.read_text())["log"]

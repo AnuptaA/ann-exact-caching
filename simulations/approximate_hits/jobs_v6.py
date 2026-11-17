@@ -143,11 +143,63 @@ def timing_lines():
     return out
 
 
+HEADLINE_RERUN = ("tripclick-ip", "spacev-real", "spacev-aker-0.99", "triviaqa-ip-0.99")   # same-batch repeats >= 0.7%
+
+
+def _cli(args, overrides):
+    """online_sim command-line flags from a run's saved args (only flags the current parser knows)."""
+    from simulations.approximate_hits.online_sim import make_parser
+    acts = {x.dest: x for x in make_parser()._actions if x.option_strings}
+    a = dict(args, **overrides)
+    out = []
+    for k, v in a.items():
+        if k not in acts or k in ("out", "tag", "save_state") or v is None:
+            continue
+        flag = acts[k].option_strings[-1]
+        if isinstance(v, bool):
+            if v and acts[k].nargs == 0:
+                out.append(flag)
+        elif isinstance(v, list):
+            out.append(f"{flag} {' '.join(map(str, v))}" if v else flag)
+        else:
+            out.append(f"{flag} {v}")
+    return " ".join(out)
+
+
+def headline_lines():
+    """Per-request reruns (doc 9ah) of the headline's LRU and QVCache on the workloads with same-batch
+    repeats, with each run's saved settings, on the core (exact search), into results/online_v6/ (same
+    folder layout as results/online/)."""
+    from simulations.approximate_hits.plot_headline import sim_dir
+    out = []
+    for name in HEADLINE_RERUN:
+        w = WORKLOADS[name]
+        for b in w.budgets:
+            for seed in (0, 1):
+                d_old = sim_dir(w.prep, w.stream, b, seed)
+                d_new = RES / "online_v6" / w.prep / d_old.name
+                names = ["lru_k10_none", "lru_k20_none"] + (
+                    [f.stem for f in sorted(d_old.glob("qvcache_*_r16x8.json"))] if seed == 0 else [])
+                for nm in names:
+                    f = d_old / f"{nm}.json"
+                    if not f.exists():
+                        continue
+                    args = json.loads(f.read_text())["args"]
+                    over = {"cache_impl": "core", "core_threads": 8}
+                    if args["method"] == "lru":
+                        over["update_every"] = 1
+                    tag = nm.split("_", 1)[1] if "_" in nm else ""
+                    js = d_new / f"{nm}.json"
+                    out.append(f"mkdir -p {d_new}/logs && [ -f {js} ] || PYTHONPATH=. {PY} {S}/online_sim.py "
+                               f"{_cli(args, over)} --tag _{tag} --out {d_new} > {d_new}/logs/{nm}.txt 2>&1")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--set", choices=["tune", "timing"], required=True)
+    ap.add_argument("--set", choices=["tune", "timing", "headline"], required=True)
     a = ap.parse_args()
-    print("\n".join(tune_lines() if a.set == "tune" else timing_lines()))
+    print("\n".join({"tune": tune_lines, "timing": timing_lines, "headline": headline_lines}[a.set]()))
 
 
 if __name__ == "__main__":
