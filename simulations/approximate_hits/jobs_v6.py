@@ -146,6 +146,16 @@ def timing_lines():
 HEADLINE_RERUN = ("tripclick-ip", "spacev-real", "spacev-aker-0.99", "triviaqa-ip-0.99")   # same-batch repeats >= 0.7%
 
 
+def graph_flags(w, b):
+    """Headline runs on the two-stage graph path (decided with Jialin 11-18: brute force too slow per
+    request): the search lists tuned on the core for this cell (tune_core.py), shell scope as tuned."""
+    f = tuning_file(w, b)
+    if not f.exists():
+        return None
+    d = json.loads(f.read_text())
+    return {"core_ef1": d["stage1"]["ef"], "core_ef2": d["stage2"]["ef"]}
+
+
 def _cli(args, overrides):
     """online_sim command-line flags from a run's saved args (only flags the current parser knows)."""
     from simulations.approximate_hits.online_sim import make_parser
@@ -171,28 +181,37 @@ def headline_lines():
     repeats, with each run's saved settings, on the core (exact search), into results/online_v6/ (same
     folder layout as results/online/)."""
     from simulations.approximate_hits.plot_headline import sim_dir
-    out = []
+    jobs = []           # (priority, line): main sizes first; LRU, then QVCache's best headline settings, then the rest
     for name in HEADLINE_RERUN:
         w = WORKLOADS[name]
-        for b in w.budgets:
+        for bi, b in enumerate(w.budgets):
+            main = b in (0.01, 0.1)
             for seed in (0, 1):
                 d_old = sim_dir(w.prep, w.stream, b, seed)
                 d_new = RES / "online_v6" / w.prep / d_old.name
-                names = ["lru_k10_none", "lru_k20_none"] + (
-                    [f.stem for f in sorted(d_old.glob("qvcache_*_r16x8.json"))] if seed == 0 else [])
-                for nm in names:
+                best = candidates(w.prep, b, "qvcache") if seed == 0 else []
+                qv = [f.stem for f in sorted(d_old.glob("qvcache_*_r16x8.json"))] if seed == 0 else []
+                names = [("lru_k10_none", 0), ("lru_k20_none", 0)] + [(q, 1 if q in best else 2) for q in qv]
+                gf = graph_flags(w, b)
+                for nm, rank in names:
                     f = d_old / f"{nm}.json"
                     if not f.exists():
                         continue
                     args = json.loads(f.read_text())["args"]
-                    over = {"cache_impl": "core", "core_threads": 8}
+                    over = {"cache_impl": "core", "core_threads": 4}
                     if args["method"] == "lru":
                         over["update_every"] = 1
+                        if gf:
+                            over.update(gf)
+                    else:
+                        over["qv_graph"] = True
                     tag = nm.split("_", 1)[1] if "_" in nm else ""
                     js = d_new / f"{nm}.json"
-                    out.append(f"mkdir -p {d_new}/logs && [ -f {js} ] || PYTHONPATH=. {PY} {S}/online_sim.py "
-                               f"{_cli(args, over)} --tag _{tag} --out {d_new} > {d_new}/logs/{nm}.txt 2>&1")
-    return out
+                    pri = (0 if main else 1, rank, seed)
+                    jobs.append((pri, f"mkdir -p {d_new}/logs && [ -f {js} ] || PYTHONPATH=. {PY} {S}/online_sim.py "
+                                      f"{_cli(args, over)} --tag _{tag} --out {d_new} > {d_new}/logs/{nm}.txt 2>&1"))
+    jobs.sort(key=lambda x: x[0])
+    return [l for _, l in jobs]
 
 
 def pool_lines():
@@ -214,6 +233,9 @@ def pool_lines():
                 over = {"cache_impl": "core", "core_threads": 4, "pool_stats": True}
                 if args["method"] == "lru":
                     over["update_every"] = 1
+                gf = graph_flags(w, b)
+                if gf:
+                    over.update(gf)
                 tag = nm.split("_", 1)[1]
                 js = d_new / f"{nm}.json"
                 out.append(f"mkdir -p {d_new}/logs && [ -f {js} ] || PYTHONPATH=. {PY} {S}/online_sim.py "

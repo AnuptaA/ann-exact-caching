@@ -474,7 +474,7 @@ class QVCacheCore(QVCache):
         # timing (--timing-compose): mini-index graphs (hnswlib, search list 64) and every request timed;
         # headline: exact search over the cached vectors
         self.timing = None
-        graph = bool(getattr(args, "timing_compose", None))
+        graph = bool(getattr(args, "timing_compose", None)) or bool(getattr(args, "qv_graph", False))
         if graph:
             self.timing = {"compose": np.load(args.timing_compose), "every": args.timing_every, "lat": [], "hit": []}
         self.core = QVCore(self.D["db"].shape[1], self.k, self.n_mini, int(self.cap), float(args.qv_D),

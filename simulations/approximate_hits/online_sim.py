@@ -1587,6 +1587,9 @@ def make_parser():
                          "timed and a miss charged its DiskANN latency; needs --cache-impl core")
     ap.add_argument("--timing-every", type=int, default=50)
     ap.add_argument("--aker-real", action="store_true", help="--method aker: the real Aker library (doc 9ah)")
+    ap.add_argument("--qv-graph", action="store_true",
+                    help="--method qvcache --cache-impl core: search the mini-indexes' graphs (hnswlib) instead of "
+                         "an exact scan, without timing (headline runs, doc 9ai)")
     ap.add_argument("--pool-stats", action="store_true",
                     help="log per batch, over the hits: entries holding served vectors, greedy cover size, the best "
                          "entry's share of the served top-k, the best single-entry retention (doc 9ai)")
