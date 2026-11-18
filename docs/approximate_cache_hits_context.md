@@ -3741,3 +3741,18 @@ unless RaBitQ. Mean stage costs per request in ms (knn / balls / shell):
 - Caveat: f 0.95 was picked after seeing TripClick. Under the no-per-workload-tuning rule, the shell size
   must come from one setting or rule for every workload (9ae: the dev-chosen split, eval_shell_budget), and
   the other workloads must be checked with it before it replaces f 0.85.
+
+#### 9ak (cont.). Corrections and checks (11-18 evening)
+- QVCache / Aker lookup cost IS in the timing: every timed request's latency is the measured lookup plus,
+  on a miss, the composed DiskANN time. Only the per-stage breakdown (stage_ms) is ours-only. Mean latency
+  on hits (v6, 10%): QVCache 0.30-1.95 ms, Aker 0.02-0.05 ms, ours 0.48-0.69 ms (ESCI), 1.54 (TripClick
+  continuous greedy), 6.56 ms (SPACEV real continuous greedy: v6 ball finding scans every entry; the f95
+  rerun uses the nearest-center finder). On a miss, ours adds 0.3-2.8 ms to DiskANN's time; QVCache adds
+  0.0-2.0 ms.
+- SPACEV real: 7.32% of requests after warm-up are exact repeats of earlier queries (TripClick 18.8%,
+  SPACEV Zipf 0.3 2.4%, ESCI 0). Aker's 8.25% hits are almost all of them, and ours (8.4% in timing,
+  10.5% headline) are mostly the same requests: this log has little near-neighbor reuse beyond exact
+  repeats.
+- ESCI node cache (node_cache_curve, 9ah): 8.69 ms with no node cache, 6.80 at 300 nodes, 5.62 at 76,800;
+  DiskANN alone in the arms (300 nodes) 6.73, node$ at 10% 5.35 ms. Not yet explained; check DiskANN's
+  per-search I/O counts with and without the node cache.
