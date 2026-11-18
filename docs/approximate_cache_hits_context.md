@@ -3637,3 +3637,38 @@ backend answers are exact in both. Hit rate (retention of hits):
   the headline comparison against Aker is conservative by about 2-5% of our hit rate on TripClick.
 - Only TripClick was checked. The loss may differ on other workloads (e.g., larger caches, other
   dimensions); add twins elsewhere if a headline cell is close.
+
+### 9aj. Status check, plot agreement, wins and losses (11-18 12:40, Jialin back)
+
+State: headline per-request reruns done except 1 run; pool statistics 57 / 60; plots redrawn 12:37
+(results/latest/headline.png, timing.png). New queues (all untimed, run beside each other):
+- v6_twins (61 runs): graph-path twins of the 65 exact-search headline runs already done (all TripClick:
+  11 LRU, 54 QVCache), into results/online_v6_graphcheck. Measures what dropping brute force cost.
+- attrib (24 runs, results/attrib): why timing hit rates are below headline hit rates (next section).
+- v6_headline_exact (jobs_v6.py --set headline-exact; 199 runs + 65 copies of exact runs already done,
+  results/online_v6_exact): the 264 headline reruns with exact search over the cache, 8 threads each.
+  Starts after every other queue (run_exact_last.sh), main sizes first.
+
+Do the two plots agree? Aker: yes, within 0.3 points in every cell (same code, same stream; headline
+Aker uses the exact backend, timing the DiskANN answers, and it does not matter for Aker). TripClick LRU
+and QVCache: within 0.1-1.9 points (both are per-request on the graph path). Ours and LRU on all other
+workloads: no. The timing hit rate is lower than the headline's by 1-4 points on SPACEV, 3-11 on
+TriviaQA, 2-10 on ESCI (timing > headline on MedRAG LRU, +1 to +16, whose headline LRU is still the old
+per-batch run). Differences between the two kinds of runs (args diff, TriviaQA 0.3 10%): timing uses the
+DiskANN recall-0.95 answers as backend (headline: exact answers), shell samples drawn from the 10
+nearest balls only (headline: 3 balls, all intruders), the graph search lists tuned on the core, LRU
+k 20 (headline: best of 10 / 20) and the headline numbers are the mean of 2 seeds. See the attribution
+table below for which of these costs how much.
+
+Wins and losses against the best alternative (best of Aker, QVCache, and for timing also DiskANN with
+the cache's memory as extra node cache), best variant of ours (greedy / continuous / drift / LRU with
+our rule) picked after the fact, as the alternatives are:
+- Headline, per-request reruns (hit rate at recall 0.9): ours >= best alternative in all 40 cells
+  (smallest ratios: TriviaQA 0.99 1%: 1.12x, SPACEV real 10%: 1.27x, SPACEV 0.99 1%: 1.30x, TripClick
+  0.3 / 1 / 3%: LRU 14.7 / 18.0 / 23.9% vs Aker 9.2 / 11.1 / 13.6%, 10%: 34.2 vs 18.3%). Before the
+  per-request LRU rerun, TripClick 0.3-3% were losses (ours 5.2 / 8.5 / 13.2% vs Aker 9.2 / 11.1 / 13.6).
+- Timing (speedup over DiskANN alone): ours wins 27 of 36 cells. The 9: SPACEV Zipf 0.3 at 0.3 / 1 / 3%
+  (node$ 1.02 / 1.07 / 1.08 vs ours 1.00 / 1.00 / 1.04; low reuse), ESCI at all four sizes (node$ 1.05 /
+  1.09 / 1.17 / 1.26 vs ours 1.05 / 1.06 / 1.08 / 1.17), SPACEV real 10% (Aker 1.088 vs 1.057) and
+  TripClick 10% (Aker 1.20 vs 1.12 in v6; 1.165 with the new ball finder, quiet run). Closest wins:
+  TripClick 3% +0.6%, SPACEV real 1% +0.8%, TripClick 1% +1.6%.

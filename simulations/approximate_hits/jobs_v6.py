@@ -176,8 +176,10 @@ def _cli(args, overrides):
     return " ".join(out)
 
 
-def headline_lines():
-    """Per-request reruns (doc 9ah) of the headline's LRU and QVCache on the workloads with same-batch
+def headline_lines(exact=False):
+    """exact=True: the same cells with exact search over the cache (ef 0, 8 threads, QVCache without
+    --qv-graph) into results/online_v6_exact/ (doc 9aj); runs already done exactly in online_v6 are copied.
+    Per-request reruns (doc 9ah) of the headline's LRU and QVCache on the workloads with same-batch
     repeats, with each run's saved settings, on the core (exact search), into results/online_v6/ (same
     folder layout as results/online/)."""
     from simulations.approximate_hits.plot_headline import sim_dir
@@ -188,22 +190,24 @@ def headline_lines():
             main = b in (0.01, 0.1)
             for seed in (0, 1):
                 d_old = sim_dir(w.prep, w.stream, b, seed)
-                d_new = RES / "online_v6" / w.prep / d_old.name
+                d_new = RES / ("online_v6_exact" if exact else "online_v6") / w.prep / d_old.name
                 best = candidates(w.prep, b, "qvcache") if seed == 0 else []
                 qv = [f.stem for f in sorted(d_old.glob("qvcache_*_r16x8.json"))] if seed == 0 else []
                 names = [("lru_k10_none", 0), ("lru_k20_none", 0)] + [(q, 1 if q in best else 2) for q in qv]
-                gf = graph_flags(w, b)
+                gf = graph_flags(w, b) if not exact else None
                 for nm, rank in names:
                     f = d_old / f"{nm}.json"
                     if not f.exists():
                         continue
                     args = json.loads(f.read_text())["args"]
-                    over = {"cache_impl": "core", "core_threads": 4}
+                    over = {"cache_impl": "core", "core_threads": 8 if exact else 4}
                     if args["method"] == "lru":
                         over["update_every"] = 1
                         if gf:
                             over.update(gf)
-                    else:
+                        if exact:
+                            over.update({"core_ef1": 0, "core_ef2": 0})
+                    elif not exact:
                         over["qv_graph"] = True
                     tag = nm.split("_", 1)[1] if "_" in nm else ""
                     js = d_new / f"{nm}.json"
@@ -245,8 +249,20 @@ def pool_lines():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--set", choices=["tune", "timing", "headline", "pool"], required=True)
+    ap.add_argument("--set", choices=["tune", "timing", "headline", "headline-exact", "pool"], required=True)
     a = ap.parse_args()
+    if a.set == "headline-exact":
+        # exact-search runs already done in online_v6 (before the switch to the graph path): copy, do not rerun
+        for f in sorted((RES / "online_v6").glob("*/*/*.json")):
+            try:
+                ar = json.loads(f.read_text())["args"]
+            except Exception:
+                continue
+            if ar.get("core_ef1") == 0 and not ar.get("qv_graph"):
+                dst = RES / "online_v6_exact" / f.parent.parent.name / f.parent.name
+                print(f"mkdir -p {dst} && cp -n {f} {dst}/")
+        print("\n".join(headline_lines(exact=True)))
+        return
     print("\n".join({"tune": tune_lines, "timing": timing_lines, "headline": headline_lines, "pool": pool_lines}[a.set]()))
 
 
