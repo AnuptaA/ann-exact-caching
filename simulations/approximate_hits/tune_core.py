@@ -39,6 +39,8 @@ def core_from_state(db, q, st, shell_balls, graph=True, threads=16):
     core.set_model(list(map(float, st["mu"])), list(map(float, st["sd"])), list(map(float, st["coef"])),
                    float(st["intercept"]))
     sv, sid = st["sv"].astype(np.float32), st["samp_ids"].astype(np.int64)
+    if int(st["bits"]) == 4 and len(sv):             # packed codes, the state's range (doc 9ai)
+        core.set_quantizer(list(map(float, sv.min(axis=0))), list(map(float, sv.max(axis=0))), 4)
     es, eo = st["entry_samp"], st["entry_samp_off"]
     ei, ev = np.empty(0, np.int64), np.empty((0, db.shape[1]), np.float32)
     for j, (c, r) in enumerate(zip(st["centers"], st["radius"])):

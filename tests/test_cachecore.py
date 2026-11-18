@@ -227,3 +227,53 @@ def test_qvcache_exact_matches_reference():
             core.on_miss(x, ans, db[ans], float(t))
         assert core.n_cached() == len(ref.owner)
     assert n_hit > 20
+
+
+def quantize4(x, lo, hi):
+    step = np.maximum(hi - lo, 1e-12) / 15
+    return (lo + np.round((np.clip(x, lo, hi) - lo) / step) * step).astype(np.float32)
+
+
+@pytest.mark.parametrize("dim", [16, 17])
+def test_packed_4bit_codes_match_float_samples(dim):
+    rng = np.random.default_rng(5)
+    db = rng.normal(size=(N_DB, dim)).astype(np.float32)
+    q = rng.normal(size=(300, dim)).astype(np.float32)
+    lo, hi = db.min(axis=0).astype(np.float64), db.max(axis=0).astype(np.float64)
+    dbq = quantize4(db, lo, hi)
+    ents = []
+    for c in rng.choice(len(q), 30, replace=False):
+        d2 = ((db - q[c]) ** 2).sum(axis=1)
+        o = np.argsort(d2)
+        ents.append((int(c), o[:25], o[25:120], float(np.sqrt(d2[o[24]]))))
+    model = (rng.normal(size=7), np.abs(rng.normal(size=7)) + 0.5, rng.normal(size=7), 0.1)
+    cores = []
+    for packed in (False, True):
+        core = cc.Core(dim, K, 10, capacity=4096)
+        core.set_model(*[list(map(float, m)) for m in model[:3]], float(model[3]))
+        if packed:
+            core.set_quantizer(list(lo), list(hi), 4)
+        for c, b, s, r in ents:
+            core.add_entry(c, q[c], r, b.astype(np.int64), db[b], s.astype(np.int64), dbq[s])
+        cores.append(core)
+    for i in range(200):
+        a, b = cores[0].lookup(q[i], 0.0, 0), cores[1].lookup(q[i], 0.0, 0)
+        assert a.intruders == b.intruders and abs(a.score - b.score) < 1e-6
+
+
+def test_ball_mode_1_full_m_equals_scan_and_mode_2_nearest(world):
+    rng, db, q, ents, model = world
+    scan = build(db, q, ents, 10, model)
+    m1 = build(db, q, ents, 10, model)
+    m1.set_ball_mode(1, len(ents), 4 * len(ents))
+    m2 = build(db, q, ents, 10, model)
+    m2.set_ball_mode(2, 10, 200)
+    cen = np.array([e[0] for e in ents]); rad = np.array([e[3] for e in ents])
+    for i in range(60):
+        a, b = scan.lookup(q[i], 0.0, 0), m1.lookup(q[i], 0.0, 0)
+        assert a.intruders == b.intruders and abs(a.score - b.score) < 1e-6
+        # mode 2: features from the 3 nearest centers
+        r = m2.lookup(q[i], 0.0, 0)
+        de = np.sqrt(((q[cen] - q[i]) ** 2).sum(axis=1))
+        o = np.argsort(de, kind="stable")[:3]
+        assert np.allclose(r.features[0:6:2], de[o] / rad[o], atol=1e-5)

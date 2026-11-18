@@ -23,7 +23,8 @@ EPS = 1e-12
 
 
 class CoreCache(Cache):
-    def __init__(self, D, k, R, bits, budget, maintain=True, threads=8, ef1=0, ef2=0):
+    def __init__(self, D, k, R, bits, budget, maintain=True, threads=8, ef1=0, ef2=0, ball_mode="fit", ball_m=64,
+                 ball_ef=64):
         super().__init__(D, k, R, bits, budget, maintain=maintain)
         if not np.all(self.D["present"]):
             raise ValueError("CoreCache: database changes are not supported")
@@ -37,6 +38,11 @@ class CoreCache(Cache):
         self.core = Core(self.dim, k, 0, capacity=int(max(budget, 1024)) + 1024, graph=bool(ef1 > 0))
         self.core.set_threads(threads)
         self.ef1, self.ef2 = ef1, ef2        # 0 / 0: exact search over the cached vectors (headline)
+        # how a request's balls are found (doc 9ai): fit = every entry, best fit; fit-m = best fit among the
+        # m nearest centers; near = the nearest centers (graph over the centers at search list ball_ef)
+        mode = {"fit": 0, "fit-m": 1, "near": 2}[ball_mode]
+        if mode:
+            self.core.set_ball_mode(mode, int(ball_m), int(ball_ef))
         self.qlo = self.qhi = None           # fixed quantization range of the shell sample
         self._holders = {}                   # vector id -> set of entry centers (LRU use marks)
         self._core_p = None                  # sampling rate the core's samples were built with
@@ -91,14 +97,21 @@ class CoreCache(Cache):
 
     def _resync_samples(self):
         """p changed: every entry's sampled shell changes (warm-up, greedy rebuilds)."""
+        ents = list(self.entries)
+        new_range = False
         if self.qlo is None and self.bits < 32:
+            # the range over the current sample (shell minus cached vectors), before the entries leave the core
             sid = self.shell_ids()
             samp = sid[self.D["draw"][sid] < self.p]
             if len(samp):
                 x = np.asarray(self._db[samp], np.float64)
                 self.qlo, self.qhi = x.min(axis=0), x.max(axis=0)
-        for c in list(self.entries):
+                new_range = True
+        for c in ents:
             self._core_remove(c)
+        if new_range:     # packed 4-bit codes in the core (identical counts; doc 9ai); other widths stay float32
+            self.core.set_quantizer(list(map(float, self.qlo)), list(map(float, self.qhi)), int(self.bits))
+        for c in ents:
             self._core_add(c)
         self._core_p = self.p
 

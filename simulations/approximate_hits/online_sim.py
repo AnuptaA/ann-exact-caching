@@ -504,7 +504,8 @@ class Sim:
             from simulations.approximate_hits.core_cache import CoreCache
             self.cache = CoreCache(D, args.k, args.R, args.bits, self.M,
                                    maintain=not getattr(args, "no_maintain", False), threads=args.core_threads,
-                                   ef1=args.core_ef1, ef2=args.core_ef2)
+                                   ef1=args.core_ef1, ef2=args.core_ef2, ball_mode=args.core_ball_mode,
+                                   ball_m=args.core_ball_m, ball_ef=args.core_ball_ef)
         else:
             self.cache = Cache(D, args.k, args.R, args.bits, self.M,
                                maintain=not getattr(args, "no_maintain", False))
@@ -1529,6 +1530,12 @@ def make_parser():
     ap.add_argument("--core-ef1", type=int, default=0,
                     help="--cache-impl core: stage-1 search list over the cached vectors (0: exact scan, headline)")
     ap.add_argument("--core-ef2", type=int, default=0, help="--cache-impl core: stage-2 (served points) search list")
+    ap.add_argument("--core-ball-mode", choices=["fit", "fit-m", "near"], default="fit",
+                    help="--cache-impl core (doc 9ai): fit = best-fitting balls over every entry; fit-m = best fit among "
+                         "the --core-ball-m nearest centers; near = the nearest centers (3 for the score, the shell scope "
+                         "for the intruder count); a graph over the centers at search list --core-ball-ef")
+    ap.add_argument("--core-ball-m", type=int, default=64)
+    ap.add_argument("--core-ball-ef", type=int, default=64)
     ap.add_argument("--timing-compose", default=None,
                     help="timing (doc 9ah): DiskANN-alone latency (s) of every --timing-every-th request after the "
                          "warm-up (eval_timing_backend.py backend_s<every>_lat.npy); each request's core lookup is "

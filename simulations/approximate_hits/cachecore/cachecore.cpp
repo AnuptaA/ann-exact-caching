@@ -33,6 +33,7 @@
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "third_party/hnswlib/hnswlib.h"
@@ -88,6 +89,31 @@ public:
         mu_ = mu; sd_ = sd; coef_ = coef; b_ = b;
     }
     void set_shell_balls(int n) { shell_balls_ = n; }
+
+    // Shell samples as packed 4-bit codes (doc 9ai): sample values are lo + c * step per dimension (the
+    // simulator's b-bit quantization); stored as two codes per byte instead of the decoded float32 values,
+    // distances computed from the codes (identical counts, 1/8 of the memory read). Set before any sample.
+    void set_quantizer(std::vector<double> lo, std::vector<double> hi, int bits) {
+        if (!sid_.empty() && sslot_.size()) throw std::logic_error("set_quantizer: samples present");
+        if (bits != 4) { qpack_ = false; return; }
+        if ((int)lo.size() != d_ || (int)hi.size() != d_) throw std::invalid_argument("quantizer dims");
+        qpack_ = true;
+        nb_ = (d_ + 1) / 2;
+        qlo_.assign(d_, 0.f); qstep_.assign(d_, 0.f);
+        for (int i = 0; i < d_; ++i) { qlo_[i] = (float)lo[i]; qstep_[i] = (float)(std::max(hi[i] - lo[i], 1e-12) / 15.0); }
+        se_.assign(nb_, 0.f); so_.assign(nb_, 0.f);
+        for (int j = 0; j < nb_; ++j) { se_[j] = qstep_[2 * j]; if (2 * j + 1 < d_) so_[j] = qstep_[2 * j + 1]; }
+        sstore_.clear(); scode_.clear(); sid_.clear(); sref_.clear(); scached_.clear(); sstamp_.clear(); sfree_.clear();
+        sslot_.clear(); n_samp_eff_ = 0;
+    }
+
+    // How the balls of a request are found (doc 9ai): 0 = every entry, best fit (default); 1 = best fit among
+    // the m nearest centers (graph over the centers at search list ef); 2 = the nearest centers themselves
+    // (3 for the score features, shell_balls for the intruder count), no fit ordering
+    void set_ball_mode(int mode, int m, int ef) {
+        ball_mode_ = mode; ball_m_ = std::max(m, N_BALLS); ball_ef_ = std::max(ef, ball_m_);
+        if (mode > 0 && !cidx_) rebuild_center_index();
+    }
     void set_threads(int n) { threads_ = std::max(1, n); }
 
     // ---------------------------------------------------------------- cached vectors
@@ -169,6 +195,7 @@ public:
         for (ssize_t j = 0; j < S.shape(0); ++j) sid[j] = S(j);
         eshell_ids_.push_back(std::move(sid));
         used_.push_back(t);
+        if (cidx_) center_insert(c, &C(0));
     }
 
     void remove_entry(i64 c) {
@@ -197,6 +224,26 @@ public:
         radius_.pop_back(); ec_.pop_back(); eball_.pop_back(); eshell_.pop_back(); eshell_ids_.pop_back();
         used_.pop_back();
         crow_.erase(c);
+        if (cidx_) {
+            cidx_->markDelete((size_t)c);
+            ++c_deleted_;
+            if (c_deleted_ > 1000 && c_deleted_ > ec_.size() / 2) rebuild_center_index();
+        }
+    }
+
+    void center_insert(i64 c, const float* v) {
+        if (cidx_labels_.count(c)) { cidx_->unmarkDelete((size_t)c); --c_deleted_; return; }
+        if (cidx_->getCurrentElementCount() + 1 > ccap_) { ccap_ *= 2; cidx_->resizeIndex(ccap_); }
+        cidx_->addPoint(v, (size_t)c);
+        cidx_labels_.insert(c);
+    }
+
+    void rebuild_center_index() {
+        ccap_ = std::max<size_t>(2 * ec_.size() + 1024, 4096);
+        cidx_.reset(new hnswlib::HierarchicalNSW<float>(&space_, ccap_, 16, 100, seed_));
+        cidx_labels_.clear();
+        c_deleted_ = 0;
+        for (size_t r = 0; r < ec_.size(); ++r) center_insert(ec_[r], &cstore_[r * d_]);
     }
 
     bool has_entry(i64 c) const { return crow_.count(c) > 0; }
@@ -273,6 +320,7 @@ public:
             py::gil_scoped_release nogil;
             // phase 1: decisions (stage 1); hnswlib's search list is global, so it is set once per phase
             if (ef1 > 0) hnsw_->setEf(std::max(ef1, k_));
+            if (cidx_ && ball_mode_ > 0) cidx_->setEf(std::max<size_t>(ball_ef_, std::max<size_t>(ball_m_, std::max(N_BALLS, shell_balls_))));
             parallel_for(n, threads_, [&](ssize_t i) { res[i] = lookup_ptr(base + i * d_, lam, ef1, 0, 1, true); });
             // phase 2: served points of the hits (stage 2)
             if (ef2 > 0) {
@@ -335,14 +383,26 @@ private:
         }
     }
 
+    void encode(const float* v, uint8_t* out) const {
+        for (int j = 0; j < nb_; ++j) {
+            int c0 = (int)std::lrint((v[2 * j] - qlo_[2 * j]) / qstep_[2 * j]);
+            int c1 = 2 * j + 1 < d_ ? (int)std::lrint((v[2 * j + 1] - qlo_[2 * j + 1]) / qstep_[2 * j + 1]) : 0;
+            c0 = std::min(std::max(c0, 0), 15); c1 = std::min(std::max(c1, 0), 15);
+            out[j] = (uint8_t)(c0 | (c1 << 4));
+        }
+    }
+
     void add_sample(i64 id, const float* v) {
         auto it = sslot_.find(id);
         int s;
         if (it == sslot_.end()) {
             if (!sfree_.empty()) { s = sfree_.back(); sfree_.pop_back(); sid_[s] = id; sref_[s] = 0; sstamp_[s] = 0;
-                                   std::copy(v, v + d_, sstore_.begin() + (size_t)s * d_); }
+                                   if (qpack_) encode(v, &scode_[(size_t)s * nb_]);
+                                   else std::copy(v, v + d_, sstore_.begin() + (size_t)s * d_); }
             else { s = (int)sid_.size(); sid_.push_back(id); sref_.push_back(0); scached_.push_back(0);
-                   sstore_.insert(sstore_.end(), v, v + d_); sstamp_.push_back(0); }
+                   if (qpack_) { scode_.resize(scode_.size() + nb_); encode(v, &scode_[(size_t)s * nb_]); }
+                   else sstore_.insert(sstore_.end(), v, v + d_);
+                   sstamp_.push_back(0); }
             sslot_[id] = s;
             auto vt = vslot_.find(id);
             scached_[s] = (vt != vslot_.end() && vref_[vt->second] > 0) ? 1 : 0;
@@ -452,19 +512,40 @@ private:
         // balls
         size_t ne = ec_.size();
         std::vector<double> fit(ne), de(ne);
-        for (size_t e = 0; e < ne; ++e) {
-            de[e] = std::sqrt(std::max((double)l2sq(x, &cstore_[e * d_], d_), 0.0));
-            fit[e] = (nr + de[e]) / radius_[e];
-        }
         size_t nb = std::min<size_t>(N_BALLS, ne);
         size_t ns = shell_balls_ > 0 ? std::min<size_t>(shell_balls_, ne) : 0;
         size_t top = std::max(nb, ns);
-        std::vector<int> idx(ne);
-        for (size_t e = 0; e < ne; ++e) idx[e] = (int)e;
+        std::vector<int> best;
         auto by_fit = [&](int a, int b) { return fit[a] < fit[b] || (fit[a] == fit[b] && a < b); };
-        if (top < ne) std::nth_element(idx.begin(), idx.begin() + top, idx.end(), by_fit);
-        std::vector<int> best(idx.begin(), idx.begin() + top);
-        std::sort(best.begin(), best.end(), by_fit);
+        if (ball_mode_ == 0 || !cidx_) {
+            for (size_t e = 0; e < ne; ++e) {
+                de[e] = std::sqrt(std::max((double)l2sq(x, &cstore_[e * d_], d_), 0.0));
+                fit[e] = (nr + de[e]) / radius_[e];
+            }
+            std::vector<int> idx(ne);
+            for (size_t e = 0; e < ne; ++e) idx[e] = (int)e;
+            if (top < ne) std::nth_element(idx.begin(), idx.begin() + top, idx.end(), by_fit);
+            best.assign(idx.begin(), idx.begin() + top);
+            std::sort(best.begin(), best.end(), by_fit);
+        } else {
+            size_t want = ball_mode_ == 1 ? std::max<size_t>(ball_m_, top) : top;
+            if (!ef_set) cidx_->setEf(std::max<size_t>(ball_ef_, want));
+            auto pq = cidx_->searchKnn(x, std::min(want, ne));
+            std::vector<int> cand;
+            while (!pq.empty()) {
+                int e = crow_.at((i64)pq.top().second);
+                de[e] = std::sqrt(std::max((double)pq.top().first, 0.0));
+                fit[e] = (nr + de[e]) / radius_[e];
+                cand.push_back(e);
+                pq.pop();
+            }
+            if (ball_mode_ == 1) std::sort(cand.begin(), cand.end(), by_fit);
+            else std::sort(cand.begin(), cand.end(), [&](int a, int b) { return de[a] < de[b] || (de[a] == de[b] && a < b); });
+            if (cand.size() > top) cand.resize(top);
+            best = cand;
+            nb = std::min(nb, best.size());
+            ns = std::min(ns, best.size());
+        }
         for (size_t j = 0; j < nb; ++j) {
             int e = best[j];
             r.features[2 * j] = de[e] / radius_[e];
@@ -474,23 +555,25 @@ private:
         // shell
         float nr2 = (float)(nr * nr);
         int cnt = 0;
+        QPrep qp;
+        if (qpack_) qprep(x, qp);
         if (shell_balls_ <= 0) {
             for (size_t s = 0; s < sid_.size(); ++s)
-                if (sref_[s] > 0 && !scached_[s] && l2sq(x, &sstore_[s * d_], d_) < nr2) ++cnt;
+                if (sref_[s] > 0 && !scached_[s] && sample_d2(x, qp, (int)s) < nr2) ++cnt;
         } else if (!ef_set) {             // one lookup at a time: one stamp array
             uint32_t stamp = next_stamp();
             for (size_t j = 0; j < ns; ++j)
                 for (int s : eshell_[best[j]]) {
                     if (sstamp_[s] == stamp) continue;
                     sstamp_[s] = stamp;
-                    if (!scached_[s] && l2sq(x, &sstore_[(size_t)s * d_], d_) < nr2) ++cnt;
+                    if (!scached_[s] && sample_d2(x, qp, s) < nr2) ++cnt;
                 }
         } else {                          // parallel batch: local dedupe
             std::vector<int> sl;
             for (size_t j = 0; j < ns; ++j) sl.insert(sl.end(), eshell_[best[j]].begin(), eshell_[best[j]].end());
             std::sort(sl.begin(), sl.end());
             sl.erase(std::unique(sl.begin(), sl.end()), sl.end());
-            for (int s : sl) if (!scached_[s] && l2sq(x, &sstore_[(size_t)s * d_], d_) < nr2) ++cnt;
+            for (int s : sl) if (!scached_[s] && sample_d2(x, qp, s) < nr2) ++cnt;
         }
         r.intruders = cnt;
         r.features[N_FEAT - 1] = std::log1p((double)cnt);
@@ -510,6 +593,29 @@ private:
         double t5 = now_s();
         r.t_knn = t1 - t0; r.t_balls = t2 - t1; r.t_shell = t3 - t2; r.t_model = t4 - t3; r.t_serve = t5 - t4;
         return r;
+    }
+
+    // per-request data for the packed-code distance: a = x - lo, split into even / odd dimensions
+    struct QPrep { std::vector<float> ae, ao; };
+    void qprep(const float* x, QPrep& p) const {
+        p.ae.assign(nb_, 0.f); p.ao.assign(nb_, 0.f);
+        for (int j = 0; j < nb_; ++j) {
+            p.ae[j] = x[2 * j] - qlo_[2 * j];
+            if (2 * j + 1 < d_) p.ao[j] = x[2 * j + 1] - qlo_[2 * j + 1];
+        }
+    }
+    inline float sample_d2(const float* x, const QPrep& p, int s) const {
+        if (!qpack_) return l2sq(x, &sstore_[(size_t)s * d_], d_);
+        const uint8_t* c = &scode_[(size_t)s * nb_];
+        const float *ae = p.ae.data(), *ao = p.ao.data(), *se = se_.data(), *so = so_.data();
+        float acc = 0.f;
+#pragma omp simd reduction(+ : acc)
+        for (int j = 0; j < nb_; ++j) {
+            float t0 = ae[j] - se[j] * (float)(c[j] & 15);
+            float t1 = ao[j] - so[j] * (float)(c[j] >> 4);
+            acc += t0 * t0 + t1 * t1;
+        }
+        return acc;
     }
 
     double model_score(const std::vector<double>& f) const {
@@ -537,6 +643,16 @@ private:
 
     int d_, k_, shell_balls_, M_, efc_, seed_, threads_ = 1;
     bool graph_on_ = true;
+    // packed 4-bit shell samples
+    bool qpack_ = false;
+    int nb_ = 0;
+    std::vector<float> qlo_, qstep_, se_, so_;
+    std::vector<uint8_t> scode_;
+    // center index (ball modes 1 / 2)
+    int ball_mode_ = 0, ball_m_ = 64, ball_ef_ = 64;
+    std::unique_ptr<hnswlib::HierarchicalNSW<float>> cidx_;
+    std::unordered_set<i64> cidx_labels_;
+    size_t ccap_ = 0, c_deleted_ = 0;
     size_t cap_;
     hnswlib::L2Space space_;
     std::unique_ptr<hnswlib::HierarchicalNSW<float>> hnsw_;
@@ -594,6 +710,8 @@ PYBIND11_MODULE(_cachecore, m) {
              py::arg("graph") = true)
         .def("set_model", &Core::set_model)
         .def("set_shell_balls", &Core::set_shell_balls)
+        .def("set_quantizer", &Core::set_quantizer)
+        .def("set_ball_mode", &Core::set_ball_mode, py::arg("mode"), py::arg("m") = 64, py::arg("ef") = 64)
         .def("set_threads", &Core::set_threads)
         .def("add_cached", &Core::add_cached)
         .def("remove_cached", &Core::remove_cached)
