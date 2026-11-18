@@ -101,7 +101,7 @@ def load_v6(name, budget, every=50):
              "recall_vs_exact_all": float("nan"), "audited_share": 0.0,
              "cache": {"mean_ms": c["mean_ms"], "p99_ms": c["p99_ms"], "hits_ms": c.get("hits_ms"),
                        "misses_ms": c.get("misses_ms")},
-             "stage_ms": T.get("stage_ms") or {}, "timing": T, "backend": a["backend"],
+             "stage_ms": T.get("stage_ms") or {}, "timing": T, "backend": a["backend"], "n_timed": T["n_timed"],
              "environment": {"verdict": "composed"}}
         if f"{budget:g}" in a["per_budget"]:
             r["backend_mem"] = a["per_budget"][f"{budget:g}"]
@@ -249,7 +249,7 @@ def main():
                     ax.plot(xs_, ys_, color=oc, ls=ls_, lw=lw_, alpha=al_, zorder=2, label=lab if j == 0 else None)
         ax.axhline(1.0, color="k", lw=0.8)
         ax.set_xscale("log")
-        ax.set_title(title if not prep.startswith("spacev-aker") else f"SPACEV, {title}", fontsize=10,
+        ax.set_title(title if (not prep.startswith("spacev-aker") or title.startswith("SPACEV")) else f"SPACEV, {title}", fontsize=10,
                      loc="left", fontweight="bold")
         if j % ncol == 0:
             ax.set_ylabel("speedup over DiskANN alone\n(mean latency, all requests)")
@@ -263,10 +263,14 @@ def main():
         st.set_xticklabels([f"{100 * b:g}%" for b in bs], fontsize=8)
         st.minorticks_off()
         st.set_xlim(bs[0] * 0.75, bs[-1] * 1.35)
-        st.set_xlabel("cache size (fraction of the dataset)", fontsize=9)
+        if j // ncol == nrow - 1 or j + ncol >= len(TRACES):        # bottom panel of its column only
+            st.set_xlabel("cache size (fraction of the dataset)", fontsize=9)
     fig.legend(loc="lower center", ncol=5, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
     v5 = ("v5: every arm's DiskANN has the workload's base node cache (outside the cache budget); ours / LRU hit path in two stages "
-          "(hit decision from a small in-cache search, served points searched again on hits); audits timed apart, not charged. ") if VERSION == "timing_v5" else ""
+          "(hit decision from a small in-cache search, served points searched again on hits); audits timed apart, not charged. ") if VERSION == "timing_v5" else (
+        "v6: every technique through one driver (online_sim) with its request path in C++ (our cache, QVCache) or the real "
+        "Aker library; base node cache in every arm; ours / LRU two-stage hit path tuned on the core; LRU admits on every "
+        "request; Aker / QVCache: the best of up to 3 candidate settings meeting the target in this run. ") if VERSION == "timing_v6" else ""
     cap = (v5 + "DiskANN tuned per workload (search list x beam width, recall@10 0.95; SPACEV real: 0.95 at 130 ms), same index for every technique; whole stream after "
              "warm-up, 1 in 50 requests timed end to end (DiskANN baselines with a 10 ms gap between searches; technique runs composed: backend calls charged the request's measured DiskANN time, hit path with a per-cache search list); cache updates are background work.\n"
              "Filled: mean retention of hits (served answer vs DiskANN's top-10) >= 0.89 in this run; hollow: below. "
