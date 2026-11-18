@@ -10,7 +10,7 @@ plots() {
 }
 while [ ! -f $M/QUIET_CHECKS.DONE ]; do sleep 60; done
 echo "$(date +%T) headline + pool"
-python3 $S/run_jobs.py $M/v6_headline_g.txt --workers 8 --cores-per-job 4 --first-core 8 --first 0.01,0.1 > $M/v6_headline_g.log 2>&1 &
+python3 $S/run_jobs.py $M/v6_headline_g.txt --workers 8 --cores-per-job 4 --first-core 8 --first 0.01,0.1,0.003,0.03,0.001,0.0001,0.0003 > $M/v6_headline_g.log 2>&1 &
 H=$!
 python3 $S/run_jobs.py $M/v6_pool_g.txt --workers 6 --cores-per-job 4 --first-core 48 > $M/v6_pool_g.log 2>&1 &
 P=$!
