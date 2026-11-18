@@ -89,6 +89,13 @@ def load_v6(name, budget, every=50):
         if not T:
             continue
         tag = rd.name[: -len(f"_b{budget:g}")]
+        # TIMING_F95=1 (doc 9al): continuous greedy / LRU from the f95 rerun (near balls, fast path, f 0.95) where done
+        if os.environ.get("TIMING_F95") and tag in ("oursonline", "lru") and (d / f"f95{rd.name}" / "DONE").exists():
+            continue
+        if tag in ("f95oursonline", "f95lru"):
+            if not os.environ.get("TIMING_F95"):
+                continue
+            tag = tag[3:]
         key = V6_TAG.get(tag) or ("aker_paper" if tag.startswith("akerpaper_") else "aker" if tag.startswith("aker_")
                                   else "qvcache" if tag.startswith("qvcache_") else None)
         if key is None:

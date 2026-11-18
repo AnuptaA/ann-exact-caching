@@ -17,6 +17,7 @@ Results: results/tuning_core/<workload>/b<b>.json, results/timing_v6/<workload>/
 import sys
 import json
 import argparse
+import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -143,6 +144,22 @@ def timing_lines():
     return out
 
 
+def timing_f95_lines():
+    """doc 9al: the v6 timing runs of our two winning variants (continuous greedy, LRU with our rule) with the
+    nearest-center ball finder, the exact-repeat fast path and the shell at 5% of memory (--f 0.95, one
+    setting for every workload), into timing_v6/<workload>/f95<tag>_b<budget> (Aker / QVCache: the v6 runs)."""
+    out = []
+    for line in timing_lines():
+        m = re.search(r"/(oursonline|lru)_b([0-9.e-]+)/DONE", line)
+        if not m:
+            continue
+        tag = m.group(1)
+        line = line.replace(f"/{tag}_b", f"/f95{tag}_b").replace(f"logs/{tag}_b", f"logs/f95{tag}_b")
+        line = line.replace(" --out ", " --core-ball-mode near --core-ball-ef 64 --core-repeat-fast --f 0.95 --out ", 1)
+        out.append(line)
+    return out
+
+
 HEADLINE_RERUN = ("tripclick-ip", "spacev-real", "spacev-aker-0.99", "triviaqa-ip-0.99")   # same-batch repeats >= 0.7%
 
 
@@ -249,7 +266,7 @@ def pool_lines():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--set", choices=["tune", "timing", "headline", "headline-exact", "pool"], required=True)
+    ap.add_argument("--set", choices=["tune", "timing", "timing-f95", "headline", "headline-exact", "pool"], required=True)
     a = ap.parse_args()
     if a.set == "headline-exact":
         # exact-search runs already done in online_v6 (before the switch to the graph path): copy, do not rerun
@@ -263,7 +280,7 @@ def main():
                 print(f"mkdir -p {dst} && cp -n {f} {dst}/")
         print("\n".join(headline_lines(exact=True)))
         return
-    print("\n".join({"tune": tune_lines, "timing": timing_lines, "headline": headline_lines, "pool": pool_lines}[a.set]()))
+    print("\n".join({"tune": tune_lines, "timing": timing_lines, "timing-f95": timing_f95_lines, "headline": headline_lines, "pool": pool_lines}[a.set]()))
 
 
 if __name__ == "__main__":
