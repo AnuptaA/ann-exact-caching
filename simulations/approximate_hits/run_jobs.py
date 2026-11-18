@@ -22,12 +22,14 @@ def main():
     ap.add_argument("--first", default="0.01,0.1,0.001,0.0001", help="budgets run first")
     a = ap.parse_args()
     lines = [l for l in open(a.lines).read().splitlines() if l.strip()]
-    prep = [l for l in lines if "online_sim.py" not in l]
-    jobs = [l for l in lines if "online_sim.py" in l]
+    is_job = lambda l: "online_sim.py" in l or "hit_table.py" in l
+    prep = [l for l in lines if not is_job(l)]
+    jobs = [l for l in lines if is_job(l)]
     first = set(a.first.split(","))
 
     def key(l):
-        b = re.search(r"--budget ([0-9.e-]+)", l).group(1)
+        mb = re.search(r"--budget ([0-9.e-]+)", l)
+        b = mb.group(1) if mb else ""
         return (0 if b in first else 1)
     jobs.sort(key=key)                 # stable: registry order within each group
     for l in prep:
@@ -47,7 +49,7 @@ def main():
             with lock:
                 free.append(w)
                 free.sort()
-        m = re.search(r"--out (\S+)", l)
+        m = re.search(r"--out (\S+)", l) or re.search(r"(hit_tables/\S+\.npz)", l)
         print(f"done {m.group(1) if m else l[:80]}", flush=True)
 
     with ThreadPoolExecutor(a.workers) as ex:

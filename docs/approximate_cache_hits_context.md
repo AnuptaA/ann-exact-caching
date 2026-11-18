@@ -3756,3 +3756,38 @@ unless RaBitQ. Mean stage costs per request in ms (knn / balls / shell):
 - ESCI node cache (node_cache_curve, 9ah): 8.69 ms with no node cache, 6.80 at 300 nodes, 5.62 at 76,800;
   DiskANN alone in the arms (300 nodes) 6.73, node$ at 10% 5.35 ms. Not yet explained; check DiskANN's
   per-search I/O counts with and without the node cache.
+
+### 9al. Hit-rate ladder on static caches (11-18 evening, decided with Jialin)
+
+Direction change: instead of changing the implementation and re-timing to find what saves time at the same
+hit rate, measure first what each approximation costs in hit rate, on static warm-up caches, and only time
+the approximations that cost little. Then validate on a few targeted dynamic (per-request) runs.
+
+hit_table.py (one table per workload x budget x cache variant x backend): the simulator's warm-up cache,
+then for every distinct request (warm-up fit / calibration splits, and up to 50,000 post-warm-up requests)
+the raw ingredients of the hit decision: exact kNN over the cached vectors (nr, served answer, retention vs
+the backend's and the exact top-k), the 10 best-fitting and 10 nearest entries, single-entry serving
+(best-fit, nearest, best of 10), intruder counts for scope {3, 10} x order {fit, near} x sampling rate
+{4, 2, 1, 0.5, 0.25, 0.1} x p0 (nested draws: one pass) in float and 4-bit, RaBitQ at p0, the whole sample
+at p0, the vectors examined (cost proxy), and graph variants from the core (stage-1 nr at ef 16 / 64 / 256
+and the tuned ef, fit order, deployed counts, stage-2 served answers). Exact parts are batched matrix
+products. Validated: features equal the simulator's (max difference 0.0002), labels identical.
+Cache variants: default (f 0.85, K 10..500), maxk10 (K = k: past top-k only, like Aker / QVCache), f95,
+f100 (no shell); backends: exact, diskann (balls / shells / labels from DiskANN's lists and answers).
+hit_ladder.py: per variant, on random 30 / 30 / 40% train / calibration / test splits of the post-warm-up
+requests (5 draws): oracle hit rate (given the served answers), model with the best cutoff (ranking
+quality), model + calibrated lambda (online_sim's rule; every request labeled, as --oracle-cal), plus
+training-size and calibration-size sweeps and the as-deployed warm-up splits. --summary: every variant
+relative to the reference (3 best-fit balls + count over the whole 4-bit sample, exact search) across
+cells, and the cross-table comparisons (backend, cache variants, oracle whole cache vs single entry).
+First look (TripClick 1%, test with 1,000 requests only): on a static cache graph search costs nothing
+(median stage-1 nr ratio 1.001, served retention 0.1596 vs 0.1597): the 1.5-5.9% loss of the dynamic
+graph twins (9aj) must come from the online graph (incremental inserts at efConstruction 40, deletions).
+Cache composition there: 55% of cached vectors are in their entry's first k; entries K 10: 484, 20: 250,
+50: 75, 100: 15, 200: 2; shell 15% of memory.
+Queue: 200 jobs (5 cache / backend variants x 40 cells: 10 main workloads x 4 headline sizes), 12 at a
+time, after the f95 timing rerun (run_tables.sh). The exact-search headline rerun is cancelled (not
+started; its job file /tmp/mx/v6_headline_exact.txt is kept).
+Planned dynamic checks after the ladder: per-request LRU / continuous greedy on the online graph vs exact
+(graph degradation), the chosen cuts per request, and the 2 x 2 (past top-k vs expanded balls) x (single
+entry vs whole cache) on dynamic caches.
