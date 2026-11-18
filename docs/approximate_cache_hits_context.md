@@ -3791,3 +3791,44 @@ started; its job file /tmp/mx/v6_headline_exact.txt is kept).
 Planned dynamic checks after the ladder: per-request LRU / continuous greedy on the online graph vs exact
 (graph degradation), the chosen cuts per request, and the 2 x 2 (past top-k vs expanded balls) x (single
 entry vs whole cache) on dynamic caches.
+
+#### 9al (cont.). Online graph check and first ladder results (11-18 23:30)
+Online graph (TripClick LRU k 20, per request, seed 0; hit rate / retention):
+
+| | 1% | 3% |
+|---|---|---|
+| exact search | 18.20% / .912 | 23.89% / .912 |
+| graph, tuned lists, inserts at efConstruction 40 (v6) | 17.94% / .910 | 22.82% / .914 |
+| graph, tuned lists, inserts at 200 | 18.21% / .910 | 23.62% / .914 |
+| graph, lists 64 / 256, inserts at 200 | 18.18% / .911 | 23.75% / .913 |
+
+The graph loss of the dynamic runs (9aj) is mostly the cheap incremental inserts (`--core-insert-ef`, new;
+inserts are background work). Decision candidate: inserts at 200 by default.
+
+f 0.95 timing rerun, first 19 of 72 cells (then held for the tables): ESCI fails (1%: 0% hits for LRU and
+continuous greedy, v6 4.8 / 8.9%; 10%: LRU 15.6 -> 9.5%); elsewhere small gains (SPACEV 0.99 10% LRU 1.80 ->
+1.93x, TriviaQA 1% +0.03x). One fixed shell size does not fit every workload.
+
+Ladder, default cache, exact backend, all 40 cells (5 draws each; hit_tables/summary.md). Calibrated hit
+rate relative to the reference (3 best-fit balls + count over the whole 4-bit sample, exact search):
+- The reference gets 79% of the oracle on average (by workload 0.58 TriviaQA 0.3, 0.62 SPACEV 0.3, 0.71 ESCI /
+  TripClick, 0.78-0.83 TriviaQA 0.6 / SPACEV 0.6 / SPACEV real, 0.95-0.97 Zipf 0.99 and MedRAG).
+- Features: 2 balls lose nothing (mean 1.007, min 0.978); 1 ball 0.996 mean but 0.92 on SPACEV 0.3 (min
+  0.69); without the intruder count 0.85 (min 0.41): the shell count matters, the 3rd ball does not.
+- Count precision: float counts beat the 4-bit codes by 5% on average (TriviaQA 0.3 +29%, SPACEV 0.3 / TripClick
+  +6%): the 4-bit scalar quantization with the sample's range is lossy. RaBitQ (1 bit of the raw vectors) is
+  about as good as or better than the 4-bit codes over the same shells (scope 10 balls: 0.974 vs 0.939).
+- Shell scope / size: counting over the shells of the 10 best-fitting balls instead of the whole sample:
+  0.939 (TriviaQA 0.3 0.85, SPACEV 0.3 0.87); 3 balls 0.918; a quarter of the samples 0.88; more samples help
+  (p x4 over 10 balls: 0.993).
+- Ball finder: the 3 nearest centers instead of the best-fitting: ESCI 0.47, SPACEV 0.3 0.76, others 0.94-1.0.
+  Bad where requests are not repeats.
+- Graph search (static cache, tuned lists): 0.93-1.02 by workload (SPACEV real / TriviaQA 0.3 0.93); fixed small
+  stage-2 lists collapse on large caches (stage 2 must be tuned per cache).
+- Serving from one entry instead of the whole cache: 0.64 mean (ESCI 0.08, TriviaQA 0.3 / 0.6 ~0.5, MedRAG 0.58,
+  Zipf 0.99 0.92). The oracle of single-entry serving is also far lower (ESCI 10%: 23.1 vs 37.1%).
+- Calibration size: 2,000 requests 0.97, 1,000 0.93, 250 0.80 (min 0.20); 8,000-16,000 +4%. Training size barely
+  matters above 1,000 (0.99).
+- As deployed (warm-up splits) 1.05 of the reference, but retention < T - 0.01 in 4 of 40 cells (the warm-up
+  does not represent later requests in those cells).
+- DiskANN backend (cells done so far): -0 to -10% (ESCI 10% 30.1 -> 27.0%), SPACEV 0.3 0.3%: 2.0 -> 0.6%.

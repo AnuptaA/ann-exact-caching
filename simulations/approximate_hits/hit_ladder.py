@@ -191,7 +191,27 @@ def summary():
     for f in sorted(base.glob("*/*.ladder.json")):
         d = json.loads(f.read_text())
         m = d["meta"]
+        # the cell's tuned search lists (tune_core) -> one row "graph tuned"
+        tf = RES / "tuning_core" / m["workload"] / f"b{m['budget']:g}.json"
+        if tf.exists():
+            t = json.loads(tf.read_text())
+            pre = f"graph ef {t['stage1']['ef']}/{t['stage2']['ef']}:"
+            d["variants"].update({n.replace(pre, "graph tuned:"): v for n, v in list(d["variants"].items()) if n.startswith(pre)})
+        fixed = {f"graph ef {a}/{b}:" for a, b in ((16, 64), (64, 256), (256, 1024))}
+        d["variants"] = {n: v for n, v in d["variants"].items()
+                         if not n.startswith("graph ef") or any(n.startswith(p) for p in fixed)}
         L[(m["workload"], m["budget"], m["variant"], m["backend"])] = d
+    return _summary(base, L)
+
+
+KEY = ["features: 1 ball + count", "features: 2 balls + count", "features: count float (all samples)",
+       "shell: 10 best-fit balls, p x1, 4-bit", "shell: 10 best-fit balls, p x0.25, 4-bit",
+       "shell: 10 best-fit balls, p x1, RaBitQ", "balls: 3 nearest, shell 10 nearest, p x1, 4-bit",
+       "graph tuned: features + served answer", "graph tuned: + shell 10 best-fit (timing v6)",
+       "serve: best-fit entry only"]
+
+
+def _summary(base, L):
     lines = ["# Hit-rate ladder (doc 9al)", "",
              "Calibrated hit rate at T relative to the reference variant of the same cache (3 best-fit balls + "
              "count over the whole 4-bit sample, exact search), default cache, exact backend. mean / min over "
@@ -232,6 +252,40 @@ def summary():
         ors = f"{100 * dd['oracle_single_best10']:.1f}" if dd else "-"
         lines.append(f"| {w} | {b:g} | {g('default', 'exact')} | {g('default', 'diskann')} | {g('maxk10', 'exact')} | "
                      f"{g('f95', 'exact')} | {g('f100', 'exact')} | {orc} | {ors} |")
+    # training / calibration sizes (reference variant), relative to the default sizes
+    lines += ["", f"Training / calibration size (reference variant; relative to n_fit = n_cal = {N_FIT}), mean / min over cells:", "",
+              "| n | training: rel. | min | calibration: rel. | min | calibration: below / draws |", "|---|---|---|---|---|---|"]
+    de = [d for k, d in L.items() if k[2] == "default" and k[3] == "exact"]
+    for n in FIT_SWEEP:
+        fr = [d["fit_sweep"][str(n)]["cal"] / d["fit_sweep"][str(N_FIT)]["cal"] for d in de if d["fit_sweep"][str(N_FIT)]["cal"] > 0]
+        cr = [d["cal_sweep"][str(n)]["cal"] / d["cal_sweep"][str(N_CAL)]["cal"] for d in de if d["cal_sweep"][str(N_CAL)]["cal"] > 0]
+        cb = sum(d["cal_sweep"][str(n)]["cal_below"] for d in de)
+        cd = sum(d["cal_sweep"][str(n)]["draws"] for d in de)
+        lines.append(f"| {n} | {np.mean(fr):.3f} | {np.min(fr):.3f} | {np.mean(cr):.3f} | {np.min(cr):.3f} | {cb} / {cd} |")
+    dep = [d["deployed"]["cal"] / d["variants"][next(iter(d["variants"]))]["cal"] for d in de
+           if d["variants"][next(iter(d["variants"]))]["cal"] > 0]
+    lines += ["", f"As deployed (warm-up fit / calibration splits, ~4,000 each), relative to the reference: mean "
+              f"{np.mean(dep):.3f}, min {np.min(dep):.3f}; deployed retention below T - 0.01 in "
+              f"{sum(1 for d in de if (d['deployed']['cal_ret'] or 1) < d['meta']['T'] - 0.01)} of {len(de)} cells."]
+    # per workload: the main cuts, relative to the reference (mean over the workload's sizes)
+    wl = sorted({k[0] for k in L})
+    lines += ["", "Main cuts per workload (calibrated hit rate relative to the reference, mean over sizes):", "",
+              "| variant | " + " | ".join(wl) + " |", "|---|" + "---|" * len(wl)]
+    for n in ["ref oracle share"] + KEY:
+        cells = []
+        for w in wl:
+            vals = []
+            for k, d in L.items():
+                if k[0] != w or k[2] != "default" or k[3] != "exact":
+                    continue
+                V = d["variants"]
+                r = V[next(iter(V))]
+                if n == "ref oracle share":
+                    vals.append(r["cal"] / r["oracle"] if r["oracle"] > 0 else np.nan)
+                elif n in V and r["cal"] > 0:
+                    vals.append(V[n]["cal"] / r["cal"])
+            cells.append(f"{np.nanmean(vals):.2f}" if vals else "-")
+        lines.append(f"| {n} | " + " | ".join(cells) + " |")
     (base / "summary.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
 

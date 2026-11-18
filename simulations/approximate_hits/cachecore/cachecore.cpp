@@ -124,6 +124,8 @@ public:
         if ((mode == 1 || mode == 2) && !cidx_) rebuild_center_index();
     }
     void set_threads(int n) { threads_ = std::max(1, n); }
+    // efConstruction of incremental graph inserts (an entry's ball; default 40, doc 9al: does the online graph degrade?)
+    void set_insert_ef(int n) { inc_efc_ = std::max(n, 1); }
 
     // Exact-repeat fast path (doc 9ak): a request whose vector equals a cached entry's center (hash of the
     // bytes, then an exact compare) is served that entry's own k nearest ball members, skipping kNN, balls,
@@ -522,7 +524,7 @@ private:
         if (need > cap_) { cap_ = std::max(need, 2 * cap_); hnsw_->resizeIndex(cap_); }
         // bulk builds (warm-up, rebuilds) at ef_construction; incremental inserts (an entry's ball) at 40, as
         // the Python harness did (2x cheaper, measured 11-11): background work either way
-        hnsw_->ef_construction_ = std::max<size_t>(items.size() > 256 ? (size_t)efc_ : std::min(40, efc_), (size_t)M_);
+        hnsw_->ef_construction_ = std::max<size_t>(items.size() > 256 ? (size_t)efc_ : std::min(inc_efc_, efc_), (size_t)M_);
         auto add = [&](ssize_t j) {
             hnsw_->addPoint(&vstore_[(size_t)items[j].second * d_], (size_t)items[j].first);
             in_graph_[items[j].second] = 1;
@@ -830,7 +832,7 @@ private:
         for (auto& h : th) h.join();
     }
 
-    int d_, k_, shell_balls_, M_, efc_, seed_, threads_ = 1;
+    int d_, k_, shell_balls_, M_, efc_, seed_, threads_ = 1, inc_efc_ = 40;
     bool graph_on_ = true;
     // packed 4-bit shell samples
     bool qpack_ = false;
@@ -914,6 +916,7 @@ PYBIND11_MODULE(_cachecore, m) {
              py::arg("scan_below") = 0)
         .def("set_threads", &Core::set_threads)
         .def("set_repeat_fast", &Core::set_repeat_fast)
+        .def("set_insert_ef", &Core::set_insert_ef)
         .def("set_rabitq", &Core::set_rabitq)
         .def("add_cached", &Core::add_cached)
         .def("remove_cached", &Core::remove_cached)

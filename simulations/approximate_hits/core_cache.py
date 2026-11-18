@@ -25,7 +25,7 @@ FAST_SCORE = 1e9      # the core's score of an exact repeat (fast path, doc 9ak)
 
 class CoreCache(Cache):
     def __init__(self, D, k, R, bits, budget, maintain=True, threads=8, ef1=0, ef2=0, ball_mode="fit", ball_m=64,
-                 ball_ef=64, ball_scan_below=1000, repeat_fast=False, shell_code="sq"):
+                 ball_ef=64, ball_scan_below=1000, repeat_fast=False, shell_code="sq", insert_ef=40):
         super().__init__(D, k, R, bits, budget, maintain=maintain)
         if not np.all(self.D["present"]):
             raise ValueError("CoreCache: database changes are not supported")
@@ -38,6 +38,8 @@ class CoreCache(Cache):
         # exact search (headline, ef1 = 0) needs no graph: none is maintained
         self.core = Core(self.dim, k, 0, capacity=int(max(budget, 1024)) + 1024, graph=bool(ef1 > 0))
         self.core.set_threads(threads)
+        if insert_ef != 40:
+            self.core.set_insert_ef(int(insert_ef))
         self.ef1, self.ef2 = ef1, ef2        # 0 / 0: exact search over the cached vectors (headline)
         # how a request's balls are found (doc 9ai): fit = every entry, best fit; fit-m = best fit among the
         # m nearest centers; near = the nearest centers (graph over the centers at search list ball_ef)

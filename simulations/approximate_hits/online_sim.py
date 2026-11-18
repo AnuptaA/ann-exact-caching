@@ -514,7 +514,8 @@ class Sim:
                                    ball_m=args.core_ball_m, ball_ef=args.core_ball_ef,
                                    ball_scan_below=args.core_ball_scan_below,
                                    repeat_fast=getattr(args, "core_repeat_fast", False),
-                                   shell_code=getattr(args, "core_shell_code", "sq"))
+                                   shell_code=getattr(args, "core_shell_code", "sq"),
+                                   insert_ef=getattr(args, "core_insert_ef", 40))
         else:
             self.cache = Cache(D, args.k, args.R, args.bits, self.M,
                                maintain=not getattr(args, "no_maintain", False))
@@ -1588,6 +1589,8 @@ def make_parser():
     ap.add_argument("--core-repeat-fast", action="store_true",
                     help="exact-repeat fast path: a request equal to a cached entry's center is served that entry's "
                          "own top-k, skipping the hit path (doc 9ak)")
+    ap.add_argument("--core-insert-ef", type=int, default=40,
+                    help="efConstruction of incremental graph inserts (bulk builds use 200; doc 9al)")
     ap.add_argument("--core-shell-code", choices=["sq", "rabitq"], default="sq",
                     help="shell sample codes in the core: b-bit scalar quantization (4 bits: packed) or 1-bit RaBitQ "
                          "(doc 9ak; memory still charged at --bits)")
