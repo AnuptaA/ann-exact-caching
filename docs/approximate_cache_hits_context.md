@@ -3707,3 +3707,12 @@ the 3 nearest balls' shells instead of 10).
 Runs (timing_v6c/tripclick-ip, quiet window via run_quiet2.sh, 4 at a time, untimed queues paused): LRU and
 continuous greedy x {fast, rabitq, fastrq, fastf95, fastsb3} x 10% / 1% / 3% / 0.3%, against the near_ runs of
 9ai (same quiet conditions). Untimed smoke runs first (results/smoke9ak, TripClick 1% LRU).
+
+Smoke runs (untimed, TripClick 1% LRU k 20, per request, near + timing settings; results/smoke9ak):
+baseline (near_, 9ai) 17.39% / 0.914; fast path 17.49% / 0.914; RaBitQ 18.01% / 0.913; both 17.96% / 0.915.
+The quiet window started 15:37 (13 processes paused).
+
+Graph vs exact twins, all 65 (TripClick, 9aj): LRU with our rule loses 1.5-5.9% of its hits (best setting
+k 20: 1% -1.5 / -3.1% for seeds 0 / 1, 0.3% -2.3 / -2.4%, 3% -4.5 / -5.9%), retention unchanged. QVCache:
+D 0 loses 17-19% of its hits and ~0.035 retention; every other D is within 0.8%. No QVCache setting meets
+0.9 on TripClick in either mode.
