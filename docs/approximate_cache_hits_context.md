@@ -3579,3 +3579,61 @@ best entry 94% of the served top-k, single-entry retention 0.846 vs pool 0.882.
 Scheduling (03:00): headline per-request reruns ~12 / h (exact scans per request, 8 threads each), 65 / 264
 done; paused with SIGSTOP (run_quiet_now.sh, /tmp/mx/paused_pids.txt) for the quiet checks (solo LRU cells,
 then TripClick near / fit-packed runs, 4 at a time, timing_v6c), resumed automatically afterwards.
+
+#### 9ai (cont.). Quiet TripClick checks (timing_v6c, 11-18 03:32-04:38)
+18 timed runs, 4 at a time on an otherwise idle machine. `fitpacked_` = default ball fit + packed 4-bit
+shell codes, `near_` = nearest-center ball (center index) + packed codes. Same composed timing as v6
+(each miss charged that request's measured DiskANN latency). Speedup over DiskANN alone (mean latency;
+v6 = float codes, best fit, 8 runs at once):
+
+| budget | variant | v6 | fit + packed | near + packed | best Aker meeting the target |
+|---|---|---|---|---|---|
+| 0.3% | LRU, our rule | 1.127 (hit 0.146) | - | 1.126 (0.142) | 1.084 |
+| 1% | LRU, our rule | 1.119 (0.174) | 1.142 (0.174) | 1.138 (0.174) | 1.101 |
+| 1% | continuous greedy | 1.032 | 1.038 | 1.038 | |
+| 10% | LRU, our rule | 1.012 (0.326) | 1.037 (0.326) | 1.165 (0.335) | 1.201 (hit 0.183, ret 0.937) |
+| 10% | continuous greedy | 1.119 (0.251) | 1.138 (0.248) | 1.125 (0.245) | |
+| 10% | drift handling | 0.988 | 1.016 | 0.988 | |
+
+- Sanity: fit + packed hit rates match v6 within 0.001 for LRU and within 0.004 for continuous greedy
+  (packed codes move a few intruder counts; drift handling moves more, 0.134 -> 0.124 at 10%, because
+  its drift test and rebuilds amplify small differences). Retention stays at 0.909-0.934 everywhere.
+- Mean stage costs per request, TripClick 10% LRU: ball finding 1.29 ms (v6) -> 1.16 (fit, quiet)
+  -> 0.27 (near); intruder count 0.84 -> 0.76 -> 0.73; first-stage kNN 0.43. With `near`, the intruder
+  count is now the largest term. The packed codes alone save ~0.1 ms here; most of the v6 -> quiet gain
+  at 1% comes from the quiet machine.
+- Result: `near` lifts TripClick 10% LRU from 1.04x to 1.17x but it is still below Aker's 1.20x: we
+  serve 33.5% of requests vs Aker's 18.3%, yet our hit path costs ~1.6 ms per request on average vs
+  Aker's ~0.04 ms lookup. Below 10% we beat Aker at every size (0.3%: 1.13 vs 1.08, 1%: 1.14 vs 1.10).
+  `near` does not help continuous greedy (its balls are already few; near picks balls with larger
+  shells, intruder count 0.20 -> 0.30 ms).
+- Next lever for the 10% cells: the intruder count (fewer shell samples per ball, or 1-bit RaBitQ codes,
+  9ai D), not the ball search.
+- Bug found: QVCacheCore with --qv-graph and no --timing-compose tried to load the timing file (TypeError
+  at start); fixed (load only in timed mode). Only the 4 QVCache graph twins (below) hit it; rerun.
+
+#### 9ai (cont.). Cost of the graph path in the headline (graph vs exact twins, 11-18 05:30)
+The headline per-request reruns now search the cache with the two-stage graph path (hnswlib; QVCache:
+mini-index graphs, --qv-graph) instead of exact scans. To measure what that costs, 8 TripClick cells
+already finished with exact scans were rerun with the graph path (results/online_v6_graphcheck). The
+backend answers are exact in both. Hit rate (retention of hits):
+
+| budget | method | exact scans | graph path | change in hit rate |
+|---|---|---|---|---|
+| 0.3% | LRU, our rule, k 10 | 11.38% (0.916) | 10.79% (0.919) | -0.59 pts (-5.2%) |
+| 0.3% | LRU, our rule, k 20 (best) | 14.94% (0.913) | 14.60% (0.914) | -0.34 pts (-2.3%) |
+| 3% | LRU, our rule, k 10 | 19.96% (0.908) | 19.22% (0.908) | -0.74 pts (-3.7%) |
+| 3% | LRU, our rule, k 20 (best) | 23.89% (0.912) | 22.82% (0.914) | -1.07 pts (-4.5%) |
+| 0.3% | QVCache D 0, m 8 | 8.00% (0.837) | 6.63% (0.798) | -1.37 pts (-17%) |
+| 3% | QVCache D 0, m 8 | 12.68% (0.840) | 10.38% (0.807) | -2.30 pts (-18%) |
+| 0.3% | QVCache D 0.075, m 4 | 17.92% (0.423) | 17.99% (0.418) | +0.07 pts |
+| 3% | QVCache D 0.075, m 4 | 25.42% (0.466) | 25.37% (0.465) | -0.05 pts |
+
+- Ours (LRU with our rule) loses 2-5% of its hits, and retention is unchanged, because the calibration
+  sees the same graph path it is served with. Graph misses mean some useful entries are not found.
+- QVCache with a tight threshold (D 0) loses ~17% of its hits and ~0.035 retention. No QVCache setting
+  here meets the 0.9 target in either mode, so its headline point (best below target) moves little.
+- Aker (real library) uses its own index in both modes, so the graph path costs only ours and QVCache:
+  the headline comparison against Aker is conservative by about 2-5% of our hit rate on TripClick.
+- Only TripClick was checked. The loss may differ on other workloads (e.g., larger caches, other
+  dimensions); add twins elsewhere if a headline cell is close.

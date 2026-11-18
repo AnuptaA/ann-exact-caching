@@ -475,7 +475,7 @@ class QVCacheCore(QVCache):
         # headline: exact search over the cached vectors
         self.timing = None
         graph = bool(getattr(args, "timing_compose", None)) or bool(getattr(args, "qv_graph", False))
-        if graph:
+        if getattr(args, "timing_compose", None):
             self.timing = {"compose": np.load(args.timing_compose), "every": args.timing_every, "lat": [], "hit": []}
         self.core = QVCore(self.D["db"].shape[1], self.k, self.n_mini, int(self.cap), float(args.qv_D),
                            float(args.qv_alpha), self.mu, np.ascontiguousarray(self.P), self.lo, self.hi,
