@@ -265,9 +265,9 @@ def test_ball_mode_1_full_m_equals_scan_and_mode_2_nearest(world):
     rng, db, q, ents, model = world
     scan = build(db, q, ents, 10, model)
     m1 = build(db, q, ents, 10, model)
-    m1.set_ball_mode(1, len(ents), 4 * len(ents))
+    m1.set_ball_mode(1, len(ents), 4 * len(ents), 0)
     m2 = build(db, q, ents, 10, model)
-    m2.set_ball_mode(2, 10, 200)
+    m2.set_ball_mode(2, 10, 200, 0)
     cen = np.array([e[0] for e in ents]); rad = np.array([e[3] for e in ents])
     for i in range(60):
         a, b = scan.lookup(q[i], 0.0, 0), m1.lookup(q[i], 0.0, 0)

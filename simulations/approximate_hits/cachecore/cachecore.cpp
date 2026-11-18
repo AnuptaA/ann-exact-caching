@@ -103,16 +103,18 @@ public:
         for (int i = 0; i < d_; ++i) { qlo_[i] = (float)lo[i]; qstep_[i] = (float)(std::max(hi[i] - lo[i], 1e-12) / 15.0); }
         se_.assign(nb_, 0.f); so_.assign(nb_, 0.f);
         for (int j = 0; j < nb_; ++j) { se_[j] = qstep_[2 * j]; if (2 * j + 1 < d_) so_[j] = qstep_[2 * j + 1]; }
-        sstore_.clear(); scode_.clear(); sid_.clear(); sref_.clear(); scached_.clear(); sstamp_.clear(); sfree_.clear();
+        sstore_.clear(); scode_.clear(); snorm_.clear(); sid_.clear(); sref_.clear(); scached_.clear(); sstamp_.clear(); sfree_.clear();
         sslot_.clear(); n_samp_eff_ = 0;
     }
 
     // How the balls of a request are found (doc 9ai): 0 = every entry, best fit (default); 1 = best fit among
     // the m nearest centers (graph over the centers at search list ef); 2 = the nearest centers themselves
     // (3 for the score features, shell_balls for the intruder count), no fit ordering
-    void set_ball_mode(int mode, int m, int ef) {
-        ball_mode_ = mode; ball_m_ = std::max(m, N_BALLS); ball_ef_ = std::max(ef, ball_m_);
-        if (mode > 0 && !cidx_) rebuild_center_index();
+    // mode 3: the nearest centers by a full scan (the same features as mode 2, exact); in mode 2, caches of at
+    // most scan_below entries are scanned too (a scan is cheaper than the graph there, doc 9ai)
+    void set_ball_mode(int mode, int m, int ef, int scan_below) {
+        ball_mode_ = mode; ball_m_ = std::max(m, N_BALLS); ball_ef_ = std::max(ef, ball_m_); ball_scan_below_ = scan_below;
+        if ((mode == 1 || mode == 2) && !cidx_) rebuild_center_index();
     }
     void set_threads(int n) { threads_ = std::max(1, n); }
 
@@ -392,6 +394,16 @@ private:
         }
     }
 
+    float decoded_norm(const uint8_t* c) const {
+        float acc = 0.f;
+        for (int j = 0; j < nb_; ++j) {
+            float v0 = qlo_[2 * j] + qstep_[2 * j] * (float)(c[j] & 15);
+            acc += v0 * v0;
+            if (2 * j + 1 < d_) { float v1 = qlo_[2 * j + 1] + qstep_[2 * j + 1] * (float)(c[j] >> 4); acc += v1 * v1; }
+        }
+        return acc;
+    }
+
     void add_sample(i64 id, const float* v) {
         auto it = sslot_.find(id);
         int s;
@@ -400,9 +412,10 @@ private:
                                    if (qpack_) encode(v, &scode_[(size_t)s * nb_]);
                                    else std::copy(v, v + d_, sstore_.begin() + (size_t)s * d_); }
             else { s = (int)sid_.size(); sid_.push_back(id); sref_.push_back(0); scached_.push_back(0);
-                   if (qpack_) { scode_.resize(scode_.size() + nb_); encode(v, &scode_[(size_t)s * nb_]); }
+                   if (qpack_) { scode_.resize(scode_.size() + nb_); encode(v, &scode_[(size_t)s * nb_]); snorm_.push_back(0.f); }
                    else sstore_.insert(sstore_.end(), v, v + d_);
                    sstamp_.push_back(0); }
+            if (qpack_) snorm_[s] = decoded_norm(&scode_[(size_t)s * nb_]);
             sslot_[id] = s;
             auto vt = vslot_.find(id);
             scached_[s] = (vt != vslot_.end() && vref_[vt->second] > 0) ? 1 : 0;
@@ -517,7 +530,18 @@ private:
         size_t top = std::max(nb, ns);
         std::vector<int> best;
         auto by_fit = [&](int a, int b) { return fit[a] < fit[b] || (fit[a] == fit[b] && a < b); };
-        if (ball_mode_ == 0 || !cidx_) {
+        if (ball_mode_ == 3 || (ball_mode_ == 2 && ne <= (size_t)ball_scan_below_)) {     // nearest by full scan
+            for (size_t e = 0; e < ne; ++e) {
+                de[e] = std::sqrt(std::max((double)l2sq(x, &cstore_[e * d_], d_), 0.0));
+                fit[e] = (nr + de[e]) / radius_[e];
+            }
+            std::vector<int> idx(ne);
+            for (size_t e = 0; e < ne; ++e) idx[e] = (int)e;
+            auto by_d = [&](int a, int b) { return de[a] < de[b] || (de[a] == de[b] && a < b); };
+            if (top < ne) std::nth_element(idx.begin(), idx.begin() + top, idx.end(), by_d);
+            best.assign(idx.begin(), idx.begin() + top);
+            std::sort(best.begin(), best.end(), by_d);
+        } else if (ball_mode_ == 0 || !cidx_) {
             for (size_t e = 0; e < ne; ++e) {
                 de[e] = std::sqrt(std::max((double)l2sq(x, &cstore_[e * d_], d_), 0.0));
                 fit[e] = (nr + de[e]) / radius_[e];
@@ -596,26 +620,27 @@ private:
     }
 
     // per-request data for the packed-code distance: a = x - lo, split into even / odd dimensions
-    struct QPrep { std::vector<float> ae, ao; };
+    // ||x - v||^2 = ||x||^2 + ||v||^2 - 2 x.lo - 2 sum_i x_i step_i c_i (v = lo + step * c; ||v||^2 stored
+    // per sample): one multiply-add per dimension on the codes (the simulator's form, sv_sq - 2 sv.x + x.x)
+    struct QPrep { std::vector<float> we, wo; float base = 0.f; };
     void qprep(const float* x, QPrep& p) const {
-        p.ae.assign(nb_, 0.f); p.ao.assign(nb_, 0.f);
+        p.we.assign(nb_, 0.f); p.wo.assign(nb_, 0.f);
+        double xx = 0.0, xl = 0.0;
+        for (int i = 0; i < d_; ++i) { xx += (double)x[i] * x[i]; xl += (double)x[i] * qlo_[i]; }
         for (int j = 0; j < nb_; ++j) {
-            p.ae[j] = x[2 * j] - qlo_[2 * j];
-            if (2 * j + 1 < d_) p.ao[j] = x[2 * j + 1] - qlo_[2 * j + 1];
+            p.we[j] = x[2 * j] * qstep_[2 * j];
+            if (2 * j + 1 < d_) p.wo[j] = x[2 * j + 1] * qstep_[2 * j + 1];
         }
+        p.base = (float)(xx - 2.0 * xl);
     }
     inline float sample_d2(const float* x, const QPrep& p, int s) const {
         if (!qpack_) return l2sq(x, &sstore_[(size_t)s * d_], d_);
         const uint8_t* c = &scode_[(size_t)s * nb_];
-        const float *ae = p.ae.data(), *ao = p.ao.data(), *se = se_.data(), *so = so_.data();
+        const float *we = p.we.data(), *wo = p.wo.data();
         float acc = 0.f;
 #pragma omp simd reduction(+ : acc)
-        for (int j = 0; j < nb_; ++j) {
-            float t0 = ae[j] - se[j] * (float)(c[j] & 15);
-            float t1 = ao[j] - so[j] * (float)(c[j] >> 4);
-            acc += t0 * t0 + t1 * t1;
-        }
-        return acc;
+        for (int j = 0; j < nb_; ++j) acc += we[j] * (float)(c[j] & 15) + wo[j] * (float)(c[j] >> 4);
+        return p.base + snorm_[s] - 2.f * acc;
     }
 
     double model_score(const std::vector<double>& f) const {
@@ -648,8 +673,9 @@ private:
     int nb_ = 0;
     std::vector<float> qlo_, qstep_, se_, so_;
     std::vector<uint8_t> scode_;
+    std::vector<float> snorm_;
     // center index (ball modes 1 / 2)
-    int ball_mode_ = 0, ball_m_ = 64, ball_ef_ = 64;
+    int ball_mode_ = 0, ball_m_ = 64, ball_ef_ = 64, ball_scan_below_ = 0;
     std::unique_ptr<hnswlib::HierarchicalNSW<float>> cidx_;
     std::unordered_set<i64> cidx_labels_;
     size_t ccap_ = 0, c_deleted_ = 0;
@@ -711,7 +737,8 @@ PYBIND11_MODULE(_cachecore, m) {
         .def("set_model", &Core::set_model)
         .def("set_shell_balls", &Core::set_shell_balls)
         .def("set_quantizer", &Core::set_quantizer)
-        .def("set_ball_mode", &Core::set_ball_mode, py::arg("mode"), py::arg("m") = 64, py::arg("ef") = 64)
+        .def("set_ball_mode", &Core::set_ball_mode, py::arg("mode"), py::arg("m") = 64, py::arg("ef") = 64,
+             py::arg("scan_below") = 0)
         .def("set_threads", &Core::set_threads)
         .def("add_cached", &Core::add_cached)
         .def("remove_cached", &Core::remove_cached)

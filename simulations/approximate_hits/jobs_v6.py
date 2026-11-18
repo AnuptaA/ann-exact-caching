@@ -195,11 +195,37 @@ def headline_lines():
     return out
 
 
+def pool_lines():
+    """Pool statistics (doc 9ai): ours (greedy + rebuild), continuous greedy and LRU (per request), headline
+    settings, seed 0, 1% and 10% (MedRAG 0.01% / 0.1%), exact search on the core, --pool-stats."""
+    from simulations.approximate_hits.plot_headline import sim_dir
+    out = []
+    for w in WORKLOADS.values():
+        if w.group != "main":
+            continue
+        for b in ((0.0001, 0.001) if w.name == "medrag-ip" else (0.01, 0.1)):
+            d_old = sim_dir(w.prep, w.stream, b, 0)
+            d_new = RES / "pool_stats" / w.name / d_old.name
+            for nm in ("greedy_score_rebuild", "ogreedy_utility", "lru_k10_none"):
+                f = d_old / f"{nm}.json"
+                if not f.exists():
+                    continue
+                args = json.loads(f.read_text())["args"]
+                over = {"cache_impl": "core", "core_threads": 4, "pool_stats": True}
+                if args["method"] == "lru":
+                    over["update_every"] = 1
+                tag = nm.split("_", 1)[1]
+                js = d_new / f"{nm}.json"
+                out.append(f"mkdir -p {d_new}/logs && [ -f {js} ] || PYTHONPATH=. {PY} {S}/online_sim.py "
+                           f"{_cli(args, over)} --tag _{tag} --out {d_new} > {d_new}/logs/{nm}.txt 2>&1")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--set", choices=["tune", "timing", "headline"], required=True)
+    ap.add_argument("--set", choices=["tune", "timing", "headline", "pool"], required=True)
     a = ap.parse_args()
-    print("\n".join({"tune": tune_lines, "timing": timing_lines, "headline": headline_lines}[a.set]()))
+    print("\n".join({"tune": tune_lines, "timing": timing_lines, "headline": headline_lines, "pool": pool_lines}[a.set]()))
 
 
 if __name__ == "__main__":

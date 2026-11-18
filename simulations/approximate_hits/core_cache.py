@@ -24,7 +24,7 @@ EPS = 1e-12
 
 class CoreCache(Cache):
     def __init__(self, D, k, R, bits, budget, maintain=True, threads=8, ef1=0, ef2=0, ball_mode="fit", ball_m=64,
-                 ball_ef=64):
+                 ball_ef=64, ball_scan_below=1000):
         super().__init__(D, k, R, bits, budget, maintain=maintain)
         if not np.all(self.D["present"]):
             raise ValueError("CoreCache: database changes are not supported")
@@ -40,9 +40,11 @@ class CoreCache(Cache):
         self.ef1, self.ef2 = ef1, ef2        # 0 / 0: exact search over the cached vectors (headline)
         # how a request's balls are found (doc 9ai): fit = every entry, best fit; fit-m = best fit among the
         # m nearest centers; near = the nearest centers (graph over the centers at search list ball_ef)
-        mode = {"fit": 0, "fit-m": 1, "near": 2}[ball_mode]
+        # near-scan = the nearest centers by a full scan (same features as near, exact); near scans caches of at
+        # most ball_scan_below entries too (cheaper than the graph there: speed only)
+        mode = {"fit": 0, "fit-m": 1, "near": 2, "near-scan": 3}[ball_mode]
         if mode:
-            self.core.set_ball_mode(mode, int(ball_m), int(ball_ef))
+            self.core.set_ball_mode(mode, int(ball_m), int(ball_ef), int(ball_scan_below))
         self.qlo = self.qhi = None           # fixed quantization range of the shell sample
         self._holders = {}                   # vector id -> set of entry centers (LRU use marks)
         self._core_p = None                  # sampling rate the core's samples were built with

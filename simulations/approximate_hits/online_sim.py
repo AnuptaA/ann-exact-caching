@@ -505,7 +505,8 @@ class Sim:
             self.cache = CoreCache(D, args.k, args.R, args.bits, self.M,
                                    maintain=not getattr(args, "no_maintain", False), threads=args.core_threads,
                                    ef1=args.core_ef1, ef2=args.core_ef2, ball_mode=args.core_ball_mode,
-                                   ball_m=args.core_ball_m, ball_ef=args.core_ball_ef)
+                                   ball_m=args.core_ball_m, ball_ef=args.core_ball_ef,
+                                   ball_scan_below=args.core_ball_scan_below)
         else:
             self.cache = Cache(D, args.k, args.R, args.bits, self.M,
                                maintain=not getattr(args, "no_maintain", False))
@@ -1118,6 +1119,42 @@ class Sim:
 
     # -- main loop ---------------------------------------------------------
 
+    # -- pool statistics (doc 9ai): how much of a hit's answer one cache entry could give ------------------
+    def _pool_acc(self, qs, serve, near):
+        """For each served request (the cache in force when it was served): distinct entries holding a served
+        vector, the size of a greedy set cover of the served vectors by entries, the most served vectors one
+        entry holds, and the best retention (vs the backend's top-k) any single entry's ball gives."""
+        if not serve.any():
+            return
+        cache, k = self.cache, self.k
+        holders = getattr(cache, "_holders", None)
+        if holders is None:                       # online_sim.Cache: build vector -> entries for this call
+            holders = {}
+            for c in cache.entries:
+                for v in cache.members(c).tolist():
+                    holders.setdefault(v, set()).add(c)
+        P = self._pool
+        for q, nn in zip(np.asarray(qs)[serve], np.asarray(near)[serve]):
+            nn = [int(v) for v in nn[:k]]
+            hold = {}
+            for v in nn:
+                for c in holders.get(v, ()):
+                    hold.setdefault(c, set()).add(v)
+            left, cover = set(nn), 0
+            while left and hold:
+                c = max(hold, key=lambda e: len(hold[e] & left))
+                if not hold[c] & left:
+                    break
+                left -= hold[c]
+                cover += 1
+            ans = set(topk_present(self.D, [int(q)], k, key="answer")[0].tolist())
+            best_ret = max((len(set(cache.members(c).tolist()) & ans) for c in hold), default=0) / k
+            P["hits"] += 1
+            P["holders"] += len(hold)
+            P["cover"] += cover
+            P["best_cov"] += max((len(x) for x in hold.values()), default=0) / k
+            P["single_ret"] += best_ret
+
     # -- timing (doc 9ah): the request path through the core, one request at a time ------------
     def _timed_lookup(self, q, t):
         """One request: the core's lookup (stage 1, decision, stage 2 on a hit) timed; a miss is charged that
@@ -1214,6 +1251,7 @@ class Sim:
             UL = 1 if timed else UE
             upd = method in ("lru", "ogreedy") and UE < len(qb)
             parts, pend = [], []
+            self._pool = {"hits": 0, "holders": 0, "cover": 0, "best_cov": 0.0, "single_ret": 0.0}
             step = UL if (upd or timed) else len(qb)
             for u0 in range(0, len(qb), step):
                 qs = qb[u0:u0 + step]
@@ -1229,6 +1267,8 @@ class Sim:
                     cache.served_retention(qs, ns, key="truth") if self.a.label == "served"
                     else cache.retention_exact(qs))
                 parts.append((sc, sv, ys, ye, ns))
+                if getattr(a, "pool_stats", False):
+                    self._pool_acc(qs, sv, ns)
                 if upd:
                     pend.append((qs, sv, ns))
                     if sum(len(p_[0]) for p_ in pend) >= UE or u0 + len(qs) >= len(qb):
@@ -1270,6 +1310,8 @@ class Sim:
                              "lambda": self.lam, "memory": cache.memory(),
                              "cached": cache.n_cached(), "entries": len(cache.entries),
                              "events": n_ev, "audit_rate": rate})
+            if getattr(a, "pool_stats", False):
+                self.log[-1].update({f"pool_{k_}": v_ for k_, v_ in self._pool.items()})
             if "initial" in self.D:
                 # queries whose current exact top-k contains inserted vectors
                 aff = (~self.D["initial"][topk_present(self.D, qb, self.k,
@@ -1530,18 +1572,24 @@ def make_parser():
     ap.add_argument("--core-ef1", type=int, default=0,
                     help="--cache-impl core: stage-1 search list over the cached vectors (0: exact scan, headline)")
     ap.add_argument("--core-ef2", type=int, default=0, help="--cache-impl core: stage-2 (served points) search list")
-    ap.add_argument("--core-ball-mode", choices=["fit", "fit-m", "near"], default="fit",
+    ap.add_argument("--core-ball-mode", choices=["fit", "fit-m", "near", "near-scan"], default="fit",
                     help="--cache-impl core (doc 9ai): fit = best-fitting balls over every entry; fit-m = best fit among "
                          "the --core-ball-m nearest centers; near = the nearest centers (3 for the score, the shell scope "
                          "for the intruder count); a graph over the centers at search list --core-ball-ef")
     ap.add_argument("--core-ball-m", type=int, default=64)
     ap.add_argument("--core-ball-ef", type=int, default=64)
+    ap.add_argument("--core-ball-scan-below", type=int, default=1000,
+                    help="near: caches of at most this many entries are scanned (the graph pays off above ~1,000 "
+                         "entries at 769-d, measured on TripClick, doc 9ai); speed only")
     ap.add_argument("--timing-compose", default=None,
                     help="timing (doc 9ah): DiskANN-alone latency (s) of every --timing-every-th request after the "
                          "warm-up (eval_timing_backend.py backend_s<every>_lat.npy); each request's core lookup is "
                          "timed and a miss charged its DiskANN latency; needs --cache-impl core")
     ap.add_argument("--timing-every", type=int, default=50)
     ap.add_argument("--aker-real", action="store_true", help="--method aker: the real Aker library (doc 9ah)")
+    ap.add_argument("--pool-stats", action="store_true",
+                    help="log per batch, over the hits: entries holding served vectors, greedy cover size, the best "
+                         "entry's share of the served top-k, the best single-entry retention (doc 9ai)")
     ap.add_argument("--aker-real-delta", type=int, default=5)
     ap.add_argument("--aker-real-at", type=float, default=0.9)
     ap.add_argument("--aker-real-al", type=float, default=1.1)
