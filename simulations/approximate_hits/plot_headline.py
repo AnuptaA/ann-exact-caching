@@ -34,7 +34,7 @@ STYLE = {"aker_paper": ("Aker, paper default (a_T .25, a_L 1.1)", "#0072B2", "D"
          "qvcache_paper": ("QVCache, paper's D procedure", "#009E73", "s", 1.1),
          "ours": ("Ours (calibrated)", "#D55E00", "o", 2.6),
          "ours_drift": ("Ours, drift handling (timing)", "#CC79A7", "o", 1.8),
-         "ours_online": ("Ours, continuous greedy (prototype)", "#7F3F00", "P", 1.8),
+         "ours_online": ("Ours, continuous greedy", "#7F3F00", "P", 1.8),
          "lru": ("LRU", "#6B6B6B", "^", 1.6),
          "aker": ("Aker, tuned by hand to the target", "#0072B2", "D", 1.6),
          "qvcache": ("QVCache, tuned by hand to the target", "#009E73", "s", 1.6)}

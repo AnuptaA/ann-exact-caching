@@ -3716,3 +3716,28 @@ Graph vs exact twins, all 65 (TripClick, 9aj): LRU with our rule loses 1.5-5.9% 
 k 20: 1% -1.5 / -3.1% for seeds 0 / 1, 0.3% -2.3 / -2.4%, 3% -4.5 / -5.9%), retention unchanged. QVCache:
 D 0 loses 17-19% of its hits and ~0.035 retention; every other D is within 0.8%. No QVCache setting meets
 0.9 on TripClick in either mode.
+
+#### 9ak (cont.). First quiet results, TripClick 10% and 1% (11-18 17:00)
+Speedup over DiskANN alone (hit rate, retention), all with the nearest-center ball finder and packed codes
+unless RaBitQ. Mean stage costs per request in ms (knn / balls / shell):
+
+| | LRU 10% | cont. greedy 10% | LRU 1% | cont. greedy 1% |
+|---|---|---|---|---|
+| near (9ai) | 1.165 (33.5%, .910) .43/.27/.73 | 1.125 (24.5%) | 1.138 (17.4%) | 1.038 (6.9%) |
+| + fast path | 1.184 (33.6%) .41/.26/.70 | 1.151 (25.2%) | 1.136 (17.4%) | 1.033 (6.6%) |
+| RaBitQ | 1.165 (31.8%, .918) shell .59 | 1.118 (24.0%) | 1.135 (18.0%) shell .18 | 1.056 (9.7%) |
+| fast + RaBitQ | 1.177 (31.9%) | 1.126 (24.0%) | 1.138 (18.0%) | 1.059 (9.7%) |
+| fast + f 0.95 | **1.267** (33.1%, .913) shell .21 | 1.141 (22.6%) | **1.144** (17.3%) shell .03 | 1.030 (5.8%) |
+| fast + 3 shell balls | 1.252 (32.9%, .913) shell .23 | 1.167 (24.0%) | | 1.044 (6.7%) |
+| Aker (best meeting 0.9) | 1.201 (18.3%, .937) | | 1.101 (11.1%) | |
+
+- TripClick 10% now beats Aker: 1.267x (LRU, fast path, shell 5% of memory) vs 1.201x. Fewer shell samples
+  are the lever: the intruder count drops from 0.70 to 0.21 ms per request at a 0.5-point hit-rate cost.
+- The fast path alone saves ~0.13 ms per request at 10% (1.165 -> 1.184), little at 1%.
+- RaBitQ as implemented is not faster: the per-request dense rotation (d^2 = 591k multiply-adds at 769-d)
+  and table build cost ~0.1+ ms, more than the per-sample savings on small shells (1%: 0.107 -> 0.181 ms).
+  A fast structured rotation (random signs + Hadamard, d log d) would remove most of that. Its counts change
+  hit rates: higher at 1% (LRU 17.4 -> 18.0%, continuous greedy 6.9 -> 9.7%), lower at 10% (33.5 -> 31.8%).
+- Caveat: f 0.95 was picked after seeing TripClick. Under the no-per-workload-tuning rule, the shell size
+  must come from one setting or rule for every workload (9ae: the dev-chosen split, eval_shell_budget), and
+  the other workloads must be checked with it before it replaces f 0.85.
