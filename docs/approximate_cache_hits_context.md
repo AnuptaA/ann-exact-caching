@@ -3542,3 +3542,40 @@ best meeting the target in the timed run; arms from v5. First Aker runs failed (
 rerun by run_v6_after.sh, which then times the two heaviest LRU cells alone, runs the headline per-request
 reruns (LRU k10 / k20 x 2 seeds, QVCache 16x8 grid, on TripClick, SPACEV real, SPACEV 0.99, TriviaQA 0.99:
 same-batch repeats 5.5% / 0.7% / 4.1% / 10.8% of requests; others <= 0.12%) and the plots.
+
+### 9ai. Cheaper ball fit / intruder count; which "ours" wins (11-18 early morning)
+
+Variants of our hit rule: static (greedy at warm-up, fixed), drift handling (greedy + score drift test +
+shadow rebuild; headline greedy_score_rebuild), continuous greedy (ogreedy, utility eviction, per-batch
+updates), LRU with our rule. Best variant meeting the target, v6 timing / headline (headline: per-request
+reruns where done): continuous greedy wins 27 / 36 timing cells and 22 / 32 headline cells; static ties
+it within 0.01x in 4 timing cells; LRU wins TripClick 0.3-3% in both (short-term repetition: 14.7-23.9%
+hits vs 5-13%) and the 10% caches in the headline (SPACEV 0.3 / 0.6 / 0.99, TriviaQA 0.3 / 0.6, MedRAG
+0.3%), in timing only TriviaQA 0.3 10% and MedRAG 0.3%. Drift handling never wins. Open: per-request
+admission for continuous greedy (the TripClick small-cache gap).
+
+Untimed checks (ballfit_experiments.py, 10% warm-up caches, 5,000 test requests):
+- A: score from the 3 NEAREST balls (and intruders over the 10 nearest), model refit + recalibrated:
+  hit rate vs best-fit balls: SPACEV 0.6 21.5 vs 21.9%, TripClick 27.5 vs 27.4, TriviaQA 0.6 41.1 vs 42.7.
+- B: best fit among the m nearest centers, state model / cutoff: decision agreement >= 0.99 down to m 64
+  (SPACEV, TripClick), 128 (TriviaQA); smaller m serves more at lower retention (missed best balls ->
+  fewer intruders), so m must be tuned or the path recalibrated.
+- C: 1-bit RaBitQ intruder counts (state model): decisions agree 0.995 / 0.93 / 0.87; D: with the model
+  refit and cutoff recalibrated on RaBitQ counts: SPACEV 22.0 vs 21.9%, TripClick 26.7% (ret 0.902) vs
+  27.4% (0.894): the model tolerates the count error. Decided: packed 4-bit codes now, RaBitQ later as a
+  separate step (it also changes the sample's memory charge).
+Core changes (cachecore.cpp): packed 4-bit shell codes (two per byte, per-dimension lo / step; distance
+||x||^2 + ||v||^2 - 2 x.lo - 2 sum x_i step_i c_i with ||v||^2 stored: identical counts; parity with the
+Python simulator 20 / 20 batches), center index (hnswlib over entry centers) with ball modes fit-m / near,
+near-scan (nearest by full scan), near scans caches of <= 1,000 entries (speed only). Interleaved
+microbenchmark (TripClick static warm-up caches, loaded machine, ratios fair): 10%: ball finding 0.88 ->
+0.35 ms (near, center index), intruder count 0.66 -> 0.38 (packed); 1%: balls 0.23 -> 0.21, count 0.16 ->
+0.095. A first end-to-end TripClick run (timing_v6b) ran beside heavy headline jobs and is not usable for
+timing (hit rates / retention unchanged).
+Pool statistics (online_sim --pool-stats; jobs_v6 --set pool, 60 runs): per hit, entries holding served
+vectors, greedy cover size, best single entry's share of the served top-k, best single-entry retention vs
+the backend's top-k. Test (TripClick 1%, 5 batches, greedy): 3.1 entries hold served vectors, cover 1.42,
+best entry 94% of the served top-k, single-entry retention 0.846 vs pool 0.882.
+Scheduling (03:00): headline per-request reruns ~12 / h (exact scans per request, 8 threads each), 65 / 264
+done; paused with SIGSTOP (run_quiet_now.sh, /tmp/mx/paused_pids.txt) for the quiet checks (solo LRU cells,
+then TripClick near / fit-packed runs, 4 at a time, timing_v6c), resumed automatically afterwards.
