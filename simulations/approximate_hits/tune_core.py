@@ -72,7 +72,7 @@ def main():
     core = core_from_state(db, q, st, a.shell_balls, threads=a.threads)
 
     def run(xs, l_, ef1, ef2=0):
-        hit, score, near, nr, feat = core.lookup_batch(xs, l_, ef1, ef2)
+        hit, score, near, nr, feat = core.lookup_batch(xs, l_, ef1, ef2)[:5]
         return np.asarray(hit), np.asarray(score), np.asarray(near)
 
     n = 600

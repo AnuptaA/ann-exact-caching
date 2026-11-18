@@ -3672,3 +3672,38 @@ our rule) picked after the fact, as the alternatives are:
   1.09 / 1.17 / 1.26 vs ours 1.05 / 1.06 / 1.08 / 1.17), SPACEV real 10% (Aker 1.088 vs 1.057) and
   TripClick 10% (Aker 1.20 vs 1.12 in v6; 1.165 with the new ball finder, quiet run). Closest wins:
   TripClick 3% +0.6%, SPACEV real 1% +0.8%, TripClick 1% +1.6%.
+
+### 9ak. Exact-repeat fast path, RaBitQ shell codes, fewer shell samples (11-18 afternoon, approved by Jialin)
+
+Goal: cut our per-hit cost on TripClick 10% (hit path ~1.6 ms per request vs Aker's ~0.04 ms lookup; free
+hit decision would give 1.40x vs Aker 1.20x).
+
+Exact-repeat fast path (`--core-repeat-fast`, core `set_repeat_fast`): the core keeps a hash of every entry's
+center (FNV-style over the vector's bytes; exact compare on a match). A request equal to a cached center is
+served that entry's own k nearest ball members, skipping kNN, ball finding, shell count and model. With an
+exact backend, that is the backend's top-k for that query (retention 1). With the DiskANN backend, it is the
+first k of the backend's deep list for it, close to its top-k answer. The request scores FAST_SCORE (1e9):
+it is served at every cutoff, so calibration counts it as a hit at every cutoff. Its label comes from
+audits, as for any hit. Batch lookups (fit / calibration) still compute its full features; the model is
+fit on the normal features. Not served before a lambda exists. TripClick: 18% of timed requests are exact
+repeats (9ag). Only our cache (ours / LRU with our rule) has it: Aker already serves exact repeats cheaply.
+QVCache could get the same shortcut.
+
+RaBitQ shell codes (`--core-shell-code rabitq`, core `set_rabitq`): 1-bit RaBitQ as the untimed check (9ai C/D,
+ballfit_experiments.RaBitQ). The centroid is the first sample's mean, with a dense random orthogonal rotation
+(numpy QR, seed 0; the core gets P^T). Each sample stores sign bits of P^T (o - c) / ||o - c||, plus
+||o - c|| and <x, u>. Codes come from the raw vectors, not the 4-bit ones. A request builds per-byte lookup
+tables (d / 8 x 256 partial sums of its rotated vector, ~25k adds + one d x d rotation), then each sample
+costs d / 8 table adds instead of d multiply-adds on 4-bit codes. The model is fit at warm-up on the RaBitQ
+counts (as check D). Memory is still charged at 4 bits per dimension (conservative: the real size is
+1 bit + 8 bytes, ~27% of the 4-bit size at 769-d); giving the freed memory to more samples or more cache is
+a follow-up. Tests: the core's counts match the NumPy reference (78 / 80 within 1); on 16-d Gaussian data the
+estimate is biased up near the boundary (many samples just outside), but tracks the exact count
+(correlation > 0.5).
+
+Fewer shell samples: no code; `--f 0.95` (shell 5% of memory instead of 15%) and `--shell-balls 3` (count over
+the 3 nearest balls' shells instead of 10).
+
+Runs (timing_v6c/tripclick-ip, quiet window via run_quiet2.sh, 4 at a time, untimed queues paused): LRU and
+continuous greedy x {fast, rabitq, fastrq, fastf95, fastsb3} x 10% / 1% / 3% / 0.3%, against the near_ runs of
+9ai (same quiet conditions). Untimed smoke runs first (results/smoke9ak, TripClick 1% LRU).

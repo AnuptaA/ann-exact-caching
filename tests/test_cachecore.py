@@ -135,7 +135,7 @@ def test_batch_equals_sequential(world):
     for sb in (0, 10):
         core = build(db, q, ents, sb, model)
         core.set_threads(4)
-        hit, score, near, nr, feat = core.lookup_batch(q[:100], 0.0, 0)
+        hit, score, near, nr, feat = core.lookup_batch(q[:100], 0.0, 0)[:5]
         core.set_threads(1)
         for i in range(100):
             r = core.lookup(q[i], 0.0, 0)
@@ -277,3 +277,83 @@ def test_ball_mode_1_full_m_equals_scan_and_mode_2_nearest(world):
         de = np.sqrt(((q[cen] - q[i]) ** 2).sum(axis=1))
         o = np.argsort(de, kind="stable")[:3]
         assert np.allclose(r.features[0:6:2], de[o] / rad[o], atol=1e-5)
+
+
+# ---------------------------------------------------------------- exact-repeat fast path (doc 9ak)
+def test_repeat_fast_serves_entry_topk(world):
+    rng, db, q, ents, model = world
+    core = build(db, q, ents, 3, model)
+    core.set_repeat_fast(True)
+    c, b, s, r = ents[5]
+    res = core.lookup(q[c], 0.0, 0)
+    assert res.fast and res.hit and res.score >= 1e8
+    # the entry's own top-k: its ball is the center's nearest database points, in order
+    assert list(res.near) == list(b[:K])
+    # no lambda yet (+inf): nothing is served, the fast path included
+    assert not core.lookup(q[c], float("inf"), 0).hit
+    # a request that is not a center: the normal path
+    others = [i for i in range(len(q)) if i not in {e[0] for e in ents}]
+    assert not core.lookup(q[others[0]], 0.0, 0).fast
+    # batch lookups: full features for the controllers, fast flag and answer
+    out = core.lookup_batch(q[[c, others[0]]], float("-inf"), 0)
+    assert len(out) == 6 and bool(out[5][0]) and not bool(out[5][1])
+    assert list(out[2][0]) == list(b[:K])
+    assert out[4][0][0] < 10.0          # real features (not POOR_FIT) for the fit / calibration
+    # the entry leaves: no fast path
+    core.remove_entry(c)
+    assert not core.lookup(q[c], 0.0, 0).fast
+
+
+def test_repeat_fast_off_by_default(world):
+    rng, db, q, ents, model = world
+    core = build(db, q, ents, 3, model)
+    c = ents[5][0]
+    assert not core.lookup(q[c], 0.0, 0).fast
+
+
+def test_repeat_fast_enabled_after_entries(world):
+    rng, db, q, ents, model = world
+    core = build(db, q, ents, 3, model)
+    core.set_repeat_fast(True)          # the hash covers entries added before it was switched on
+    assert all(core.lookup(q[e[0]], 0.0, 0).fast for e in ents[:10])
+
+
+# ---------------------------------------------------------------- RaBitQ shell codes (doc 9ak)
+def rabitq_ref(samples, x, nr, c, P):
+    """ballfit_experiments.RaBitQ's estimate: count of samples with estimated distance < nr."""
+    r = samples.astype(np.float64) - c
+    norm = np.linalg.norm(r, axis=1)
+    u = (r / np.maximum(norm, EPS)[:, None]) @ P
+    code = np.where(u >= 0, 1.0, -1.0) / np.sqrt(len(c))
+    xo = (code * u).sum(axis=1)
+    qr = x.astype(np.float64) - c
+    qn = np.linalg.norm(qr)
+    qp = (qr / max(qn, EPS)) @ P
+    ip = (code @ qp) / np.maximum(xo, EPS)
+    d2 = norm ** 2 + qn * qn - 2 * norm * qn * ip
+    return d2 < nr * nr
+
+
+def test_rabitq_counts_match_reference(world):
+    rng, db, q, ents, model = world
+    cached = np.unique(np.concatenate([e[1] for e in ents]))
+    samp = np.unique(np.concatenate([e[2] for e in ents]))
+    samp = samp[~np.isin(samp, cached)]
+    c = db[samp].astype(np.float64).mean(axis=0)
+    P, _ = np.linalg.qr(np.random.default_rng(0).normal(size=(D, D)))
+    core = cc.Core(D, K, 0, capacity=1 << 12)
+    core.set_model(*[list(map(float, m)) for m in model[:3]], float(model[3]))
+    core.set_rabitq(list(map(float, c)), np.ascontiguousarray(P.T, dtype=np.float32))
+    for cc_, b, s, r in ents:
+        core.add_entry(cc_, q[cc_], r, b.astype(np.int64), db[b], s.astype(np.int64), db[s])
+    agree, est, exa = 0, [], []
+    for i in range(80):
+        x = q[i]
+        res = core.lookup(x, 0.0, 0)
+        ref = int(rabitq_ref(db[samp], x, res.nr, c, P).sum())
+        exact = int((((db[samp] - x) ** 2).sum(axis=1) < res.nr ** 2).sum())
+        agree += abs(res.intruders - ref) <= 1       # float32 vs float64 at the boundary
+        est.append(res.intruders); exa.append(exact)
+    assert agree >= 78
+    # an estimate (noisy at 16-d Gaussian data, biased up near the boundary): it tracks the exact count
+    assert np.corrcoef(est, exa)[0, 1] > 0.5

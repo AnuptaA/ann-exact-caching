@@ -27,6 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <queue>
@@ -60,8 +61,13 @@ static double now_s() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// score of an exact repeat (fast path, doc 9ak): above any threshold, so calibration counts it as a hit at
+// every cutoff (it is served at every cutoff); finite so the threshold code needs no special case
+static const double FAST_SCORE = 1e9;
+
 struct LookupResult {
     bool hit = false;
+    bool fast = false;              // exact repeat of a cached center (fast path)
     double score = -std::numeric_limits<double>::infinity();
     double nr = 0.0;
     int intruders = 0;
@@ -95,6 +101,7 @@ public:
     // distances computed from the codes (identical counts, 1/8 of the memory read). Set before any sample.
     void set_quantizer(std::vector<double> lo, std::vector<double> hi, int bits) {
         if (!sid_.empty() && sslot_.size()) throw std::logic_error("set_quantizer: samples present");
+        rq_ = false;
         if (bits != 4) { qpack_ = false; return; }
         if ((int)lo.size() != d_ || (int)hi.size() != d_) throw std::invalid_argument("quantizer dims");
         qpack_ = true;
@@ -117,6 +124,35 @@ public:
         if ((mode == 1 || mode == 2) && !cidx_) rebuild_center_index();
     }
     void set_threads(int n) { threads_ = std::max(1, n); }
+
+    // Exact-repeat fast path (doc 9ak): a request whose vector equals a cached entry's center (hash of the
+    // bytes, then an exact compare) is served that entry's own k nearest ball members, skipping kNN, balls,
+    // shell and model. With an exact backend that is the backend's own top-k for it (retention 1).
+    void set_repeat_fast(bool on) {
+        repeat_fast_ = on;
+        chash_.clear();
+        if (on) for (size_t r = 0; r < ec_.size(); ++r) chash_.emplace(vec_hash(&cstore_[r * d_]), ec_[r]);
+    }
+
+    // RaBitQ 1-bit shell codes (doc 9ak; Gao & Long, SIGMOD 2024, as ballfit_experiments.RaBitQ): with
+    // centroid c and orthogonal P (rows of PT = columns of P), a sample o is stored as the signs of
+    // u = P^T (o - c) / ||o - c|| (1 bit per dimension), ||o - c|| and <x, u> = sum |u_i| / sqrt(D); the
+    // distance to a request q is estimated from <x, P^T (q - c)> (per-byte lookup tables, d / 8 adds per
+    // sample). Replaces the packed 4-bit codes; set before any sample.
+    void set_rabitq(std::vector<double> centroid, py::array_t<float, py::array::c_style | py::array::forcecast> PT) {
+        if (!sid_.empty() && sslot_.size()) throw std::logic_error("set_rabitq: samples present");
+        auto P = PT.unchecked<2>();
+        if ((int)centroid.size() != d_ || P.shape(0) != d_ || P.shape(1) != d_) throw std::invalid_argument("rabitq dims");
+        rq_ = true; qpack_ = false;
+        rq_c_.assign(d_, 0.f);
+        for (int i = 0; i < d_; ++i) rq_c_[i] = (float)centroid[i];
+        rq_pt_.assign((size_t)d_ * d_, 0.f);
+        for (int j = 0; j < d_; ++j) for (int i = 0; i < d_; ++i) rq_pt_[(size_t)j * d_ + i] = P(j, i);
+        rq_nb_ = (d_ + 7) / 8;
+        rq_isd_ = (float)(1.0 / std::sqrt((double)d_));
+        sstore_.clear(); scode_.clear(); snorm_.clear(); sxo_.clear(); sid_.clear(); sref_.clear(); scached_.clear();
+        sstamp_.clear(); sfree_.clear(); sslot_.clear(); n_samp_eff_ = 0;
+    }
 
     // ---------------------------------------------------------------- cached vectors
     // ids may already be cached (refcount + 1); vecs: one row per id
@@ -198,12 +234,17 @@ public:
         eshell_ids_.push_back(std::move(sid));
         used_.push_back(t);
         if (cidx_) center_insert(c, &C(0));
+        if (repeat_fast_) chash_.emplace(vec_hash(&C(0)), c);
     }
 
     void remove_entry(i64 c) {
         auto it = crow_.find(c);
         if (it == crow_.end()) throw std::invalid_argument("no such entry");
         int r = it->second, last = (int)ec_.size() - 1;
+        if (repeat_fast_) {
+            auto range = chash_.equal_range(vec_hash(&cstore_[(size_t)r * d_]));
+            for (auto h = range.first; h != range.second; ++h) if (h->second == c) { chash_.erase(h); break; }
+        }
         for (i64 v : eball_[r]) {
             auto& h = holders_[v];
             h.erase(std::find(h.begin(), h.end(), c));
@@ -323,12 +364,12 @@ public:
             // phase 1: decisions (stage 1); hnswlib's search list is global, so it is set once per phase
             if (ef1 > 0) hnsw_->setEf(std::max(ef1, k_));
             if (cidx_ && ball_mode_ > 0) cidx_->setEf(std::max<size_t>(ball_ef_, std::max<size_t>(ball_m_, std::max(N_BALLS, shell_balls_))));
-            parallel_for(n, threads_, [&](ssize_t i) { res[i] = lookup_ptr(base + i * d_, lam, ef1, 0, 1, true); });
-            // phase 2: served points of the hits (stage 2)
+            parallel_for(n, threads_, [&](ssize_t i) { res[i] = lookup_ptr(base + i * d_, lam, ef1, 0, 1, true, true); });
+            // phase 2: served points of the hits (stage 2); exact repeats keep the fast path's answer
             if (ef2 > 0) {
                 hnsw_->setEf(std::max(ef2, k_));
                 parallel_for(n, threads_, [&](ssize_t i) {
-                    if (!res[i].hit) return;
+                    if (!res[i].hit || res[i].fast) return;
                     std::vector<std::pair<float, i64>> nn2;
                     graph_knn(base + i * d_, ef2, nn2, true);
                     if ((int)nn2.size() < k_) res[i].hit = false;
@@ -336,18 +377,18 @@ public:
                 });
             }
         }
-        py::array_t<bool> hit(n);
+        py::array_t<bool> hit(n), fast(n);
         py::array_t<double> score(n), nr(n);
         py::array_t<i64> near({(ssize_t)n, (ssize_t)k_});
         py::array_t<double> feat({(ssize_t)n, (ssize_t)N_FEAT});
         auto H = hit.mutable_unchecked<1>(); auto S = score.mutable_unchecked<1>(); auto R = nr.mutable_unchecked<1>();
-        auto N = near.mutable_unchecked<2>(); auto F = feat.mutable_unchecked<2>();
+        auto N = near.mutable_unchecked<2>(); auto F = feat.mutable_unchecked<2>(); auto FA = fast.mutable_unchecked<1>();
         for (ssize_t i = 0; i < n; ++i) {
-            H(i) = res[i].hit; S(i) = res[i].score; R(i) = res[i].nr;
+            H(i) = res[i].hit; S(i) = res[i].score; R(i) = res[i].nr; FA(i) = res[i].fast;
             for (int j = 0; j < k_; ++j) N(i, j) = j < (int)res[i].near.size() ? res[i].near[j] : -1;
             for (int j = 0; j < N_FEAT; ++j) F(i, j) = res[i].features[j];
         }
-        return py::make_tuple(hit, score, near, nr, feat);
+        return py::make_tuple(hit, score, near, nr, feat, fast);
     }
 
     // stage 2 alone (labels of misses need the would-be served answer)
@@ -408,14 +449,9 @@ private:
         auto it = sslot_.find(id);
         int s;
         if (it == sslot_.end()) {
-            if (!sfree_.empty()) { s = sfree_.back(); sfree_.pop_back(); sid_[s] = id; sref_[s] = 0; sstamp_[s] = 0;
-                                   if (qpack_) encode(v, &scode_[(size_t)s * nb_]);
-                                   else std::copy(v, v + d_, sstore_.begin() + (size_t)s * d_); }
-            else { s = (int)sid_.size(); sid_.push_back(id); sref_.push_back(0); scached_.push_back(0);
-                   if (qpack_) { scode_.resize(scode_.size() + nb_); encode(v, &scode_[(size_t)s * nb_]); snorm_.push_back(0.f); }
-                   else sstore_.insert(sstore_.end(), v, v + d_);
-                   sstamp_.push_back(0); }
-            if (qpack_) snorm_[s] = decoded_norm(&scode_[(size_t)s * nb_]);
+            if (!sfree_.empty()) { s = sfree_.back(); sfree_.pop_back(); sid_[s] = id; sref_[s] = 0; sstamp_[s] = 0; }
+            else { s = (int)sid_.size(); sid_.push_back(id); sref_.push_back(0); scached_.push_back(0); sstamp_.push_back(0); }
+            store_sample(s, v);
             sslot_[id] = s;
             auto vt = vslot_.find(id);
             scached_[s] = (vt != vslot_.end() && vref_[vt->second] > 0) ? 1 : 0;
@@ -423,6 +459,41 @@ private:
             s = it->second;
         }
         if (sref_[s]++ == 0 && !scached_[s]) ++n_samp_eff_;
+    }
+
+    // the sample's stored form in slot s: packed 4-bit codes + decoded norm, RaBitQ bits + norm + <x, u>, or float32
+    void store_sample(int s, const float* v) {
+        size_t n = (size_t)s + 1;
+        if (qpack_) {
+            if (scode_.size() < n * nb_) scode_.resize(n * nb_);
+            if (snorm_.size() < n) snorm_.resize(n);
+            encode(v, &scode_[(size_t)s * nb_]);
+            snorm_[s] = decoded_norm(&scode_[(size_t)s * nb_]);
+        } else if (rq_) {
+            if (scode_.size() < n * rq_nb_) scode_.resize(n * rq_nb_);
+            if (snorm_.size() < n) { snorm_.resize(n); sxo_.resize(n); }
+            std::vector<float> r(d_);
+            double rn = 0.0;
+            for (int i = 0; i < d_; ++i) { r[i] = v[i] - rq_c_[i]; rn += (double)r[i] * r[i]; }
+            rn = std::sqrt(rn);
+            uint8_t* c = &scode_[(size_t)s * rq_nb_];
+            std::fill(c, c + rq_nb_, 0);
+            double ax = 0.0;
+            for (int j = 0; j < d_; ++j) {
+                float u = 0.f;
+                const float* pj = &rq_pt_[(size_t)j * d_];
+#pragma omp simd reduction(+ : u)
+                for (int i = 0; i < d_; ++i) u += pj[i] * r[i];
+                if (u >= 0.f) c[j >> 3] |= (uint8_t)(1u << (j & 7));
+                ax += std::fabs((double)u);
+            }
+            snorm_[s] = (float)rn;
+            // <x, u> with u = P^T r / ||r|| and x = sign(u) / sqrt(D)
+            sxo_[s] = rn > EPS ? (float)(ax / rn / std::sqrt((double)d_)) : 1.f;
+        } else {
+            if (sstore_.size() < n * d_) sstore_.resize(n * d_);
+            std::copy(v, v + d_, sstore_.begin() + (size_t)s * d_);
+        }
     }
 
     void drop_sample(i64 id) {
@@ -504,7 +575,62 @@ private:
     }
 
     // ---------------------------------------------------------------- one lookup
-    LookupResult lookup_ptr(const float* x, double lam, int ef1, int ef2, int threads, bool ef_set = false) {
+    // full: compute the features even for an exact repeat (batch lookups: the controllers fit / calibrate on
+    // them); the decision, score and served answer of an exact repeat are the fast path's either way
+    LookupResult lookup_ptr(const float* x, double lam, int ef1, int ef2, int threads, bool ef_set = false,
+                            bool full = false) {
+        LookupResult r;
+        r.features.assign(N_FEAT, POOR_FIT);
+        double t0 = now_s();
+        int fe = (repeat_fast_ && n_cached_ >= (size_t)k_) ? fast_row(x) : -1;
+        if (fe >= 0 && !full) {
+            fast_answer(x, fe, r, lam);
+            r.t_serve = now_s() - t0;
+            return r;
+        }
+        LookupResult res = lookup_full(x, lam, ef1, ef2, threads, ef_set);
+        if (fe >= 0) fast_answer(x, fe, res, lam);
+        return res;
+    }
+
+    // the entry (row) whose center equals x, or -1
+    int fast_row(const float* x) const {
+        auto range = chash_.equal_range(vec_hash(x));
+        for (auto h = range.first; h != range.second; ++h) {
+            int r = crow_.at(h->second);
+            if (std::memcmp(x, &cstore_[(size_t)r * d_], sizeof(float) * d_) == 0 && (int)eball_[r].size() >= k_)
+                return r;
+        }
+        return -1;
+    }
+
+    // serve entry row e's own k nearest ball members (exact distances over the ball)
+    void fast_answer(const float* x, int e, LookupResult& r, double lam) const {
+        const auto& ball = eball_[e];
+        std::vector<std::pair<float, i64>> dv(ball.size());
+        for (size_t j = 0; j < ball.size(); ++j)
+            dv[j] = {l2sq(x, &vstore_[(size_t)vslot_.at(ball[j]) * d_], d_), ball[j]};
+        std::partial_sort(dv.begin(), dv.begin() + k_, dv.end());
+        r.near.resize(k_);
+        for (int j = 0; j < k_; ++j) r.near[j] = dv[j].second;
+        r.nr = std::sqrt(std::max((double)dv[k_ - 1].first, 0.0)) + EPS;
+        r.fast = true;
+        r.score = FAST_SCORE;
+        r.hit = std::isinf(lam) && lam < 0 ? true : (std::isfinite(lam) && FAST_SCORE >= lam);
+    }
+
+    uint64_t vec_hash(const float* x) const {
+        // FNV-1a style over 64-bit words of the vector's bytes
+        const unsigned char* b = reinterpret_cast<const unsigned char*>(x);
+        size_t n = sizeof(float) * (size_t)d_;
+        uint64_t h = 1469598103934665603ULL;
+        size_t i = 0;
+        for (; i + 8 <= n; i += 8) { uint64_t w; std::memcpy(&w, b + i, 8); h = (h ^ w) * 1099511628211ULL; h ^= h >> 29; }
+        for (; i < n; ++i) h = (h ^ b[i]) * 1099511628211ULL;
+        return h;
+    }
+
+    LookupResult lookup_full(const float* x, double lam, int ef1, int ef2, int threads, bool ef_set) {
         LookupResult r;
         r.features.assign(N_FEAT, POOR_FIT);
         double t0 = now_s();
@@ -580,7 +706,7 @@ private:
         float nr2 = (float)(nr * nr);
         int cnt = 0;
         QPrep qp;
-        if (qpack_) qprep(x, qp);
+        if (qpack_ || rq_) qprep(x, qp);
         if (shell_balls_ <= 0) {
             for (size_t s = 0; s < sid_.size(); ++s)
                 if (sref_[s] > 0 && !scached_[s] && sample_d2(x, qp, (int)s) < nr2) ++cnt;
@@ -622,8 +748,36 @@ private:
     // per-request data for the packed-code distance: a = x - lo, split into even / odd dimensions
     // ||x - v||^2 = ||x||^2 + ||v||^2 - 2 x.lo - 2 sum_i x_i step_i c_i (v = lo + step * c; ||v||^2 stored
     // per sample): one multiply-add per dimension on the codes (the simulator's form, sv_sq - 2 sv.x + x.x)
-    struct QPrep { std::vector<float> we, wo; float base = 0.f; };
+    struct QPrep { std::vector<float> we, wo; float base = 0.f; std::vector<float> tab; float qn = 0.f, qsum = 0.f; };
     void qprep(const float* x, QPrep& p) const {
+        if (rq_) {
+            // q' = P^T (x - c) / ||x - c||; tab[j][b] = sum of q'_i over the set bits of byte value b in byte j
+            std::vector<float> r(d_), qp(d_);
+            double qn = 0.0;
+            for (int i = 0; i < d_; ++i) { r[i] = x[i] - rq_c_[i]; qn += (double)r[i] * r[i]; }
+            qn = std::sqrt(qn);
+            float inv = qn > EPS ? (float)(1.0 / qn) : 0.f;
+            double qs = 0.0;
+            for (int j = 0; j < d_; ++j) {
+                float u = 0.f;
+                const float* pj = &rq_pt_[(size_t)j * d_];
+#pragma omp simd reduction(+ : u)
+                for (int i = 0; i < d_; ++i) u += pj[i] * r[i];
+                qp[j] = u * inv;
+                qs += qp[j];
+            }
+            p.tab.assign((size_t)rq_nb_ * 256, 0.f);
+            for (int j = 0; j < rq_nb_; ++j) {
+                float* t = &p.tab[(size_t)j * 256];
+                for (int b = 1; b < 256; ++b) {
+                    int low = __builtin_ctz((unsigned)b), dim = 8 * j + low;
+                    t[b] = t[b & (b - 1)] + (dim < d_ ? qp[dim] : 0.f);
+                }
+            }
+            p.qn = (float)qn;
+            p.qsum = (float)qs;
+            return;
+        }
         p.we.assign(nb_, 0.f); p.wo.assign(nb_, 0.f);
         double xx = 0.0, xl = 0.0;
         for (int i = 0; i < d_; ++i) { xx += (double)x[i] * x[i]; xl += (double)x[i] * qlo_[i]; }
@@ -634,6 +788,16 @@ private:
         p.base = (float)(xx - 2.0 * xl);
     }
     inline float sample_d2(const float* x, const QPrep& p, int s) const {
+        if (rq_) {
+            const uint8_t* c = &scode_[(size_t)s * rq_nb_];
+            const float* t = p.tab.data();
+            float S = 0.f;
+            for (int j = 0; j < rq_nb_; ++j) S += t[(size_t)j * 256 + c[j]];
+            // <x, q'> = sum sign_i q'_i / sqrt(D) = (2 S - sum q') / sqrt(D); <o', q'> ~ <x, q'> / <x, o'>
+            float ip = (2.f * S - p.qsum) * rq_isd_ / std::max(sxo_[s], 1e-6f);
+            float on = snorm_[s];
+            return on * on + p.qn * p.qn - 2.f * on * p.qn * ip;
+        }
         if (!qpack_) return l2sq(x, &sstore_[(size_t)s * d_], d_);
         const uint8_t* c = &scode_[(size_t)s * nb_];
         const float *we = p.we.data(), *wo = p.wo.data();
@@ -674,6 +838,14 @@ private:
     std::vector<float> qlo_, qstep_, se_, so_;
     std::vector<uint8_t> scode_;
     std::vector<float> snorm_;
+    // RaBitQ 1-bit shell samples (scode_: d / 8 bytes per slot; snorm_: ||o - c||; sxo_: <x, u>)
+    bool rq_ = false;
+    int rq_nb_ = 0;
+    float rq_isd_ = 1.f;
+    std::vector<float> rq_c_, rq_pt_, sxo_;
+    // exact-repeat fast path: center hash -> entry
+    bool repeat_fast_ = false;
+    std::unordered_multimap<uint64_t, i64> chash_;
     // center index (ball modes 1 / 2)
     int ball_mode_ = 0, ball_m_ = 64, ball_ef_ = 64, ball_scan_below_ = 0;
     std::unique_ptr<hnswlib::HierarchicalNSW<float>> cidx_;
@@ -720,6 +892,7 @@ PYBIND11_MODULE(_cachecore, m) {
     m.doc() = "Cache core: incremental cache state and the two-stage hit path (doc 9ah)";
     py::class_<LookupResult>(m, "LookupResult")
         .def_readonly("hit", &LookupResult::hit)
+        .def_readonly("fast", &LookupResult::fast)
         .def_readonly("score", &LookupResult::score)
         .def_readonly("nr", &LookupResult::nr)
         .def_readonly("intruders", &LookupResult::intruders)
@@ -740,6 +913,8 @@ PYBIND11_MODULE(_cachecore, m) {
         .def("set_ball_mode", &Core::set_ball_mode, py::arg("mode"), py::arg("m") = 64, py::arg("ef") = 64,
              py::arg("scan_below") = 0)
         .def("set_threads", &Core::set_threads)
+        .def("set_repeat_fast", &Core::set_repeat_fast)
+        .def("set_rabitq", &Core::set_rabitq)
         .def("add_cached", &Core::add_cached)
         .def("remove_cached", &Core::remove_cached)
         .def("add_samples", &Core::add_samples)

@@ -348,6 +348,12 @@ class Cache:
             self.entry_samp.append(np.searchsorted(self.samp_ids, sh))
         self._dirty = False
 
+    def scores(self, qidx, model):
+        """Model scores, features and the would-be served ids (CoreCache: exact repeats on the fast path
+        score FAST_SCORE, doc 9ak)."""
+        X, near = self.features(qidx)
+        return model(X), X, near
+
     def features(self, qidx):
         """7 features, neighborhood radius and the k nearest cached ids."""
         self.prepare()
@@ -506,7 +512,9 @@ class Sim:
                                    maintain=not getattr(args, "no_maintain", False), threads=args.core_threads,
                                    ef1=args.core_ef1, ef2=args.core_ef2, ball_mode=args.core_ball_mode,
                                    ball_m=args.core_ball_m, ball_ef=args.core_ball_ef,
-                                   ball_scan_below=args.core_ball_scan_below)
+                                   ball_scan_below=args.core_ball_scan_below,
+                                   repeat_fast=getattr(args, "core_repeat_fast", False),
+                                   shell_code=getattr(args, "core_shell_code", "sq"))
         else:
             self.cache = Cache(D, args.k, args.R, args.bits, self.M,
                                maintain=not getattr(args, "no_maintain", False))
@@ -567,8 +575,8 @@ class Sim:
             # (updated on inserts / deletes), so its score and retention are
             # recomputed against the current cache and database
             qs = np.concatenate([c[4] for c in self.cal])
-            X, nq = self.cache.features(qs)
-            sc, yy = self.model(X), self.y(qs, nq)
+            sc, X, nq = self.cache.scores(qs, self.model)
+            yy = self.y(qs, nq)
             out, i = [], 0
             for c in self.cal:
                 n = len(c[4])
@@ -615,16 +623,14 @@ class Sim:
         self.fit_q = fit
         self.lam_start = (start_from_fit(self.model(X), y_fit, self.T, a.delta)
                           if getattr(a, "start", "fit") == "fit" else None)
-        X, nc = self.cache.features(cal)
-        s = self.model(X)
+        s, X, nc = self.cache.scores(cal, self.model)
         self.cal = [(a.warmup, s, self.y(cal, nc), np.ones(len(cal)), cal)]
         self.ref = [(a.warmup, s)]
         self.calibrate(a.warmup)
         # in-sample check (11-14): the warm-up cache on the scoring requests greedy optimized for:
         # greedy's oracle hits (any retention-T admission), the cache's oracle hits with the shell
         # sample, and the calibrated policy (model score >= lambda) with its mean retention
-        Xs, ns = self.cache.features(score)
-        ss = self.model(Xs)
+        ss, Xs, ns = self.cache.scores(score, self.model)
         ys = self.y(score, ns)
         srv = ss >= self.lam if self.lam is not None else np.zeros(len(score), bool)
         self.insample = {"n_score": int(len(score)), "n_cand": int(len(cand)),
@@ -775,8 +781,7 @@ class Sim:
         self.cache.replace(self._greedy(qs, wts))
         self.cache.set_p_to_fill()
         hq = q[hold]
-        X, nh = self.cache.features(hq)
-        s = self.model(X)
+        s, X, nh = self.cache.scores(hq, self.model)
         self.reset_detection()
         hl = lab[hold]
         self.last_hold = (hq, hl, 1 / pi[hold])   # for callers that re-score them (timing harness)
@@ -843,8 +848,8 @@ class Sim:
             # most warm-up entries as "unused" (a first version evicted 582 of 826 in batch one)
             self.og_seeded = True
             w = np.asarray(self.stream[:a.warmup], dtype=np.int64)
-            Xw, nw = cache.features(w)
-            sw_ = (self.model(Xw) >= self.lam) if self.lam is not None else np.zeros(len(w), bool)
+            sw0, Xw, nw = cache.scores(w, self.model)
+            sw_ = (sw0 >= self.lam) if self.lam is not None else np.zeros(len(w), bool)
             hv0 = np.bincount(np.asarray(nw[sw_]).ravel(), minlength=cache.n_db) if sw_.any() else None
             cred0 = {}
             if hv0 is not None:
@@ -1258,8 +1263,7 @@ class Sim:
                 if timed:
                     sc, sv, ns = self._timed_lookup(int(qs[0]), s + u0)
                 else:
-                    Xs, ns = cache.features(qs)
-                    sc = self.model(Xs)
+                    sc, Xs, ns = cache.scores(qs, self.model)
                     sv = (sc >= self.lam if self.lam is not None and cache.n_cached() >= self.k
                           else np.zeros(len(qs), bool))
                 ys = self.y(qs, ns)
@@ -1581,6 +1585,12 @@ def make_parser():
     ap.add_argument("--core-ball-scan-below", type=int, default=1000,
                     help="near: caches of at most this many entries are scanned (the graph pays off above ~1,000 "
                          "entries at 769-d, measured on TripClick, doc 9ai); speed only")
+    ap.add_argument("--core-repeat-fast", action="store_true",
+                    help="exact-repeat fast path: a request equal to a cached entry's center is served that entry's "
+                         "own top-k, skipping the hit path (doc 9ak)")
+    ap.add_argument("--core-shell-code", choices=["sq", "rabitq"], default="sq",
+                    help="shell sample codes in the core: b-bit scalar quantization (4 bits: packed) or 1-bit RaBitQ "
+                         "(doc 9ak; memory still charged at --bits)")
     ap.add_argument("--timing-compose", default=None,
                     help="timing (doc 9ah): DiskANN-alone latency (s) of every --timing-every-th request after the "
                          "warm-up (eval_timing_backend.py backend_s<every>_lat.npy); each request's core lookup is "

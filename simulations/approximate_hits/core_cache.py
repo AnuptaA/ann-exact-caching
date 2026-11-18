@@ -20,11 +20,12 @@ import numpy as np
 from simulations.approximate_hits.online_sim import Cache
 
 EPS = 1e-12
+FAST_SCORE = 1e9      # the core's score of an exact repeat (fast path, doc 9ak)
 
 
 class CoreCache(Cache):
     def __init__(self, D, k, R, bits, budget, maintain=True, threads=8, ef1=0, ef2=0, ball_mode="fit", ball_m=64,
-                 ball_ef=64, ball_scan_below=1000):
+                 ball_ef=64, ball_scan_below=1000, repeat_fast=False, shell_code="sq"):
         super().__init__(D, k, R, bits, budget, maintain=maintain)
         if not np.all(self.D["present"]):
             raise ValueError("CoreCache: database changes are not supported")
@@ -45,6 +46,16 @@ class CoreCache(Cache):
         mode = {"fit": 0, "fit-m": 1, "near": 2, "near-scan": 3}[ball_mode]
         if mode:
             self.core.set_ball_mode(mode, int(ball_m), int(ball_ef), int(ball_scan_below))
+        # exact-repeat fast path (doc 9ak): a request equal to a cached center is served that entry's own top-k
+        self.repeat_fast = bool(repeat_fast)
+        if self.repeat_fast:
+            self.core.set_repeat_fast(True)
+        # shell sample codes: sq = the simulator's b-bit scalar quantization (4 bits: packed codes in the core);
+        # rabitq = 1-bit RaBitQ codes of the raw vectors (doc 9ak; memory still charged at b bits, conservative)
+        if shell_code not in ("sq", "rabitq"):
+            raise ValueError(shell_code)
+        self.shell_code = shell_code
+        self.last_fast = None
         self.qlo = self.qhi = None           # fixed quantization range of the shell sample
         self._holders = {}                   # vector id -> set of entry centers (LRU use marks)
         self._core_p = None                  # sampling rate the core's samples were built with
@@ -73,8 +84,10 @@ class CoreCache(Cache):
 
     def _core_add(self, c):
         ball, samp = self._entry_parts(c)
+        sv = (np.asarray(self._db[samp], np.float32) if self.shell_code == "rabitq"
+              else self._quantize(self._db[samp]))
         self.core.add_entry(int(c), np.asarray(self._q[c], np.float32), float(self.geo[c][2]), ball,
-                            np.asarray(self._db[ball], np.float32), samp, self._quantize(self._db[samp]),
+                            np.asarray(self._db[ball], np.float32), samp, sv,
                             float(self.last_used.get(c, 0)))
         for v in ball.tolist():
             self._holders.setdefault(v, set()).add(int(c))
@@ -108,10 +121,15 @@ class CoreCache(Cache):
             if len(samp):
                 x = np.asarray(self._db[samp], np.float64)
                 self.qlo, self.qhi = x.min(axis=0), x.max(axis=0)
+                self._rq_c = x.mean(axis=0)          # RaBitQ centroid: the first sample's mean
                 new_range = True
         for c in ents:
             self._core_remove(c)
-        if new_range:     # packed 4-bit codes in the core (identical counts; doc 9ai); other widths stay float32
+        if new_range and self.shell_code == "rabitq":
+            # random orthogonal rotation, as ballfit_experiments.RaBitQ (seed 0); the core takes P^T
+            P, _ = np.linalg.qr(np.random.default_rng(0).normal(size=(self.dim, self.dim)))
+            self.core.set_rabitq(list(map(float, self._rq_c)), np.ascontiguousarray(P.T, dtype=np.float32))
+        elif new_range:   # packed 4-bit codes in the core (identical counts; doc 9ai); other widths stay float32
             self.core.set_quantizer(list(map(float, self.qlo)), list(map(float, self.qhi)), int(self.bits))
         for c in ents:
             self._core_add(c)
@@ -171,12 +189,23 @@ class CoreCache(Cache):
         # features for the controllers (no decision here); with a stage 2 (timing), near = the answer that
         # would be served (lambda -inf: every query takes the stage-2 path), as the labels need
         lam = float("-inf") if self.ef2 else float("inf")
-        hit, score, near, nr, feat = self.core.lookup_batch(xs, lam, int(self.ef1), int(self.ef2))
+        res = self.core.lookup_batch(xs, lam, int(self.ef1), int(self.ef2))
+        hit, score, near, nr, feat = res[:5]
+        self.last_fast = np.asarray(res[5], dtype=bool) if len(res) > 5 else np.zeros(len(qidx), bool)
         X = np.asarray(feat, dtype=np.float64)
         near = np.asarray(near, dtype=np.int64)
         if self.core.n_cached() < self.k:
             near[:] = 0
         return X, near
+
+    def scores(self, qidx, model):
+        """Model scores; exact repeats (fast path) score FAST_SCORE: served at every cutoff, so calibration
+        counts them as hits at every cutoff (their labels: audits, as any hit)."""
+        X, near = self.features(qidx)
+        s = np.asarray(model(X), dtype=np.float64)
+        if self.repeat_fast and self.last_fast is not None and self.last_fast.any():
+            s = np.where(self.last_fast, FAST_SCORE, s)
+        return s, X, near
 
     def sync(self, model):
         """Before core decisions: shell scope, samples (p), model coefficients."""
