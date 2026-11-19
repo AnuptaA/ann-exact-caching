@@ -3956,3 +3956,21 @@ shares >= 5 of its 10 ids with an earlier query's top-10; shares are of all requ
 | SPACEV real log | 10M | 100 | 123k / 115k (Bing log, then official queries) | 7.3% | 9.0k | 3% |
 | TripClick | 1.52M | 769 | 100k / 82.9k (2018 log) | 18.8% | 3.7k | 31% |
 | MedRAG-Zipf | 23.9M | 769 | 10k / 10k (500 questions, each draw LLM-reworded) | 0% | - | 94% |
+
+#### 9am (cont.). Why the oracle gap, and workload selection criteria (11-19 18:00)
+- Oracle gap vs retention mix (default cache, mean over sizes; share of requests with retention >= 0.9 / 0.3-0.9 /
+  < 0.3; calibrated / oracle): TriviaQA 0.3 .18 / .31 / .52, 0.58; SPACEV 0.3 .07 / .15 / .78, 0.62; ESCI .14 / .23 / .63,
+  0.71; TripClick .08 / .13 / .80, 0.71; MedRAG .48 / .12 / .40, 0.97; SPACEV 0.99 .44 / .13 / .44, 0.96. The share of
+  borderline requests does not predict the gap (correlation -0.04 over 40 cells; MedRAG has no exact repeats and
+  sits at 0.97). What does: the exact intruder count closes the gap exactly where it is large (x1.77 TriviaQA 0.3,
+  x1.35 SPACEV 0.3, x1.28 ESCI / TripClick, x1.01-1.03 MedRAG / Zipf 0.99): hits there are partial-overlap
+  neighbors that only the count can tell from misses, and the sampled count is noisy.
+- Every ladder variant refits the logistic model on its own features (and, for cache / backend variants, on its own
+  cache) and recalibrates lambda on its own scores, per random split. The cache is static; requests are split
+  iid at random from the post-warm-up stream and all are labeled.
+- The 10-ball shells in the dynamic / timing runs are found by the core's fit-m mode: the 64 nearest centers (center
+  graph), sorted by fit, best 10 (best 3 for the features). The static ladder's 10-ball scope took the best 10 of all
+  entries; the combination with m = 64 is measured only in the timing / dynamic runs.
+- Selection criteria for the paper's workloads (Jialin): Zipf settings of one family count as one workload; mix
+  large wins (hit rate far above every alternative, speedup ~2x or more), moderate wins, and real-query
+  workloads; 4 workloads are fine.
