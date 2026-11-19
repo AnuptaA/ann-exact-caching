@@ -3832,3 +3832,24 @@ rate relative to the reference (3 best-fit balls + count over the whole 4-bit sa
 - As deployed (warm-up splits) 1.05 of the reference, but retention < T - 0.01 in 4 of 40 cells (the warm-up
   does not represent later requests in those cells).
 - DiskANN backend (cells done so far): -0 to -10% (ESCI 10% 30.1 -> 27.0%), SPACEV 0.3 0.3%: 2.0 -> 0.6%.
+
+#### 9al (cont.). Backend, candidates, count codes (11-19 01:20; 110 / 200 tables)
+- 4-bit codes over a robust range (1st / 99th percentile per dimension) match float counts: 1.056 of the
+  reference (float 1.051, 8-bit 1.047): the 4-bit loss is the min / max range (outliers), not the width.
+  New core option `--shell-range robust` (CoreCache), to validate per request.
+- DiskANN backend (all 40 cells), reference variant: 0.93 of exact on average (min 0.31); SPACEV 0.3 0.75,
+  SPACEV real 0.87, TriviaQA 0.6 0.90, ESCI 0.93, the rest 0.96-1.0.
+- Past top-k only (maxk10, 27 of 40 cells so far): 0.50 of the default cache on average (SPACEV 0.3 0.04,
+  TriviaQA 0.3 0.23, SPACEV 0.6 / TriviaQA 0.6 ~0.34, ESCI 0.44, SPACEV real 0.54, MedRAG 0.67, Zipf 0.99
+  0.79-0.87, TripClick 0.92). Expanded balls roughly double the hit rate except where hits are repeats.
+- Cache composition at 1%: only 7-16% of cached vectors are in their entry's first k (SPACEV, TriviaQA,
+  SPACEV real), 41% ESCI, 55% TripClick; the shell sample is 15% of memory.
+- Whole cache vs one entry: the oracle of serving the best of the 10 best-fitting entries is 0.83 of the
+  whole cache's on average (ESCI 0.63, TriviaQA 0.3 0.71, SPACEV real 0.76); calibrated, one entry gets 0.64.
+  So of the two differences to Aker / QVCache, expanded balls matter most (x2), whole-cache serving next
+  (x1.2 at the oracle, x1.6 calibrated).
+- The remaining f95 timing runs were cancelled at 00:28 (19 of 72 cells kept): one shell size does not fit
+  every workload (ESCI fails at 1%), and the ladder will choose the configuration to time.
+- TripClick upload to Google Drive: README drafted (datasets/tripclick/README_upload.md); not uploaded, pending
+  Jialin's confirmation that the Drive folder is private (TripClick terms forbid public sharing / hosting of
+  any part, derived resources included).
