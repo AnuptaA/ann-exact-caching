@@ -3905,3 +3905,21 @@ Upload done 01:45 (88 objects, 9.0 GiB, sizes checked). Calibrated hit rate rela
   ESCI 1.28, TripClick 1.28, SPACEV real 1.11, Zipf 0.99 / MedRAG 1.01-1.02); one ball suffices with it. Most of the
   gap to the oracle is the sampled count's noise: better estimators of the intruder count (more or smarter
   samples, floats, unions of shells) are the main model-side lever.
+
+#### 9al (cont.). All 200 tables and the dynamic validation done (11-19 12:50)
+(I did not check the queues between 02:15 and 12:50; the machine was idle from the end of the dynamic runs,
+roughly 06:00-12:50. Monitoring loops must stay inside long-running turns.)
+- Shell share f (static, calibrated hit rate relative to f 0.85, ratio of means over sizes): f 0.95: TripClick
+  0.83, TriviaQA 0.3 0.92, ESCI 0.94, TriviaQA 0.6 0.98, others 1.00-1.01; f 1.0 (no shell): TripClick 0.63,
+  TriviaQA 0.3 0.78, ESCI 0.86, TriviaQA 0.6 0.90. One f does not fit every workload; f 0.95 costs TripClick 17%
+  (the timing win at TripClick 10% came with 0.5 points less hit rate at that size only).
+- Dynamic validation (per request, untimed, DiskANN backend, graph search; hit % / retention), v6 timing
+  config vs V1 (4-bit robust range + inserts at 200) vs V2 (V1 + intruder count over the whole sample instead of
+  the 10 best-fit balls' shells): ESCI 10% LRU 15.6 / 16.8 / 23.1; ESCI 10% continuous 23.7 / 24.7 / 30.5;
+  SPACEV 0.3 1% continuous 2.2 / 3.8 / 5.6; TriviaQA 0.3 10% continuous 49.0 / 48.9 / 54.6; TripClick 10% LRU
+  32.6 / 32.9 / 34.6, continuous 25.1 / 25.3 / 27.9; SPACEV real 10% LRU 8.6 / 8.5 / 9.1; SPACEV 0.99 1% +0.4 / +1.3.
+  So the shell scope costs real hit rate dynamically (ESCI up to 8 points); the robust range and inserts at 200
+  add 0.1-1.6 points. Retention stays 0.905-0.929.
+- Timing batch 9al (timing_9al, 32 runs, 8 at a time, quiet machine, started 12:51): the eight cells above,
+  LRU and continuous greedy, with fit-m (best fit among the 64 nearest centers), robust 4-bit range, inserts
+  at 200 and the fast path; C1 counts over the whole sample, C2 over the 10 best-fit balls' shells.
