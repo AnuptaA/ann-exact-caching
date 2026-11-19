@@ -3934,3 +3934,13 @@ roughly 06:00-12:50. Monitoring loops must stay inside long-running turns.)
   continuous 0.999x (3.8) vs 1.003x (2.2). Same speed, higher hit rate; ESCI 10% 1.228x still below node$ 1.258x.
 - Queue: timing_9al.txt (32 runs, 22 done at 14:15), then timing9al_full.txt (128 runs: C2 for every other cell,
   C3 for all cells), quiet, 8 at a time.
+
+#### 9al (cont.). Timing 9al, first batch complete (11-19 15:45)
+Speedup (hit %), v6 vs C2 (fit-m 64, 10-ball count, robust range, inserts 200, fast path): TripClick 10% LRU
+1.012x (32.6) -> 1.163x (33.6), 10% continuous 1.119x -> 1.136x, 1% LRU 1.119x -> 1.129x (18.0), 1% continuous
+1.032x -> 1.052x (8.6); TriviaQA 0.3 10% LRU 1.648x (53.9) -> 1.792x (55.2), continuous 1.600x -> 1.631x; SPACEV real
+10% LRU 1.056x -> 1.059x (9.0), continuous 1.057x -> 1.064x; ESCI 10% continuous 1.172x -> 1.228x, LRU 0.953x ->
+1.056x. Hit path of SPACEV real is still 2.7-3.5 ms per request (not the count; to profile). C3 (30 balls) on SPACEV
+0.6 1%: slower than v6 (0.932x LRU, 1.055x continuous) with +1.4 points of hit rate: the count is not worth
+more than ~10 balls there. Two C1 runs (TriviaQA 0.3 10%, whole sample) stopped after 1.8 h by PID.
+Full batch (timing9al_full.txt, 128 runs; C2 for the other cells, C3 for all) started 15:13, 8 at a time.
