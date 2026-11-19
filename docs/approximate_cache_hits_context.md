@@ -3923,3 +3923,14 @@ roughly 06:00-12:50. Monitoring loops must stay inside long-running turns.)
 - Timing batch 9al (timing_9al, 32 runs, 8 at a time, quiet machine, started 12:51): the eight cells above,
   LRU and continuous greedy, with fit-m (best fit among the 64 nearest centers), robust 4-bit range, inserts
   at 200 and the fast path; C1 counts over the whole sample, C2 over the 10 best-fit balls' shells.
+
+#### 9al (cont.). First timing 9al results (11-19 14:15)
+- C1 (count over the whole sample) is far too slow: hit path 6.4-13.6 ms per request vs 0.2-0.5 ms at 10 balls
+  (SPACEV 0.99 1% LRU 0.41x vs 1.63x), though it gains hit rate. Unstarted C1 runs were skipped (marker only);
+  C3 (intruder count over the shells of the 30 best-fit balls) replaces it in the full batch.
+- C2 (10 balls; fit-m 64, robust range, inserts 200, fast path) vs v6, speedup (hit %): ESCI 1% continuous 1.061x
+  (9.6) vs 1.049x (8.9); ESCI 10% continuous 1.228x (27.8) vs 1.172x (23.7); ESCI 10% LRU 1.056x (20.6) vs 0.953x
+  (15.6); SPACEV 0.99 1% continuous 1.891x vs 1.854x; TripClick 1% continuous 1.052x (8.6) vs 1.032x (6.5); SPACEV 0.3 1%
+  continuous 0.999x (3.8) vs 1.003x (2.2). Same speed, higher hit rate; ESCI 10% 1.228x still below node$ 1.258x.
+- Queue: timing_9al.txt (32 runs, 22 done at 14:15), then timing9al_full.txt (128 runs: C2 for every other cell,
+  C3 for all cells), quiet, 8 at a time.
