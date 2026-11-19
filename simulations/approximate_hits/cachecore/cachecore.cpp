@@ -231,6 +231,11 @@ public:
         std::vector<i64> bv(B.shape(0));
         for (ssize_t j = 0; j < B.shape(0); ++j) { bv[j] = B(j); holders_[B(j)].push_back(c); }
         eball_.push_back(std::move(bv));
+        {
+            std::vector<int> sl(B.shape(0));
+            for (ssize_t j = 0; j < B.shape(0); ++j) sl[j] = vslot_.at(B(j));
+            eslot_.push_back(std::move(sl));
+        }
         auto S = shell.unchecked<1>();
         std::vector<int> sv(S.shape(0));
         for (ssize_t j = 0; j < S.shape(0); ++j) sv[j] = sslot_.at(S(j));
@@ -264,13 +269,14 @@ public:
             radius_[r] = radius_[last];
             ec_[r] = ec_[last];
             eball_[r] = std::move(eball_[last]);
+            eslot_[r] = std::move(eslot_[last]);
             eshell_[r] = std::move(eshell_[last]);
             eshell_ids_[r] = std::move(eshell_ids_[last]);
             used_[r] = used_[last];
             crow_[ec_[r]] = r;
         }
         cstore_.resize((size_t)last * d_);
-        radius_.pop_back(); ec_.pop_back(); eball_.pop_back(); eshell_.pop_back(); eshell_ids_.pop_back();
+        radius_.pop_back(); ec_.pop_back(); eball_.pop_back(); eslot_.pop_back(); eshell_.pop_back(); eshell_ids_.pop_back();
         used_.pop_back();
         crow_.erase(c);
         if (cidx_) {
@@ -606,11 +612,17 @@ private:
     // the k nearest among the members of the first m entries of `best` (rows): exact; too few members: keep the
     // stage-1 answer
     void union_serve(const float* x, const std::vector<int>& best, size_t m, LookupResult& r) const {
+        // members' slots are stored per entry (stable while referenced); dedupe by a stamp per slot
         std::vector<int> slots;
+        // thread-local stamps (batch lookups run requests in parallel); the counter is global so cores never clash
+        thread_local std::vector<uint32_t> vstamp;
+        static std::atomic<uint32_t> ctr(0);
+        if (vstamp.size() < vid_.size()) vstamp.resize(vid_.size(), 0);
+        uint32_t st = ++ctr;
+        if (st == 0) { std::fill(vstamp.begin(), vstamp.end(), 0); st = ctr = 1; }
         for (size_t j = 0; j < std::min(m, best.size()); ++j)
-            for (i64 id : eball_[best[j]]) slots.push_back(vslot_.at(id));
-        std::sort(slots.begin(), slots.end());
-        slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+            for (int sl : eslot_[best[j]])
+                if (vstamp[sl] != st) { vstamp[sl] = st; slots.push_back(sl); }
         if ((int)slots.size() < k_) return;
         std::vector<std::pair<float, i64>> heap;
         heap.reserve(k_ + 1);
@@ -916,6 +928,8 @@ private:
     std::vector<float> cstore_;
     std::vector<double> radius_;
     std::vector<std::vector<i64>> eball_;
+    std::vector<std::vector<int>> eslot_;       // eball_ as vector slots (union serving)
+
     std::vector<std::vector<int>> eshell_;
     std::vector<std::vector<i64>> eshell_ids_;
     std::vector<double> used_;

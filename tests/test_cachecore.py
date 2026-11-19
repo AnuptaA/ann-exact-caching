@@ -381,3 +381,15 @@ def test_union_serve_matches_reference(world):
             want = mem[np.argsort(dm, kind="stable")[:K]]
             assert set(res.near) == set(want.tolist())
             assert set(core.serve(x, 0)) == set(want.tolist())
+
+
+def test_union_serve_batch_threads(world):
+    """Batch lookups run requests in parallel: union serving must be thread-safe and equal the single path."""
+    rng, db, q, ents, model = world
+    core = build(db, q, ents, 3, model)
+    core.set_serve_balls(10, 0)
+    core.set_threads(8)
+    hit, score, near, nr, feat = core.lookup_batch(q[:300], float("-inf"), 0)[:5]
+    core.set_threads(1)
+    for i in range(0, 300, 7):
+        assert set(core.lookup(q[i], float("-inf"), 0).near) == set(near[i].tolist())

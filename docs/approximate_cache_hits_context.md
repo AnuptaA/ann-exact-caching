@@ -4002,3 +4002,14 @@ Vectors scanned per request, m = 30 / 100: TripClick 1.7k / 5.4k, TriviaQA ~1.9k
 Timing batch 9an (timing9an.txt, 128 runs): C4 = 9al config + serve from the 30 best-fit balls (fit-m 64), C5 = 100
 balls (fit-m 128), LRU and continuous greedy, all 32 non-sensitivity cells, 10% first; starts when the aug4 jobs
 finish; the held 9al full batch (28 of 128 done) is dropped.
+
+#### 9an (cont.). Segfault in the first 9an batch, restart (11-19 23:05)
+The first union-serving batch lost most runs silently: exit status 139 (SIGSEGV) during warm-up on larger caches.
+Cause: my optimization of union_serve shared a stamp array between threads, and lookup_batch (features, warm-up)
+runs requests in parallel. Fixed with thread-local stamps (a global atomic counter); tests: serving vs a NumPy
+reference, and batch lookups with 8 threads vs the single path (18 pass). run_jobs prints "done" for any exit,
+so a missing DONE marker is the failure signal. All C4 / C5 results before 23:05 are discarded and rerun.
+First numbers before the restart (valid, single-request path): MedRAG 0.3% LRU C4 2.76x (hit path 3.3 ms; serve 2.7 ms
+at 30 balls, 8.9 ms at 100 balls, vs 0.3 ms for the stage-2 graph on that small cache): union serving only pays on
+large caches (graph serve ~9 ms at TriviaQA 10%); rule candidate: use the cheaper serving per cache size.
+TriviaQA 0.99 1% LRU C4: 2.40x vs 2.24x (hit path 1.67 vs 3.26 ms).
