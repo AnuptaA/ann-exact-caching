@@ -3944,3 +3944,15 @@ Speedup (hit %), v6 vs C2 (fit-m 64, 10-ball count, robust range, inserts 200, f
 0.6 1%: slower than v6 (0.932x LRU, 1.055x continuous) with +1.4 points of hit rate: the count is not worth
 more than ~10 balls there. Two C1 runs (TriviaQA 0.3 10%, whole sample) stopped after 1.8 h by PID.
 Full batch (timing9al_full.txt, 128 runs; C2 for the other cells, C3 for all) started 15:13, 8 at a time.
+
+### 9am. Workload characterization (11-19 17:00)
+Per workload (stream, requests after a 20,000-request warm-up; "near" = a first-time query whose exact top-10
+shares >= 5 of its 10 ids with an earlier query's top-10; shares are of all requests after the warm-up):
+| workload | DB | dim | requests / distinct | exact repeats | median repeat gap | near (>= 5 shared) |
+|---|---|---|---|---|---|---|
+| SPACEV Zipf 0.3 / 0.6 / 0.99 | 10M | 100 | ~100k / 98k, 94k, 65k | 2.4 / 6.6 / 37.6% | 30.6k / 24.0k / 4.5k | 54 / 52 / 28% |
+| TriviaQA Zipf 0.3 / 0.6 / 0.99 | 10M (SPHERE) | 769 | ~100k / 89k, 81k, 47k | 13.1 / 22.0 / 56.5% | 28.6k / 21.0k / 3.0k | 50 / 45 / 21% |
+| ESCI | 1M | 384 | 130,652 / 130,652 (random order) | 0% | - | 50% |
+| SPACEV real log | 10M | 100 | 123k / 115k (Bing log, then official queries) | 7.3% | 9.0k | 3% |
+| TripClick | 1.52M | 769 | 100k / 82.9k (2018 log) | 18.8% | 3.7k | 31% |
+| MedRAG-Zipf | 23.9M | 769 | 10k / 10k (500 questions, each draw LLM-reworded) | 0% | - | 94% |
