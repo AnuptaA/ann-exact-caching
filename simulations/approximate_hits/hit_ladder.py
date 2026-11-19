@@ -39,6 +39,10 @@ class Table:
     def __init__(self, path):
         z = np.load(path, allow_pickle=False)
         self.z = {k: z[k] for k in z.files}
+        aug2 = Path(path).with_suffix(".aug2.npz")
+        if aug2.exists():                # hit_table_aug2.py: exact intruder count (not deployable)
+            a = np.load(aug2)
+            self.z.update({k: a[k] for k in a.files})
         aug = Path(path).with_suffix(".aug.npz")
         if aug.exists():                 # hit_table_aug.py: 8-bit / robust-range counts over the whole sample
             a = np.load(aug)
@@ -60,6 +64,21 @@ class Table:
             r = self.rad[idx[:, j]] if len(self.rad) else np.ones(len(nr))
             ok = j < len(self.rad)
             cols += [np.where(ok, de[:, j] / r, 10.0), np.where(ok, nr / r, 10.0)]
+        return np.column_stack(cols)
+
+    def balls_near_fit(self, nb, m):
+        """Best fit (nr + d) / radius among the m nearest centers (from the 10 stored), nb best of them."""
+        z = self.z
+        idx, de, nr = z["near_idx"][:, :m], z["near_de"][:, :m].astype(np.float64), z["nr"]
+        rad = self.rad[idx]
+        fit = (nr[:, None] + de) / rad
+        o = np.argsort(fit, axis=1, kind="stable")[:, :nb]
+        cols = []
+        for j in range(nb):
+            if j >= o.shape[1]:
+                cols += [np.full(len(nr), 10.0)] * 2
+                continue
+            cols += [np.take_along_axis(de / rad, o[:, j:j + 1], axis=1)[:, 0], nr / np.take_along_axis(rad, o[:, j:j + 1], axis=1)[:, 0]]
         return np.column_stack(cols)
 
     def count(self, name, pm=1.0):
@@ -96,6 +115,11 @@ class Table:
         for B in (3, 10):
             V[f"balls: 3 nearest, shell {B} nearest, p x1, 4-bit"] = (np.hstack([N3, self.count(f"cnt_near{B}_4", 1.0)]), z["y"], "balls")
             V[f"balls: 3 nearest, shell {B} nearest, p x0.25, 4-bit"] = (np.hstack([N3, self.count(f"cnt_near{B}_4", 0.25)]), z["y"], "balls")
+        V["balls: 1 nearest + count over all"] = (np.hstack([self.balls(1, "near"), self.count("all_4")]), z["y"], "balls")
+        V["balls: 2 nearest + count over all"] = (np.hstack([self.balls(2, "near"), self.count("all_4")]), z["y"], "balls")
+        for mm in (3, 10):
+            V[f"balls: best fit among {mm} nearest, 1 ball + count over all"] = (np.hstack([self.balls_near_fit(1, mm), self.count("all_4")]), z["y"], "balls")
+            V[f"balls: best fit among {mm} nearest, 3 balls + count over all"] = (np.hstack([self.balls_near_fit(3, mm), self.count("all_4")]), z["y"], "balls")
         V["balls: 1 nearest, shell 3 nearest, p x1, 4-bit"] = (np.hstack([self.balls(1, "near"), self.count("cnt_near3_4", 1.0)]), z["y"], "balls")
         # graph search (stage-1 radius / fit order; stage-2 served answer as the label)
         for g in self.meta.get("graph", []):
@@ -107,6 +131,13 @@ class Table:
             V[f"graph ef {g[0]}/{g[1]}: + shell 10 best-fit (timing v6)"] = (Xg10, z[f"{t}_y"], "graph")
             Xn = np.hstack([self.balls(3, "near", t), np.log1p(z[f"{t}_near10_4"].astype(float))[:, None]])
             V[f"graph ef {g[0]}/{g[1]}: + 3 nearest, shell 10 nearest (timing near)"] = (Xn, z[f"{t}_y"], "graph")
+        # headroom probes (not deployed): richer features; the exact intruder count
+        rich = [self.balls(min(10, z["fit_idx"].shape[1]))] + [self.count(f"cnt_fit{B}_f", pm) for B in (3, 10) for pm in self.meta["p_mult"]]
+        rich += [self.count("all_f"), self.count("all_4"), self.count("rq_fit10")]
+        V["probe: rich features (10 balls, counts at every p, float, RaBitQ)"] = (np.hstack(rich), z["y"], "probe")
+        if "exact_cnt" in z:
+            V["probe: 3 balls + exact intruder count"] = (np.hstack([B3, np.log1p(z["exact_cnt"].astype(float))[:, None]]), z["y"], "probe")
+            V["probe: 1 ball + exact intruder count"] = (np.hstack([self.balls(1), np.log1p(z["exact_cnt"].astype(float))[:, None]]), z["y"], "probe")
         # serving from one entry instead of the whole cache (features as ref)
         V["serve: best-fit entry only"] = (V[next(iter(V))][0], z["y_single_fit"], "serve")
         V["serve: nearest entry only"] = (np.hstack([N3, self.count("all_4")]), z["y_single_near"], "serve")

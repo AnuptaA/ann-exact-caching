@@ -3853,3 +3853,43 @@ rate relative to the reference (3 best-fit balls + count over the whole 4-bit sa
 - TripClick upload to Google Drive: README drafted (datasets/tripclick/README_upload.md); not uploaded, pending
   Jialin's confirmation that the Drive folder is private (TripClick terms forbid public sharing / hosting of
   any part, derived resources included).
+
+#### 9al (cont.). Headroom, calibration miss, consistent comparisons (11-19 02:00)
+- Upload: TripClick vectors, requests, texts, raw shards, README and LICENSE to gdrive:Datasets/tripclick
+  (Jialin confirmed; private use only).
+- Oracle gap, split (mean over sizes; oracle | model's best cutoff | calibrated): TriviaQA 0.3 26.4 | 19.1
+  (0.72) | 17.2; SPACEV 0.3 10.6 | 8.3 (0.79) | 7.0; ESCI 20.9 | 16.9 (0.81) | 15.4; TripClick 11.7 | 9.9 (0.85)
+  | 8.9; TriviaQA 0.6 36.4 | 30.2 (0.83) | 28.6; Zipf 0.99 / MedRAG 0.97-0.99 | ~0.98. Calibration costs
+  only 1-16% of the best cutoff; the model's ranking is the gap.
+- Model class: gradient boosting (depth 4) = logistic regression on the same features (TriviaQA 0.3 10%:
+  38.4 vs 38.9). Richer features (10 best-fit balls, counts at every sampling rate in float, RaBitQ, all
+  samples) help: TriviaQA 0.3 38.9 -> 42.3, ESCI 30.5 -> 32.0, SPACEV 0.3 14.0 -> 14.6, TripClick 19.9 ->
+  20.5, TriviaQA 0.6 50.8 -> 52.2; the oracle is 57.6 / 37.0 / 20.8 / 24.0 / 66.0. The rest is information the
+  features do not carry; hit_table_aug2.py adds the exact intruder count (from the query's own top-500) to
+  see how much of it is the sample's noise (queued, 40 default tables, with ladder reruns that also add
+  1-nearest / 2-nearest / best-fit-among-m-nearest ball variants and the rich-feature probe).
+- Calibration miss (deployed warm-up splits, later requests): only TripClick, all four sizes (retention
+  0.877-0.888). Random splits of the later requests are fine (0 of 200 draws below T - 0.01). Cause: the
+  warm-up requests are easier than the later ones for a cache built from them (TripClick 1%: mean retention
+  of the cache's answer 0.19 / 0.175 on the fit / cal splits vs 0.099 later; exact repeats of a cached
+  center 2.6-2.8% vs 1.6%). Other workloads: equal. A shift, not the normal approximation.
+- Calibration rule (threshold_selection.py, normal_fixed; weighted for audited hits): per threshold in a grid of
+  100 fit-score quantiles, from the fit split's start threshold toward lenient: among calibration requests
+  scoring >= lambda (n of them) lower bound = mean - z * sd / sqrt(n), z = 1.645 (delta 0.05); lambda = the last
+  threshold before the first one whose bound is below T (fixed order: no multiplicity correction). Needs: (1)
+  the normal approximation of a mean of n values in [0, 1] (n = admitted calibration requests, ~200 at a
+  5% hit rate), (2) calibration requests drawn like the future ones. Chosen by us (SUPG / BARGAIN); Hoeffding
+  (width sqrt(ln(1/delta) / 2n) = 0.039 at n = 1,000 vs 0.006 for sd 0.12) and empirical Bernstein were
+  compared on the detection tests (normal >> kl > hoeffding ~ eb) and eb admits nothing below ~10-20k.
+- Consistent comparisons (ratio of mean hit rates over a workload's sizes; the earlier mix of directions
+  and of oracle vs calibrated numbers was confusing): whole cache vs best-fit entry only, oracle / calibrated:
+  ESCI 0.64 / 0.12, TriviaQA 0.3 0.63 / 0.52, TriviaQA 0.6 0.72 / 0.55, SPACEV real 0.72 / 0.71, TripClick
+  0.81 / 0.59, SPACEV 0.3 0.82 / 0.74, MedRAG 0.96 / 0.61, Zipf 0.99 0.89-0.96 / 0.77-0.92. Past top-k only vs
+  default, calibrated / oracle: SPACEV 0.3 0.02 / 0.20, TriviaQA 0.3 0.23 / 0.45, TriviaQA 0.6 0.33 / 0.54, SPACEV
+  0.6 0.32 / 0.38, ESCI 0.35 / 0.50, SPACEV real 0.46 / 0.46, MedRAG 0.66 / 0.71, Zipf 0.99 0.78-0.87 / 0.79-0.88,
+  TripClick 0.89 / 0.87.
+- DiskANN backend vs exact (ratio of means over sizes), oracle / calibrated: SPACEV real 0.89 / 0.86, SPACEV 0.3
+  1.00 / 0.88, ESCI 0.96 / 0.91, TriviaQA 0.6 0.97 / 0.90, TriviaQA 0.3 0.99 / 0.92, others 0.97-1.00 / 0.96-1.00. The
+  oracle barely moves while the calibrated rate falls: the loss is in the features (balls and shells built
+  from DiskANN's lists, deep-500 recall 0.89 on TripClick), not in what is available to serve. Not yet split
+  into labels-only vs structure-only.
