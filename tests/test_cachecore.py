@@ -357,3 +357,27 @@ def test_rabitq_counts_match_reference(world):
     assert agree >= 78
     # an estimate (noisy at 16-d Gaussian data, biased up near the boundary): it tracks the exact count
     assert np.corrcoef(est, exa)[0, 1] > 0.5
+
+
+# ---------------------------------------------------------------- serving from the union of the best-fit balls (doc 9an)
+def test_union_serve_matches_reference(world):
+    rng, db, q, ents, model = world
+    for nb in (1, 3, 10):
+        core = build(db, q, ents, 3, model)
+        core.set_serve_balls(nb, 0)
+        for i in range(40):
+            x = q[i]
+            _, _, _, _ = ref_lookup(x, db, q, ents, model, 0.0, 3)
+            res = core.lookup(x, float("-inf"), 0, 0)
+            # reference: entries sorted by fit, union of the first nb members, k nearest
+            cached = np.unique(np.concatenate([e[1] for e in ents]))
+            d2 = ((db[cached] - x) ** 2).sum(axis=1)
+            nr = float(np.sqrt(np.sort(d2)[K - 1])) + EPS
+            cen = np.array([e[0] for e in ents]); rad = np.array([e[3] for e in ents])
+            fit = (nr + np.sqrt(((q[cen] - x) ** 2).sum(axis=1))) / rad
+            order = np.argsort(fit, kind="stable")[:nb]
+            mem = np.unique(np.concatenate([ents[e][1] for e in order]))
+            dm = ((db[mem] - x) ** 2).sum(axis=1)
+            want = mem[np.argsort(dm, kind="stable")[:K]]
+            assert set(res.near) == set(want.tolist())
+            assert set(core.serve(x, 0)) == set(want.tolist())

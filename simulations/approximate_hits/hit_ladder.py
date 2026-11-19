@@ -39,6 +39,10 @@ class Table:
     def __init__(self, path):
         z = np.load(path, allow_pickle=False)
         self.z = {k: z[k] for k in z.files}
+        aug3 = Path(path).with_suffix(".aug3.npz")
+        if aug3.exists():                # hit_table_aug3.py: serving from the union of the m best-fitting balls
+            a = np.load(aug3)
+            self.z.update({k: a[k] for k in a.files})
         aug2 = Path(path).with_suffix(".aug2.npz")
         if aug2.exists():                # hit_table_aug2.py: exact intruder count (not deployable)
             a = np.load(aug2)
@@ -140,6 +144,9 @@ class Table:
             V["probe: 1 ball + exact intruder count"] = (np.hstack([self.balls(1), np.log1p(z["exact_cnt"].astype(float))[:, None]]), z["y"], "probe")
         # serving from one entry instead of the whole cache (features as ref)
         V["serve: best-fit entry only"] = (V[next(iter(V))][0], z["y_single_fit"], "serve")
+        for mm in (1, 3, 10):
+            if f"y_union{mm}" in z:
+                V[f"serve: union of {mm} best-fit balls (exact, scan {int(z[f'scan_union{mm}'].mean())} vectors)"] = (V[next(iter(V))][0], z[f"y_union{mm}"], "serve")
         V["serve: nearest entry only"] = (np.hstack([N3, self.count("all_4")]), z["y_single_near"], "serve")
         return V
 

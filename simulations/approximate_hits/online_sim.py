@@ -516,7 +516,8 @@ class Sim:
                                    repeat_fast=getattr(args, "core_repeat_fast", False),
                                    shell_code=getattr(args, "core_shell_code", "sq"),
                                    insert_ef=getattr(args, "core_insert_ef", 40),
-                                   shell_range=getattr(args, "shell_range", "minmax"))
+                                   shell_range=getattr(args, "shell_range", "minmax"),
+                                   serve_balls=getattr(args, "core_serve_balls", 0))
         else:
             self.cache = Cache(D, args.k, args.R, args.bits, self.M,
                                maintain=not getattr(args, "no_maintain", False))
@@ -1176,7 +1177,7 @@ class Sim:
         r = cache.core.lookup(x, float(lam), int(cache.ef1), int(cache.ef2))
         dt = _t.perf_counter() - a0
         near = np.asarray(r.near, dtype=np.int64)
-        if not r.hit and cache.ef2:
+        if not r.hit and (cache.ef2 or getattr(cache, "serve_balls", 0)):
             near = np.asarray(cache.core.serve(x, int(cache.ef2)), dtype=np.int64)
         if len(near) < self.k:
             near = np.concatenate([near, np.zeros(self.k - len(near), np.int64)])
@@ -1590,6 +1591,9 @@ def make_parser():
     ap.add_argument("--core-repeat-fast", action="store_true",
                     help="exact-repeat fast path: a request equal to a cached entry's center is served that entry's "
                          "own top-k, skipping the hit path (doc 9ak)")
+    ap.add_argument("--core-serve-balls", type=int, default=0,
+                    help="core: serve a hit from the k nearest among the members of the n best-fitting entries "
+                         "(exact scan) instead of a stage-2 search over the whole cache (doc 9an)")
     ap.add_argument("--shell-range", choices=["minmax", "robust"], default="minmax",
                     help="core: 4-bit code range per dimension, min / max or 1st / 99th percentile (doc 9al)")
     ap.add_argument("--core-insert-ef", type=int, default=40,

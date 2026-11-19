@@ -124,6 +124,10 @@ public:
         if ((mode == 1 || mode == 2) && !cidx_) rebuild_center_index();
     }
     void set_threads(int n) { threads_ = std::max(1, n); }
+    // Cheap serving (doc 9an): a hit is answered with the k nearest among the members of the n best-fitting entries
+    // (exact scan of at most n x K vectors) instead of a search over the whole cache (stage 2); ef1 = the stage-1
+    // search list that serve() uses to find those entries. n = 0: stage 2 as before.
+    void set_serve_balls(int n, int ef1) { serve_balls_ = std::max(n, 0); serve_ef1_ = ef1; }
     // efConstruction of incremental graph inserts (an entry's ball; default 40, doc 9al: does the online graph degrade?)
     void set_insert_ef(int n) { inc_efc_ = std::max(n, 1); }
 
@@ -368,7 +372,7 @@ public:
             if (cidx_ && ball_mode_ > 0) cidx_->setEf(std::max<size_t>(ball_ef_, std::max<size_t>(ball_m_, std::max(N_BALLS, shell_balls_))));
             parallel_for(n, threads_, [&](ssize_t i) { res[i] = lookup_ptr(base + i * d_, lam, ef1, 0, 1, true, true); });
             // phase 2: served points of the hits (stage 2); exact repeats keep the fast path's answer
-            if (ef2 > 0) {
+            if (ef2 > 0 && serve_balls_ == 0) {
                 hnsw_->setEf(std::max(ef2, k_));
                 parallel_for(n, threads_, [&](ssize_t i) {
                     if (!res[i].hit || res[i].fast) return;
@@ -396,6 +400,10 @@ public:
     // stage 2 alone (labels of misses need the would-be served answer)
     std::vector<i64> serve(py::array_t<float, py::array::c_style | py::array::forcecast> x, int ef2) {
         auto X = x.unchecked<1>();
+        if (serve_balls_ > 0) {          // the answer a hit would get: run the request path with every request a hit
+            LookupResult r = lookup_ptr(&X(0), -std::numeric_limits<double>::infinity(), serve_ef1_, 0, threads_);
+            return r.near;
+        }
         std::vector<std::pair<float, i64>> nn;
         if (ef2 > 0) graph_knn(&X(0), ef2, nn); else exact_knn(&X(0), nn, threads_);
         std::vector<i64> out;
@@ -595,6 +603,29 @@ private:
         return res;
     }
 
+    // the k nearest among the members of the first m entries of `best` (rows): exact; too few members: keep the
+    // stage-1 answer
+    void union_serve(const float* x, const std::vector<int>& best, size_t m, LookupResult& r) const {
+        std::vector<int> slots;
+        for (size_t j = 0; j < std::min(m, best.size()); ++j)
+            for (i64 id : eball_[best[j]]) slots.push_back(vslot_.at(id));
+        std::sort(slots.begin(), slots.end());
+        slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
+        if ((int)slots.size() < k_) return;
+        std::vector<std::pair<float, i64>> heap;
+        heap.reserve(k_ + 1);
+        for (int s : slots) {
+            float dd = l2sq(x, &vstore_[(size_t)s * d_], d_);
+            if ((int)heap.size() < k_) { heap.push_back({dd, vid_[s]}); std::push_heap(heap.begin(), heap.end()); }
+            else if (dd < heap.front().first) {
+                std::pop_heap(heap.begin(), heap.end()); heap.back() = {dd, vid_[s]}; std::push_heap(heap.begin(), heap.end());
+            }
+        }
+        std::sort(heap.begin(), heap.end());
+        r.near.resize(k_);
+        for (int j = 0; j < k_; ++j) r.near[j] = heap[j].second;
+    }
+
     // the entry (row) whose center equals x, or -1
     int fast_row(const float* x) const {
         auto range = chash_.equal_range(vec_hash(x));
@@ -655,7 +686,8 @@ private:
         std::vector<double> fit(ne), de(ne);
         size_t nb = std::min<size_t>(N_BALLS, ne);
         size_t ns = shell_balls_ > 0 ? std::min<size_t>(shell_balls_, ne) : 0;
-        size_t top = std::max(nb, ns);
+        size_t sv = serve_balls_ > 0 ? std::min<size_t>(serve_balls_, ne) : 0;
+        size_t top = std::max(std::max(nb, ns), sv);
         std::vector<int> best;
         auto by_fit = [&](int a, int b) { return fit[a] < fit[b] || (fit[a] == fit[b] && a < b); };
         if (ball_mode_ == 3 || (ball_mode_ == 2 && ne <= (size_t)ball_scan_below_)) {     // nearest by full scan
@@ -735,7 +767,9 @@ private:
         // lambda -inf: every request takes the hit path (the would-be served answer, for labels / tuning)
         r.hit = std::isfinite(sc) && (std::isinf(lam) && lam < 0 ? true : (std::isfinite(lam) && sc >= lam));
         double t4 = now_s();
-        if (r.hit && ef2 > 0) {
+        if (r.hit && serve_balls_ > 0) {
+            union_serve(x, best, sv, r);
+        } else if (r.hit && ef2 > 0) {
             std::vector<std::pair<float, i64>> nn2;
             graph_knn(x, ef2, nn2);
             if (ef1 > 0 && ef_set) hnsw_->setEf(std::max(ef1, k_));
@@ -832,7 +866,7 @@ private:
         for (auto& h : th) h.join();
     }
 
-    int d_, k_, shell_balls_, M_, efc_, seed_, threads_ = 1, inc_efc_ = 40;
+    int d_, k_, shell_balls_, M_, efc_, seed_, threads_ = 1, inc_efc_ = 40, serve_balls_ = 0, serve_ef1_ = 0;
     bool graph_on_ = true;
     // packed 4-bit shell samples
     bool qpack_ = false;
@@ -917,6 +951,7 @@ PYBIND11_MODULE(_cachecore, m) {
         .def("set_threads", &Core::set_threads)
         .def("set_repeat_fast", &Core::set_repeat_fast)
         .def("set_insert_ef", &Core::set_insert_ef)
+        .def("set_serve_balls", &Core::set_serve_balls)
         .def("set_rabitq", &Core::set_rabitq)
         .def("add_cached", &Core::add_cached)
         .def("remove_cached", &Core::remove_cached)

@@ -3974,3 +3974,20 @@ shares >= 5 of its 10 ids with an earlier query's top-10; shares are of all requ
 - Selection criteria for the paper's workloads (Jialin): Zipf settings of one family count as one workload; mix
   large wins (hit rate far above every alternative, speedup ~2x or more), moderate wins, and real-query
   workloads; 4 workloads are fine.
+
+### 9an. Speedup against the best alternative, and cheap serving (11-19 18:10)
+Ours / best alternative (Aker, QVCache or DiskANN with the cache's memory as node cache), best of our runs per cell
+(v6 + 9al), speedup ratio: TriviaQA Zipf 1.09-1.53 (0.3: 1.09 / 1.51 at 1% / 10%; 0.6: 1.16 / 1.41; 0.99: 1.53 / 1.36); SPACEV
+Zipf 0.94-1.29 (0.99: 1.07-1.29; 0.3 below 1 at 0.3-3%); TripClick 0.97-1.04; SPACEV real 0.98-1.01; ESCI 0.93-1.00 (v6;
+1.23x vs node$ 1.26x at 10% with 9al); MedRAG 1.86 / 2.16 / 2.01 / 2.74 (0.01-0.3%). Only MedRAG exceeds 2x.
+Where the time goes (TriviaQA 10%, DiskANN 74 ms): per hit 12-13 ms, of which stage-2 serving ~8-10 ms (graph search
+at the tuned search list, 1024-2048, over a 1M-vector cache); per miss +2.5-4 ms (kNN + balls). SPACEV 0.99 10%:
+per hit 0.84 ms, per miss +0.67 ms. Counterfactual TriviaQA 0.99 10% (86% hits): serving at ~1 ms would give ~5.4x
+vs the best alternative 2.6x (2.1x). SPACEV 0.99 cannot reach 2x vs best alternative: its hit rate caps it near 2.7x
+(Aker 1.8x).
+Cheap serving: serve a hit from the exact k nearest among the members of the m best-fitting entries (at most m x K
+vectors) instead of a search over the whole cache. Ladder column hit_table_aug3.py; TripClick 1% (calibrated hit
+rate, whole cache 4.6%): m = 1 3.7% (27 vectors scanned), m = 3 4.3% (82), m = 10 4.6% (272). Core option
+`set_serve_balls(n, ef1)`, `--core-serve-balls N`, unit test added (17 pass). aug3 runs on all 40 default tables
+after the running timing jobs finish (timing runner held at 18:06, left held; its remaining C2 / C3 runs will be
+replaced by a batch with union serving).

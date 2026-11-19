@@ -25,7 +25,7 @@ FAST_SCORE = 1e9      # the core's score of an exact repeat (fast path, doc 9ak)
 
 class CoreCache(Cache):
     def __init__(self, D, k, R, bits, budget, maintain=True, threads=8, ef1=0, ef2=0, ball_mode="fit", ball_m=64,
-                 ball_ef=64, ball_scan_below=1000, repeat_fast=False, shell_code="sq", insert_ef=40, shell_range="minmax"):
+                 ball_ef=64, ball_scan_below=1000, repeat_fast=False, shell_code="sq", insert_ef=40, shell_range="minmax", serve_balls=0):
         super().__init__(D, k, R, bits, budget, maintain=maintain)
         if not np.all(self.D["present"]):
             raise ValueError("CoreCache: database changes are not supported")
@@ -40,6 +40,9 @@ class CoreCache(Cache):
         self.core.set_threads(threads)
         if insert_ef != 40:
             self.core.set_insert_ef(int(insert_ef))
+        self.serve_balls = int(serve_balls)       # doc 9an: serve hits from the union of the n best-fit balls
+        if self.serve_balls:
+            self.core.set_serve_balls(self.serve_balls, int(ef1))
         self.ef1, self.ef2 = ef1, ef2        # 0 / 0: exact search over the cached vectors (headline)
         # how a request's balls are found (doc 9ai): fit = every entry, best fit; fit-m = best fit among the
         # m nearest centers; near = the nearest centers (graph over the centers at search list ball_ef)
@@ -198,7 +201,7 @@ class CoreCache(Cache):
         xs = np.ascontiguousarray(np.asarray(self._q[qidx], np.float32))
         # features for the controllers (no decision here); with a stage 2 (timing), near = the answer that
         # would be served (lambda -inf: every query takes the stage-2 path), as the labels need
-        lam = float("-inf") if self.ef2 else float("inf")
+        lam = float("-inf") if (self.ef2 or self.serve_balls) else float("inf")
         res = self.core.lookup_batch(xs, lam, int(self.ef1), int(self.ef2))
         hit, score, near, nr, feat = res[:5]
         self.last_fast = np.asarray(res[5], dtype=bool) if len(res) > 5 else np.zeros(len(qidx), bool)
