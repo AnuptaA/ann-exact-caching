@@ -3893,3 +3893,15 @@ rate relative to the reference (3 best-fit balls + count over the whole 4-bit sa
   oracle barely moves while the calibrated rate falls: the loss is in the features (balls and shells built
   from DiskANN's lists, deep-500 recall 0.89 on TripClick), not in what is available to serve. Not yet split
   into labels-only vs structure-only.
+
+#### 9al (cont.). Ball variants and the exact-count probe (11-19 02:15; 31 of 40 default tables)
+Upload done 01:45 (88 objects, 9.0 GiB, sizes checked). Calibrated hit rate relative to the reference:
+- 1 nearest center + count over all: 0.89 mean (ESCI 0.44, SPACEV 0.3 0.75, others 0.97-1.00); 2 nearest 0.90;
+  3 nearest 0.91. Best fit among the 3 nearest centers: 1 ball 0.96, 3 balls 0.97 (ESCI 0.69-0.71); among the 10
+  nearest: 1 ball 0.98, 3 balls 1.00 (ESCI 0.87, TriviaQA 0.3 1.16). So ESCI needs the radius-aware search over
+  more than 10 centers; a center graph with fit among m = 10-64 is the candidate cut.
+- Rich features (10 balls, counts at every sampling rate, float, RaBitQ): 1.11 mean (TriviaQA 0.3 1.65).
+- Exact intruder count (not deployable, from the query's own top-500): 1.24 mean (TriviaQA 0.3 1.89, SPACEV 0.3 1.35,
+  ESCI 1.28, TripClick 1.28, SPACEV real 1.11, Zipf 0.99 / MedRAG 1.01-1.02); one ball suffices with it. Most of the
+  gap to the oracle is the sampled count's noise: better estimators of the intruder count (more or smarter
+  samples, floats, unions of shells) are the main model-side lever.
