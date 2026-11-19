@@ -3991,3 +3991,14 @@ rate, whole cache 4.6%): m = 1 3.7% (27 vectors scanned), m = 3 4.3% (82), m = 1
 `set_serve_balls(n, ef1)`, `--core-serve-balls N`, unit test added (17 pass). aug3 runs on all 40 default tables
 after the running timing jobs finish (timing runner held at 18:06, left held; its remaining C2 / C3 runs will be
 replaced by a batch with union serving).
+
+#### 9an (cont.). Union serving, ladder results (11-19 20:00; 34 of 40 tables for m = 30, 100)
+Calibrated hit rate of serving from the union of the m best-fit balls, as a share of whole-cache serving (ratio,
+mean over sizes; ESCI / MedRAG / SPACEV 0.3 / 0.6 / 0.99 / SPACEV real / TripClick / TriviaQA 0.3 / 0.6 / 0.99):
+m = 1 .07 .58 .73 .86 .92 .74 .73 / m = 3 .42 .95 .80 .93 .95 .83 .86 .70-.93; m = 10 .68 1.00 .86 .94 .97 .89 .95 (all
+cells .89); m = 30 .79 1.00 .89 .96 .98 .93 .97 .99-1.01 (.94); m = 100 .92 1.00 .90 .97 .99 .96 .99 .99-1.00 (.97).
+Vectors scanned per request, m = 30 / 100: TripClick 1.7k / 5.4k, TriviaQA ~1.9k / 6k, ESCI 2.4k / 5.7k, MedRAG
+2.7k / 7.8k, SPACEV 8.5k / 26.5k (100-d). At ~1 ms this replaces ~10 ms of stage-2 search on TriviaQA 10%.
+Timing batch 9an (timing9an.txt, 128 runs): C4 = 9al config + serve from the 30 best-fit balls (fit-m 64), C5 = 100
+balls (fit-m 128), LRU and continuous greedy, all 32 non-sensitivity cells, 10% first; starts when the aug4 jobs
+finish; the held 9al full batch (28 of 128 done) is dropped.
