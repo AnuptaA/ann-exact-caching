@@ -22,7 +22,7 @@ def main():
     ap.add_argument("--first", default="0.01,0.1,0.001,0.0001", help="budgets run first")
     a = ap.parse_args()
     lines = [l for l in open(a.lines).read().splitlines() if l.strip()]
-    is_job = lambda l: "online_sim.py" in l or "hit_table.py" in l
+    is_job = lambda l: "online_sim.py" in l or "hit_table" in l
     prep = [l for l in lines if not is_job(l)]
     jobs = [l for l in lines if is_job(l)]
     first = set(a.first.split(","))

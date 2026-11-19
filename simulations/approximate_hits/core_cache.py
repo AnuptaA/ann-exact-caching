@@ -25,7 +25,7 @@ FAST_SCORE = 1e9      # the core's score of an exact repeat (fast path, doc 9ak)
 
 class CoreCache(Cache):
     def __init__(self, D, k, R, bits, budget, maintain=True, threads=8, ef1=0, ef2=0, ball_mode="fit", ball_m=64,
-                 ball_ef=64, ball_scan_below=1000, repeat_fast=False, shell_code="sq", insert_ef=40):
+                 ball_ef=64, ball_scan_below=1000, repeat_fast=False, shell_code="sq", insert_ef=40, shell_range="minmax"):
         super().__init__(D, k, R, bits, budget, maintain=maintain)
         if not np.all(self.D["present"]):
             raise ValueError("CoreCache: database changes are not supported")
@@ -57,6 +57,11 @@ class CoreCache(Cache):
         if shell_code not in ("sq", "rabitq"):
             raise ValueError(shell_code)
         self.shell_code = shell_code
+        # 4-bit code range per dimension: the sample's min / max, or its 1st / 99th percentile (robust, doc 9al:
+        # outliers stretch min / max and coarsen the codes; the robust range matches float counts in the ladder)
+        if shell_range not in ("minmax", "robust"):
+            raise ValueError(shell_range)
+        self.shell_range = shell_range
         self.last_fast = None
         self.qlo = self.qhi = None           # fixed quantization range of the shell sample
         self._holders = {}                   # vector id -> set of entry centers (LRU use marks)
@@ -122,7 +127,10 @@ class CoreCache(Cache):
             samp = sid[self.D["draw"][sid] < self.p]
             if len(samp):
                 x = np.asarray(self._db[samp], np.float64)
-                self.qlo, self.qhi = x.min(axis=0), x.max(axis=0)
+                if self.shell_range == "robust":
+                    self.qlo, self.qhi = np.percentile(x, 1, axis=0), np.percentile(x, 99, axis=0)
+                else:
+                    self.qlo, self.qhi = x.min(axis=0), x.max(axis=0)
                 self._rq_c = x.mean(axis=0)          # RaBitQ centroid: the first sample's mean
                 new_range = True
         for c in ents:

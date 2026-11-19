@@ -39,6 +39,10 @@ class Table:
     def __init__(self, path):
         z = np.load(path, allow_pickle=False)
         self.z = {k: z[k] for k in z.files}
+        aug = Path(path).with_suffix(".aug.npz")
+        if aug.exists():                 # hit_table_aug.py: 8-bit / robust-range counts over the whole sample
+            a = np.load(aug)
+            self.z.update({k: a[k] for k in a.files})
         self.meta = json.loads(str(self.z["meta"]))
         self.rad = self.z["rad"]
         self.ip0 = self.meta["p_mult"].index(1.0)
@@ -72,6 +76,9 @@ class Table:
         V["ref: 3 balls + count over all samples (4-bit)"] = (np.hstack([B3, self.count("all_4")]), z["y"], "ref")
         # model / features
         V["features: count float (all samples)"] = (np.hstack([B3, self.count("all_f")]), z["y"], "features")
+        for key, lab in (("all_8", "8-bit"), ("all_4r", "4-bit, 1-99% range"), ("all_8r", "8-bit, 1-99% range")):
+            if key in z:
+                V[f"features: count {lab} (all samples)"] = (np.hstack([B3, self.count(key)]), z["y"], "features")
         V["features: 1 ball + count"] = (np.hstack([self.balls(1), self.count("all_4")]), z["y"], "features")
         V["features: 2 balls + count"] = (np.hstack([self.balls(2), self.count("all_4")]), z["y"], "features")
         V["features: 3 balls, no count"] = (B3, z["y"], "features")
