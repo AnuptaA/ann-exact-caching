@@ -1323,9 +1323,9 @@ class Sim:
         from collections import OrderedDict
         xt = getattr(a, "mini_cache_share", 0.0)
         self.mini = OrderedDict() if xt > 0 else None
-        # an entry: query hash (8 bytes) + k (id, distance) pairs (8 bytes each), in vector equivalents
-        # (float32 vectors of the database's dimension), as the paper's mini cache
-        self.mini_entry_cost = (8 + 8 * self.k) / (4 * self.D["db"].shape[1])
+        # an entry: the query's key plus its k result vectors (hits return vectors, as Aker's cache does), so k
+        # vectors per entry (the key and ids are negligible; vectors shared with the main cache are not deduplicated)
+        self.mini_entry_cost = float(self.k)
         self.mini_cap = int(xt * self.M / self.mini_entry_cost)
         if self.mini is not None and method != "ogreedy":
             raise SystemExit("--mini-cache-share: continuous greedy (ogreedy) only")
@@ -1608,7 +1608,9 @@ def load(prep, args):
         # exact truth: the union ranking where it exists (ESCI, SPACEV preps), else the prep's own
         # exact top-R (TriviaQA, TripClick, MedRAG: only top500.npy; the truth needs only top-k)
         wide = Path(prep) / "topU1000.npy"
-        D["truth"] = np.load(wide) if wide.exists() else np.load(Path(prep) / f"top{args.R}.npy")
+        D["truth"] = np.load(wide) if wide.exists() else (
+            np.load(Path(prep) / f"top{args.R}.npy") if (Path(prep) / f"top{args.R}.npy").exists()
+            else D["top"])                       # doc 9aq: top500.npy sliced to R (the truth needs only the top-k)
         D["rank"] = D["top"] = z[f"deep_{args.backend_target}"]
         D["answer"] = z[f"answer_{args.backend_target}"]
         D["backend_recall_measured"] = {
@@ -1644,8 +1646,8 @@ def make_parser():
     ap.add_argument("--og-trigger-window", type=int, default=2000, help="requests the trigger looks back over")
     ap.add_argument("--lru-admit-p", type=float, default=1.0, help="lru: probability a miss is admitted (doc 9aq)")
     ap.add_argument("--mini-cache-share", type=float, default=0.0,
-                    help="ogreedy: share of the budget for the mini cache (query hash -> the backend's top-k ids and "
-                         "distances, LRU), checked before the main cache, doc 9as; 0 = off")
+                    help="ogreedy: share of the budget for the mini cache (query -> the backend's top-k result vectors, "
+                         "LRU, k vectors per entry), checked before the main cache, doc 9as; 0 = off")
     ap.add_argument("--og-recent-share", type=float, default=0.0,
                     help="ogreedy: share of the budget for a recency segment of misses' top-k answers (shallow K = k "
                          "entries, no deep search, LRU), doc 9ar; 0 = off")

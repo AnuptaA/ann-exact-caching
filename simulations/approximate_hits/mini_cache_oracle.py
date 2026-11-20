@@ -15,8 +15,8 @@ Inputs: two logged runs of the main cache (online_sim --log-served) at budgets B
             and LRU (admit every backend answer, any request of the query refreshes it)
   loss(x)   the main cache's hits lost by shrinking it to (1 - x) B: linear between the B and 0.9 B runs
   total(x)  = hits(B) - loss(x) + extra(x), as a share of the requests after the warm-up
-Cost per entry: --entry-cost vectors (default: a hash, 8 bytes, plus k ids and distances, 8 bytes each, as float32
-vectors of the database's dimension: 0.029 vectors at 769-d, k = 10).
+Cost per entry: --entry-cost vectors (default k = 10: an entry returns its result vectors, as Aker's cache does; an
+ids-only entry, a hash plus k ids and distances, would be (8 + 8k) / (4 dim) vectors, 0.029 at 769-d).
 Approximations: the mini cache's extra hits are counted against the misses of the main cache at B (at (1 - x) B it misses a
 little more, so extra is slightly low), and the main cache is assumed unaffected by the mini cache taking some requests.
 
@@ -117,7 +117,7 @@ def main():
     docs = np.load(f"datasets/aker/{a.workload}-docs.npy", mmap_mode="r")
     n_db = docs.shape[0]
     if a.entry_cost is None:
-        a.entry_cost = (8 + 8 * 10) / (4 * docs.shape[1])
+        a.entry_cost = 10.0
     out = {}
     fig, axes = plt.subplots(len(a.variants), len(a.budgets), figsize=(5 * len(a.budgets), 3.8 * len(a.variants)),
                              squeeze=False)
