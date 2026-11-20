@@ -4023,3 +4023,25 @@ far: TriviaQA 0.99 10% 1.85x (C2 LRU 4.77x vs QVCache 2.59x), TriviaQA 0.6 10% 1
 0.3 10% 1.51x, MedRAG 1.86-2.74x (v6), everything else <= 1.5x. Ceiling argument: a cell can only reach 2x vs the best
 alternative if 1 / (1 - hit rate) of ours >= 2 x the alternative's measured speedup with the hit path ~free: TriviaQA 0.99
 10% (91% hits vs 60%), 0.6 10% (71% vs 27%), MedRAG; not SPACEV (hit rate 63% -> 2.7x cap vs Aker 1.8x), TripClick, ESCI.
+
+### 9ao. Why TripClick / ESCI cannot reach 2x, memory accounting, and config names (11-20 01:00)
+- A result cache serves at most a share h of requests, so with free hit decisions and free serving its mean latency is
+  (1 - h) x the backend's: speedup <= 1 / (1 - h), whatever the backend's latency. Versus an alternative with hit rate
+  h_a (also free): ours / alternative <= (1 - h_a) / (1 - h). Caps from the headline hit rates (ours best / best alternative):
+  TripClick 0.3 / 1 / 3 / 10%: 1.17 / 1.22 / 1.31 / 1.52x vs Aker 1.10 / 1.13 / 1.16 / 1.22x (ratio cap 1.06 / 1.08 / 1.13 / 1.24);
+  ESCI: 1.07 / 1.12 / 1.21 / 1.49x vs DiskANN with the cache's memory as node cache 1.05 / 1.09 / 1.17 / 1.26x (ratio cap
+  1.02 / 1.02 / 1.04 / 1.19). Doubling our hit rate over Aker's (34 vs 18% at TripClick 10%) is a 1.24x cap because the
+  speedup is 1 / (1 - h), not h. A slower backend does not change the caps; it only lets the measured speedup approach them.
+- Aker's memory: the paper (Sec. 4) says each neighbor object stores "the raw vector and database-specific metadata"
+  and the cache size is controlled by capping the total number of neighbor objects; evaluated at 1% and 5% of the
+  dataset's vector count. The code (third_party/aker, VectorSlot / VectorSlotPool) allocates a payload of the vector's size
+  per pooled neighbor; the cache logic in src/core never reads the payload, only vector ids and the cached query
+  vectors; the payload is exposed to the host through the C wrapper. So the hit path needs only ids: we charge Aker one
+  full vector per neighbor object (pool = budget x N), which at equal BYTES under-fills it (ids 8 B vs 100 B SPACEV int8,
+  3 KB TriviaQA / TripClick float32). Whether the authors intended the raw payload (host integration) is not stated.
+  Our own accounting charges cached vectors at full size and the shell sample at b bits; entry centers, id lists, the
+  graph and the model are not charged (< ~10%).
+- Config names (plain words; codes are retired from reports): "v6" = first full timing run; "tuned" = v6 + robust 4-bit
+  range, graph inserts at efConstruction 200, exact-repeat fast path, best fit among the 64 nearest centers, intruder
+  count over the 10 best-fit balls (= C2); C3 = tuned with the count over 30 balls; C4 / C5 = tuned with a hit answered
+  from the vectors of the 30 / 100 best-fit balls instead of a search over the whole cache.
