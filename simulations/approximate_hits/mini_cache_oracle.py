@@ -108,14 +108,15 @@ def lru(q, answered, miss, C, warmup):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workload", default="tripclick-ip")
-    ap.add_argument("--budgets", type=float, nargs="+", default=[0.01, 0.1, 0.3])
+    ap.add_argument("--budgets", type=float, nargs="+", default=[0.01, 0.1, 0.3], help="B (runs at B and 0.9 B)")
     ap.add_argument("--variants", nargs="+", default=["lru_R128", "og_R128"])
     ap.add_argument("--entry-cost", type=float, default=None, help="memory per entry, in vectors (default: hash + k ids and distances)")
     ap.add_argument("--xs", type=float, nargs="+", default=[0, .0025, .005, .01, .015, .02, .03, .04, .05, .06, .08, .1])
     a = ap.parse_args()
     root = RES / "exact_oracle" / a.workload
-    docs = np.load(f"datasets/aker/{a.workload}-docs.npy", mmap_mode="r")
-    n_db = docs.shape[0]
+    from simulations.approximate_hits.run_e2e_oracle_trace import load_base_f32
+    meta = json.loads((RES / "online" / a.workload / "meta.json").read_text())
+    n_db = load_base_f32(meta["trace"]).shape[0]
     if a.entry_cost is None:
         a.entry_cost = 10.0
     out = {}
