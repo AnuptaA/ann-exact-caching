@@ -103,6 +103,7 @@ class CoreCache(Cache):
             self._holders.setdefault(v, set()).add(int(c))
         fresh = np.unique(ball[self._count[ball] == 0])
         self._fetched += len(fresh)
+        self.samp_fetched = getattr(self, "samp_fetched", 0) + len(samp)     # shell-sample vectors read (doc 9as)
         np.add.at(self._count, ball, 1)
 
     def _core_remove(self, c):

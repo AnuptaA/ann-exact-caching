@@ -1365,7 +1365,28 @@ class Sim:
             for u0 in range(0, len(qb), step):
                 qs = qb[u0:u0 + step]
                 if timed:
-                    sc, sv, ns = self._timed_lookup(int(qs[0]), s + u0)
+                    q0 = int(qs[0])
+                    if self.mini is not None and q0 in self.mini:
+                        # doc 9as: a mini-cache hit (hash lookup; its time recorded as measured, ~1 us)
+                        import time as _t
+                        a0 = _t.perf_counter()
+                        _ = self.mini[q0]
+                        dt0 = _t.perf_counter() - a0
+                        T = self.timing
+                        pos = s + u0 - self.a.warmup
+                        if pos % T["every"] == 0:
+                            T["lat"].append(dt0)
+                            T["hit"].append(True)
+                            T["dt"].append(dt0)
+                            T["stages"].append((0.0, 0.0, 0.0, 0.0, 0.0))
+                        sc, sv = np.array([1e9]), np.array([True])
+                        ns = topk_present(self.D, qs[:1], self.k, key="answer")
+                        self._tparts.append(np.array([True]))
+                        self.cost["mini_hits"] = self.cost.get("mini_hits", 0) + 1
+                    else:
+                        sc, sv, ns = self._timed_lookup(q0, s + u0)
+                        if self.mini is not None:
+                            self._tparts.append(np.array([False]))
                 else:
                     sc, Xs, ns = cache.scores(qs, self.model)
                     sv = (sc >= self.lam if self.lam is not None and cache.n_cached() >= self.k
@@ -1444,6 +1465,8 @@ class Sim:
                              "audited_served": int(audit.sum()),
                              "lambda": self.lam, "memory": cache.memory(),
                              "cached": cache.n_cached(), "entries": len(cache.entries),
+                             # cumulative vectors read for the cache (ball members; shell samples, core only), doc 9as
+                             "fetched": int(cache.vectors_fetched), "samp_fetched": int(getattr(cache, "samp_fetched", 0)),
                              "events": n_ev, "audit_rate": rate})
             if getattr(a, "pool_stats", False):
                 self.log[-1].update({f"pool_{k_}": v_ for k_, v_ in self._pool.items()})
