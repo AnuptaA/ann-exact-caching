@@ -47,14 +47,12 @@ LAYOUT = [
     [("TriviaQA, Zipf 0.3", "triviaqa-ip-0.3", "trace", True),
      ("TriviaQA, Zipf 0.6", "triviaqa-ip-0.6", "trace", True),
      ("TriviaQA, Zipf 0.99", "triviaqa-ip-0.99", "trace", True)],
-    [("ESCI (no repeated queries)", "esci1m", "random", True),
-     ("SPACEV real query log", "spacev-real", "trace", True),
-     ("TripClick real health-search log", "tripclick-ip", "trace", True)],
-    # MedRAG-Zipf: 500 questions; already 0.3% of the 23.9M corpus (~143 top-500 entries) holds the
-    # working set, so smaller caches (0.01% ~ 5 entries ... 0.3%)
+    # SPACEV real query log dropped (11-20, Jialin: not used again); the chosen workloads first
     [("MedRAG-Zipf (Proximity; LLM-reworded repeats)", "medrag-ip", "trace", True, [0.0001, 0.0003, 0.001, 0.003]),
-     None, None],
+     ("TripClick real health-search log", "tripclick-ip", "trace", True),
+     ("ESCI (no repeated queries)", "esci1m", "random", True)],
 ]
+LABEL_RECALL = False     # print the best recall next to hollow points (old draft style)
 OURS_NAMES = ["greedy_score_rebuild", "greedy_none", "static_default"]
 LRU_NAMES = ["lru_k10_none", "lru_k20_none", "lru_k20_all"]     # configurations kept at every budget
 
@@ -188,7 +186,7 @@ def draw_panel(fig, outer, title, data, ymax_pad=1.18, speedup_axis=False, first
             ax.plot([x], [p["hit"]], marker=mk, ms=ms * (0.75 if paper else 1), mfc=face, mec=col,
                     mew=1.6, ls="none", zorder=5, alpha=1.0 if p["ok"] else 0.6)
             st.plot([x], [p["ret"] - T], marker=mk, ms=5, mfc=face, mec=col, mew=1.2, ls="none")
-            if not p["ok"]:
+            if not p["ok"] and LABEL_RECALL:
                 ax.annotate(f"recall {p['ret']:.2f}".replace("0.", "."), (x, p["hit"]), xytext=(8, -2),
                             textcoords="offset points", ha="left", fontsize=6.5, color=col)
     ax.set_xscale("log")
@@ -229,43 +227,25 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(RES / "latest" / "headline.png"))   # latest plots only (11-14)
     args = ap.parse_args()
-    fig = plt.figure(figsize=(14.5, 16.0))
-    outer = fig.add_gridspec(len(LAYOUT), 3, hspace=0.34, wspace=0.30, left=0.055, right=0.955, top=0.935,
-                             bottom=0.05)
+    fig = plt.figure(figsize=(14.5, 13.2))
+    outer = fig.add_gridspec(len(LAYOUT), 3, hspace=0.30, wspace=0.30, left=0.055, right=0.955, top=0.93,
+                             bottom=0.11)
     for r, row in enumerate(LAYOUT):
         for c, cell in enumerate(row):
-            if cell is None:
-                continue
             title, prep, stream, real = cell[:4]
             data = {b: collect(prep, stream, b, real) for b in (cell[4] if len(cell) > 4 else BUDGETS)}
-            last = c == max(i for i, x in enumerate(row) if x is not None)
-            draw_panel(fig, outer[r, c], title, data, speedup_axis=last, first_col=(c == 0))
-    # legend and notes in the free cell
-    ax = fig.add_subplot(outer[len(LAYOUT) - 1, 1:])
-    ax.axis("off")
+            draw_panel(fig, outer[r, c], title, data, speedup_axis=(c == 2), first_col=(c == 0))
     order = ["ours", "ours_online", "lru", "aker", "aker_paper", "qvcache", "qvcache_paper"]
     handles = [plt.Line2D([], [], color=STYLE[t][1], marker=STYLE[t][2], lw=STYLE[t][3], ms=7, label=STYLE[t][0],
-                          ls=(0, (5, 2.5)) if t.endswith("_paper") else "-") for t in order if t in STYLE]
-    handles += [plt.Line2D([], [], color="k", marker="o", ls="none", mfc="k", label="reaches recall 0.9 (within .01)"),
-                plt.Line2D([], [], color="k", marker="o", ls="none", mfc="white", mew=1.6,
-                           label="no setting reaches it: faded, dotted line,\nbest-recall setting, its recall printed")]
-    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.0, 1.02), fontsize=8, frameon=False,
-              title="technique", title_fontsize=8.5, labelspacing=0.35)
-    ax.text(0.0, 0.27,
-            "How to read: each point is the best hit rate a technique gets at the\n"
-            "promised recall 0.9 (average over hits of the share of the exact top-10\n"
-            "returned). Strips: recall - 0.9; green band = reached.\n"
-            "Ours / LRU: mean of 2 seeds (bars: min-max); LRU: best of K 10/20.\n"
-            "Aker / QVCache tuned: best hit rate in a grid of settings among those\n"
-            "reaching 0.9, picked after the fact on the same run (seed 0).\n"
-            "Dashed: the papers' own settings (Aker default; QVCache's D procedure,\n"
-            "which raises D until hits stop improving). Neither paper tunes to a\n"
-            "recall target. Aker = real code (ESCI: reimplementation).",
-            fontsize=7, va="top", transform=ax.transAxes)
-    fig.suptitle("DRAFT: hit rate at the same promised recall (0.9), exact backend, k = 10\n"
-                 "ours reaches the target with no tuning; Aker / QVCache only when tuned by hand (solid) - not with their papers' settings (dashed)",
-                 fontsize=11, y=0.99)
-    fig.text(0.5, 0.018, "cache size (fraction of the dataset, cached vectors)", ha="center", fontsize=10)
+                          ls=(0, (5, 2.5)) if t.endswith("_paper") else "-") for t in order]
+    handles += [plt.Line2D([], [], color="k", marker="o", ls="none", mfc="white", mew=1.6,
+                           label="hollow: no setting reaches recall 0.89")]
+    fig.legend(handles=handles, loc="lower center", ncol=4, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.005))
+    fig.suptitle("Hit rate at the same promised recall (0.9), exact backend, k = 10", fontsize=12, y=0.985)
+    fig.text(0.5, 0.955, "Each point: best hit rate whose mean recall over hits is >= 0.89. Ours / LRU: mean of 2 seeds; "
+             "Aker / QVCache tuned: best of a settings grid, picked after the fact; dashed: the papers' own settings. "
+             "Strips: recall - 0.9.", ha="center", fontsize=8)
+    fig.text(0.5, 0.075, "cache size (fraction of the dataset, cached vectors)", ha="center", fontsize=10)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, dpi=130)
     print("wrote", args.out)

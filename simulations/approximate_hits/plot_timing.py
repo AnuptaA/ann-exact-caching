@@ -43,13 +43,17 @@ if os.environ.get("TIMING_VERSION") == "timing_v6":        # v6 (doc 9ah): the r
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).parent.parent.parent))
     from simulations.approximate_hits.workloads import WORKLOADS as _WL
-    TRACES = [(w.title, w.name) for w in _WL.values() if w.group == "main"] + \
-             [(w.title, w.name) for w in _WL.values() if w.group == "sensitivity"]
+    # 11-20 (Jialin): SPACEV real query log dropped; recall-0.97 sensitivity panels left out of the main plot
+    # (TIMING_SENSITIVITY=1 adds them); the chosen workloads first in the last row
+    _ORDER = ["spacev-aker-0.3", "spacev-aker-0.6", "spacev-aker-0.99", "triviaqa-ip-0.3", "triviaqa-ip-0.6",
+              "triviaqa-ip-0.99", "medrag-ip", "tripclick-ip", "esci1m"]
+    TRACES = [(_WL[n].title, n) for n in _ORDER]
+    if os.environ.get("TIMING_SENSITIVITY"):
+        TRACES += [(w.title, w.name) for w in _WL.values() if w.group == "sensitivity"]
     SIZES = {w.name: list(w.budgets) for w in _WL.values() if len(w.budgets) == 4 and w.budgets != tuple(BUDGETS)}   # 0.3% already holds MedRAG-Zipf's working set
 # LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
 # background work (decided with Jialin, 11-11); the sync runs stay in the table only
 TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
-         ("ours_drift", "Ours (drift handling)", "C0", lambda n: n.startswith("oursdrift_")),
          ("ours_online", "Ours (continuous greedy)", "C0", lambda n: n.startswith("oursonline_")),
          ("lru_bg", "LRU", "C1", lambda n: n.startswith(("lru_bg_", "lru_s"))),
          ("aker", "Aker", "C2", lambda n: n.startswith("aker_")),
@@ -58,7 +62,8 @@ TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
          ("qvcache", "QVCache", "C3", lambda n: n.startswith("qvcache_"))]
 
 
-TABLE_ONLY = [("lru_sync", "LRU (sync update)", lambda n: n.startswith("lru_sync_"))]
+TABLE_ONLY = [("ours_drift", "Ours (drift handling)", lambda n: n.startswith("oursdrift_")),
+              ("lru_sync", "LRU (sync update)", lambda n: n.startswith("lru_sync_"))]
 HEADLINE_KEY = {"ours": "ours", "ours_drift": "ours_drift", "ours_online": "ours_online", "lru_bg": "lru", "lru_sync": "lru", "aker": "aker", "qvcache": "qvcache",
                 "aker_paper": "aker_paper", "qvcache_paper": "qvcache_paper"}
 
@@ -168,7 +173,7 @@ def main():
     strip below: recall vs exact over all requests (grey: DiskANN alone)."""
     from matplotlib.gridspec import GridSpec
     from simulations.approximate_hits.plot_headline import STYLE, JITTER
-    ncol = 4
+    ncol = 3
     nrow = (len(TRACES) + ncol - 1) // ncol
     fig = plt.figure(figsize=(5.0 * ncol, 4.4 * nrow + 0.8))
     gs = GridSpec(2 * nrow, ncol, height_ratios=[3.2, 1.2] * nrow, hspace=0.3, wspace=0.28, figure=fig,
@@ -249,8 +254,7 @@ def main():
                     best["a"].append((b, max(va)))
                     best["b"].append((b, max(vb)))
             oc = STYLE["ours"][1]
-            for k_, ls_, lw_, al_, lab in (("a", (0, (1, 1.5)), 1.8, 1.0, "Ours, best case: hit decision free"),
-                                           ("b", (0, (4, 2, 1, 2)), 1.2, 0.6, "Ours, best case: hit decision and serving free")):
+            for k_, ls_, lw_, al_, lab in (("a", (0, (1, 1.5)), 1.8, 1.0, "Ours, best case: hit decision free"),):
                 if best[k_]:
                     xs_, ys_ = zip(*best[k_])
                     ax.plot(xs_, ys_, color=oc, ls=ls_, lw=lw_, alpha=al_, zorder=2, label=lab if j == 0 else None)
@@ -273,17 +277,12 @@ def main():
         if j // ncol == nrow - 1 or j + ncol >= len(TRACES):        # bottom panel of its column only
             st.set_xlabel("cache size (fraction of the dataset)", fontsize=9)
     fig.legend(loc="lower center", ncol=5, fontsize=8.5, frameon=False, bbox_to_anchor=(0.5, 0.0))
-    v5 = ("v5: every arm's DiskANN has the workload's base node cache (outside the cache budget); ours / LRU hit path in two stages "
-          "(hit decision from a small in-cache search, served points searched again on hits); audits timed apart, not charged. ") if VERSION == "timing_v5" else (
-        "v6: every technique through one driver (online_sim) with its request path in C++ (our cache, QVCache) or the real "
-        "Aker library; base node cache in every arm; ours / LRU two-stage hit path tuned on the core; LRU admits on every "
-        "request; Aker / QVCache: the best of up to 3 candidate settings meeting the target in this run. ") if VERSION == "timing_v6" else ""
-    cap = (v5 + "DiskANN tuned per workload (search list x beam width, recall@10 0.95; SPACEV real: 0.95 at 130 ms), same index for every technique; whole stream after "
-             "warm-up, 1 in 50 requests timed end to end (DiskANN baselines with a 10 ms gap between searches; technique runs composed: backend calls charged the request's measured DiskANN time, hit path with a per-cache search list); cache updates are background work.\n"
-             "Filled: mean retention of hits (served answer vs DiskANN's top-10) >= 0.89 in this run; hollow: below. "
-             "Strip: mean retention of hits (served answer vs DiskANN's top-10; grey dashed: the target 0.9). Recall over all requests is in timing_table.md.")
+    cap = ("Speedup = mean latency of DiskANN alone / mean latency with the technique in front, same DiskANN index "
+           "(recall@10 0.95), single-threaded, whole stream after warm-up, 1 in 50 requests timed; cache updates are "
+           "background work (not charged). Filled: mean retention of hits >= 0.89 in this run; hollow: below. "
+           "Strips: mean retention of hits (dashed: target 0.9).")
     import textwrap
-    cap = "\n".join(textwrap.fill(par, 260) for par in cap.split("\n"))   # wrapped to the figure's width
+    cap = "\n".join(textwrap.fill(par, 190) for par in cap.split("\n"))   # wrapped to the figure's width
     fig.text(0.5, 0.995, cap, va="top", ha="center", fontsize=7.5)
     out = RES / "latest" / "timing.png"          # latest plots only (11-14)
     out.parent.mkdir(parents=True, exist_ok=True)
