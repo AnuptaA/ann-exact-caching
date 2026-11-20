@@ -4113,3 +4113,27 @@ from the same L = 500 search: 0.66 x 3.4 = 2.2), no cache = 1.0, Aker = 0.82. Es
 system with this admission would be slower than no cache. Ideas: admit fewer misses, shallower R (top-128 from the same search,
 ~0.9 units), shell from fewer ranks. A live or I/O-complete test is needed before any throughput claim. The 81-run recording
 queue was stopped (13 recordings kept).
+
+### 9aq. Cutting the deep-list I/O: back of the envelope and ablation plan (11-20 16:00; no experiments started)
+Model: SSD work per request in units of one normal search (TripClick L = 128, ~170 reads; deep search L = 500 = 3.1 units,
+L = 1000 = 6.0): units = (1 - h) x (1 + s x D) + a x h + f, s = share of misses that get the deep search, D = 3.1, a = audit share of
+hits (now ~12%), f = vector fetches (~0.08-0.10); throughput vs no cache = 1 / units. Alternatives: Aker (1 - h), QVCache (1 - h) x 1.06.
+- Today (every miss deep-searched): TripClick 10% LRU 2.84 units (0.35x; Aker 1.22x), continuous greedy 3.20 (0.31x); TriviaQA 0.99
+  10% greedy 0.79 (1.27x vs QVCache 2.34x); MedRAG 0.3% LRU 0.48 (2.09x vs 1.76x). Counters of the finished runs: continuous greedy
+  runs 0.97 deep searches per miss (candidates), LRU 1.0.
+- Sampling the candidates (greedy): s = 10%: TripClick 10% 0.90x (below Aker 1.22x), TriviaQA 0.99 2.57x (1.10x of QVCache), MedRAG
+  3.5x; s = 3%: 1.05x / 2.79x / 3.7x. No deep search (R <= 128 taken from the answer search, vectors from the search): TripClick LRU
+  1.27x (1.04x of Aker), TriviaQA 2.90x (1.24x), MedRAG 3.8x (2.2x). Break-even hit rate to tie Aker at TripClick 10% (0.82 units):
+  29.9% at a miss cost of 1.0, 42.9% at 1.2, 48.2% at 1.31, 67% at 2.0.
+- Floors at high hit rates: audits (12% of hits = 0.10 units at TriviaQA 0.99) and vector fetches (~0.1) cost as much as the misses.
+  Levers: audit rate 3% (calibration needs ~2,000 labeled requests), a search that returns the full vectors it already read,
+  one search for answer and deep list.
+- Cluster trigger statistic (first-time requests whose top-10 shares >= 3 ids with a query within the previous 2,000 requests): TripClick
+  26%, ESCI 25%, TriviaQA 0.6 16%, SPACEV 0.6 11% (>= 5 ids: 17 / 9 / 9 / 8%): a trigger would cut deep searches 4-9x.
+- Ball depth evidence: entries at 1% (default cache) by K: TripClick 10: 484, 20: 250, 50: 75, 100: 15, 200: 2 (shallow lists
+  suffice); TriviaQA 0.3: K 200: 108, 500: 28; SPACEV real: K 500: 145 of 647 (deep lists needed). Earlier --max-ball-k 20: ESCI 10%
+  30.3 -> 16.4%, SPACEV 0.6 1% 13.2 -> 10.6%.
+- Ablation plan (to run after approval): static tables (hit_table) with max ball K in {20, 50, 100, 200, 500}, R in {128, 200, 500}
+  (shell sample refilled to the budget) on TripClick, TriviaQA 0.6, SPACEV 0.6, ESCI at 1% and 10%; then per-request runs with
+  candidate sampling s in {1, 0.3, 0.1, 0.03}, LRU admission probability, the cluster trigger, audit floor 3%; counters per
+  request: deep searches, vectors fetched, audits.
