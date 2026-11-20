@@ -4083,3 +4083,9 @@ Question (Jialin): do we get larger gains in throughput than in workload time? W
   ESCI 10%, C = 16: no cache 75.9; ours (tuned continuous greedy, 27.9% hits) 104.6 = 1.38x (cap 1.39x).
 - DiskANN with the cache's memory as node cache, same method (batch_search, 16 threads, 3,000 queries): TripClick 87.7 (base 1,828
   nodes) -> 116.6 queries/s (154,753 nodes) = 1.33x; ESCI measured next.
+
+ESCI node cache, same method (16 threads): base 300 nodes 95.7 queries/s -> 100,479 nodes (the cache's memory at 10%) 184.0 =
+1.92x, against ours 1.38x in the replay: on ESCI the larger node cache beats our result cache in throughput by more than
+in single-request latency (1.26x vs 1.17-1.23x). TripClick: node$ 1.33x < ours 1.50x. Caveats of the replay: cache-path
+times are replayed from a separate run (no contention with backend processes), one cache thread, backend workers without
+node cache, hit / miss decisions fixed from the recorded run (no feedback from completion order).
