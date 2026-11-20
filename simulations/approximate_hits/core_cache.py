@@ -168,10 +168,10 @@ class CoreCache(Cache):
         sh = sh[sh >= 0]
         return sh[self._count[sh] == 0]
 
-    def add(self, c, K):
+    def add(self, c, K, shallow=False):
         if c in self.entries:
             self._core_remove(c)
-        super().add(c, K)
+        super().add(c, K, shallow=shallow)
         self._core_add(c)
 
     def remove(self, c):

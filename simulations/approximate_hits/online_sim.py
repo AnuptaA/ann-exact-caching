@@ -201,6 +201,7 @@ class Cache:
         self.frozen = {}           # center -> (ball ids, shell ids) without maintenance
         self.p = 0.0
         self.last_used = {}
+        self.shallow = set()       # centers of recency-segment entries (no shell; doc 9ar)
         self._fetched = 0
         self._count = np.zeros(self.n_db, dtype=np.int32)
         self._shell = np.empty(0, dtype=np.int64)
@@ -209,14 +210,19 @@ class Cache:
 
     # -- membership --------------------------------------------------------
 
-    def add(self, c, K):
-        """Add (or resize) an entry; vectors already cached are not refetched."""
+    def add(self, c, K, shallow=False):
+        """Add (or resize) an entry; vectors already cached are not refetched. shallow (doc 9ar, recency
+        segment): the entry is the miss's ordinary top-k answer only, no deep list, so it has no shell."""
         row = self.D["rank"][c]
         pres = (row >= 0) & self.D["present"][np.maximum(row, 0)]
         cum = np.cumsum(pres)
         pe = int(np.searchsorted(cum, K)) + 1 if cum[-1] >= K else len(row)
         ps = int(np.searchsorted(cum, self.R)) + 1 if cum[-1] >= self.R else len(row)
-        ps = max(ps, pe)
+        ps = pe if shallow else max(ps, pe)
+        if shallow:
+            self.shallow.add(c)
+        else:
+            self.shallow.discard(c)
         kth = row[pe - 1]
         rad = float(np.sqrt(((self.D["q"][c] - self.D["db"][kth]) ** 2).sum()))
         self.entries[c] = K
@@ -230,6 +236,7 @@ class Cache:
         self.geo.pop(c)
         self.frozen.pop(c, None)
         self.last_used.pop(c, None)
+        self.shallow.discard(c)
         self._members_dirty = self._dirty = True
 
     def replace(self, entries):
@@ -830,6 +837,50 @@ class Sim:
     # -- continuous greedy (ogreedy, 11-14) --------------------------------
 
     def ogreedy_update(self, qb, serve, near, t):
+        """Continuous greedy, then (--og-recent-share > 0) the recency segment."""
+        self._ogreedy_step(qb, serve, near, t)
+        if getattr(self.a, "og_recent_share", 0.0) > 0:
+            self._recent_step(qb, serve, t)
+
+    def _recent_step(self, qb, serve, t):
+        """Recency segment (doc 9ar): every miss not already an entry becomes a shallow entry, its ordinary top-k
+        answer as a K = k ball with no shell. No deep search: the backend read these k vectors for the miss
+        anyway (DiskANN reranks with full vectors). Least recently used shallow entries leave when the segment
+        holds more than --og-recent-share x M / k entries, or while the cache is over M. Continuous greedy
+        neither evicts nor grows shallow entries (growing one would need its deep list)."""
+        a, cache, k = self.a, self.cache, self.k
+        miss = [int(q) for q in np.unique(qb[~serve]) if int(q) not in cache.entries]
+        for q in miss:
+            cache.add(q, k, shallow=True)
+            cache.last_used[q] = t
+        self.cost["recent_adds"] = self.cost.get("recent_adds", 0) + len(miss)
+        cap = int(a.og_recent_share * self.M / k)
+        order = sorted(cache.shallow, key=lambda c: cache.last_used.get(c, 0))
+        n_ev, i = len(order) - cap, 0
+        for c in order[:max(n_ev, 0)]:
+            cache.remove(c)
+        i = max(n_ev, 0)
+        mem = cache.memory()
+        while mem > self.M and i < len(order):
+            ch = order[i:i + 64]
+            for c in ch:
+                cache.remove(c)
+            i += len(ch)
+            mem = cache.memory()
+        self.cost["recent_evicts"] = self.cost.get("recent_evicts", 0) + i
+
+    def _shallow_only_vectors(self):
+        """Cached vectors held by shallow (recency-segment) entries and by no other entry."""
+        cache = self.cache
+        if not cache.shallow:
+            return 0
+        sh = np.unique(np.concatenate([cache.members(c) for c in cache.shallow]))
+        deep = [cache.members(c) for c in cache.entries if c not in cache.shallow]
+        if deep:
+            sh = sh[~np.isin(sh, np.concatenate(deep))]
+        return int(len(sh))
+
+    def _ogreedy_step(self, qb, serve, near, t):
         """Continuous utility-driven maintenance (doc 9ac). After each batch:
           scoring set   the misses of the last --og-span requests BEFORE this batch (fully
                         labeled: the backend answered them; no audited-hit up-weighting), with
@@ -910,7 +961,7 @@ class Sim:
         sq, sw = np.unique(np.concatenate(past), return_counts=True)
         kvals = tuple(K for K in K_VALUES if K <= (K_LIMIT[0] or max(K_VALUES)))
         pairs = [(c, K) for c in new for K in kvals]
-        pairs += [(c, K) for c, K0 in cache.entries.items() for K in kvals if K > K0]
+        pairs += [(c, K) for c, K0 in cache.entries.items() for K in kvals if K > K0 and c not in cache.shallow]
         if not pairs or not len(sq):
             return
         D = db_view(self.D)
@@ -925,7 +976,12 @@ class Sim:
         # ratio of memory to cached vectors
         n_c = max(cache.n_cached(), 1)
         per = cache.memory() / n_c
-        cap = int(self.M / per)
+        # doc 9ar: with a recency segment, greedy keeps to (1 - share) x M; vectors held only by shallow entries
+        # are the segment's (greedy's cap counts every cached vector)
+        share = getattr(a, "og_recent_share", 0.0)
+        sh_only = self._shallow_only_vectors() if share > 0 else 0
+        limit = self.M * (1 - share) + sh_only * per
+        cap = int(limit / per)
         credit = {}
         for _, cr in self.og_credit:
             for c, v in cr.items():
@@ -936,6 +992,7 @@ class Sim:
             order = sorted(cache.entries, key=lambda c: cache.last_used.get(c, 0))
         else:
             order = sorted(cache.entries, key=lambda c: credit.get(c, 0.0) / size[c])
+        order = [c for c in order if c not in cache.shallow]       # the recency segment evicts its own
         # candidates' gains are ORACLE hits on past misses (perfect hit decisions); incumbents'
         # credits are hits actually served under the calibrated cutoff. Put both in served hits:
         # scale gains by rho = served / oracle hits over the same span, from this run's own log (the
@@ -1108,16 +1165,16 @@ class Sim:
                 cache.add(c, K)
                 cache.last_used[c] = t
         mem = cache.memory()
-        if mem > self.M:            # shell growth: trim old entries by the victim order, then the
+        if mem > limit:             # shell growth: trim old entries by the victim order, then the
             # latest additions (lowest gain per vector first, i.e. last chosen first)
             for v in [v for v in order if v not in chosen] + chosen[::-1]:
-                if mem <= self.M or len(cache.entries) <= 1:
+                if mem <= limit or len(cache.entries) <= 1:
                     break
                 if v in cache.entries:
                     cache.remove(v)
                     mem = cache.memory()
         self.og_log.append({"t": t, "rho": rho, "added": len(pop.selected), "evicted": len(victims),
-                            "entries": len(cache.entries), "cached": cache.n_cached()})
+                            "entries": len(cache.entries), "cached": cache.n_cached(), "shallow": len(cache.shallow)})
 
     # -- database events ---------------------------------------------------
 
@@ -1514,6 +1571,9 @@ def make_parser():
                          "distinct recent miss (0 = off), doc 9aq")
     ap.add_argument("--og-trigger-window", type=int, default=2000, help="requests the trigger looks back over")
     ap.add_argument("--lru-admit-p", type=float, default=1.0, help="lru: probability a miss is admitted (doc 9aq)")
+    ap.add_argument("--og-recent-share", type=float, default=0.0,
+                    help="ogreedy: share of the budget for a recency segment of misses' top-k answers (shallow K = k "
+                         "entries, no deep search, LRU), doc 9ar; 0 = off")
     ap.add_argument("--og-span", type=int, default=0,
                     help="ogreedy: requests whose misses score candidates and whose hits credit entries "
                          "(0 = --cal-span)")
