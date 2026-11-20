@@ -4156,3 +4156,15 @@ hits (now ~12%), f = vector fetches (~0.08-0.10); throughput vs no cache = 1 / u
   (0.81); 30%: 48.4 / 56.0 (0.86); 50%: 70.7 / 75.1 (0.94). Reason (9ag): greedy scores candidates on earlier misses, so a first occurrence is
   not admitted (admitted after its 2nd, hits from its 3rd) and it updates per batch; per-class hit rates at 1%: recent exact repeats LRU 80%
   vs greedy 36%, near-duplicates 61% vs 11%. The exact-repeat fast path serves repeats of cached centers faster; it does not change what is cached.
+
+### 9ar. Recency segment beside continuous greedy (11-20 18:45)
+
+- Idea: TripClick's hits are recency-driven (9aq: at 1%, recent exact repeats LRU 80% vs greedy 36%). A share of the budget
+  (`--og-recent-share s`) holds an LRU segment of misses' ordinary top-k answers: shallow entries, K = k, no shell, no deep search
+  (DiskANN already reads the full vectors of its top-k to rerank, so admission costs no extra SSD reads). Exact repeats are served by
+  the fast path; near-repeats through the k-ball. Continuous greedy keeps to (1 - s) x M plus vectors held only by shallow entries, and
+  never evicts or grows a shallow entry. Calibration is shared (one model, one cutoff): shallow entries have no shell, so their
+  intruder count is 0; the retention guarantee is unchanged, the hit rate may suffer if the model trusts them too much.
+- Smoke (TripClick 1%, og_s0.1, s = 0.1, first 20k requests after warm-up): 152 shallow entries (the cap), hit rate 7.19% vs og_s0.1
+  7.27%, retention 0.914. No gain at this size and span; the segment (1,520 vectors) is about a fifth of LRU's entries at 1%.
+- Queued: og_s0.1_recent0.1 on TripClick 1% / 10% / 30% (`/tmp/mx/abl_recent.txt`), next to og_s0.1.
