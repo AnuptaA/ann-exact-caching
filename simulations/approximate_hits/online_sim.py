@@ -919,9 +919,11 @@ class Sim:
             self.og_credit = [(a.warmup, cred0)]
             wm = w[~sw_]
             self.og_miss = [(a.warmup, wm[og_build_half(wm)] if a.og_split else wm)]
-        cache.mark_used(near[serve], t)
+        own = serve & ~getattr(self, "_tmask", np.zeros(len(serve), bool))[:len(serve)] \
+            if len(getattr(self, "_tmask", ())) == len(serve) else serve
+        cache.mark_used(near[own], t)
         # credits of this batch
-        hv = np.bincount(np.asarray(near[serve]).ravel(), minlength=cache.n_db) if serve.any() else None
+        hv = np.bincount(np.asarray(near[own]).ravel(), minlength=cache.n_db) if own.any() else None
         cred = {}
         if hv is not None:
             for c in cache.entries:
@@ -980,7 +982,8 @@ class Sim:
         # are the segment's (greedy's cap counts every cached vector)
         share = getattr(a, "og_recent_share", 0.0)
         sh_only = self._shallow_only_vectors() if share > 0 else 0
-        limit = self.M * (1 - share) + sh_only * per
+        # doc 9as: the exact-repeat tier's memory is outside the main cache
+        limit = self.M * (1 - share - getattr(a, "exact_tier_share", 0.0)) + sh_only * per
         cap = int(limit / per)
         credit = {}
         for _, cr in self.og_credit:
@@ -1317,6 +1320,18 @@ class Sim:
         self.og_credit, self.og_miss, self.og_log, self.og_fresh_log = [], [], [], []
         self.og_pred, self.og_phi_log = {}, []
         self.served_pos, self.audit_pos = [], []
+        from collections import OrderedDict
+        xt = getattr(a, "exact_tier_share", 0.0)
+        self.tier = OrderedDict() if xt > 0 else None
+        self.tier_cap = int(xt * self.M / self.k)
+        if self.tier is not None and method != "ogreedy":
+            raise SystemExit("--exact-tier-share: continuous greedy (ogreedy) only")
+        if self.tier is not None:            # seeded with the warm-up's requests (all answered by the backend)
+            for q in np.asarray(self.stream[:a.warmup]).tolist():
+                self.tier[q] = True
+                self.tier.move_to_end(q)
+                if len(self.tier) > self.tier_cap:
+                    self.tier.popitem(last=False)
         last_alarm = None
         last_check = a.warmup
         pending = []                # scheduled post-alarm rebuild checks (times)
@@ -1341,6 +1356,7 @@ class Sim:
             UL = 1 if timed else UE
             upd = method in ("lru", "ogreedy") and UE < len(qb)
             parts, pend = [], []
+            self._tparts = []
             self._pool = {"hits": 0, "holders": 0, "cover": 0, "best_cov": 0.0, "single_ret": 0.0}
             step = UL if (upd or timed) else len(qb)
             for u0 in range(0, len(qb), step):
@@ -1351,6 +1367,17 @@ class Sim:
                     sc, Xs, ns = cache.scores(qs, self.model)
                     sv = (sc >= self.lam if self.lam is not None and cache.n_cached() >= self.k
                           else np.zeros(len(qs), bool))
+                    if self.tier is not None and len(self.tier):
+                        # doc 9as: exact repeats in the tier are served its stored backend answer, outside the
+                        # hit model; they count as hits at every cutoff (FAST_SCORE), as the main cache's fast path
+                        th = np.array([int(q) in self.tier for q in qs])
+                        self._tparts.append(th)
+                        if th.any():
+                            sc = np.where(th, 1e9, sc)
+                            sv = sv | th
+                            ns = np.array(ns, copy=True)
+                            ns[th] = topk_present(self.D, qs[th], self.k, key="answer")
+                            self.cost["tier_hits"] = self.cost.get("tier_hits", 0) + int(th.sum())
                 ys = self.y(qs, ns)
                 ye = ys if self.D["truth"] is self.D["answer"] else (
                     cache.served_retention(qs, ns, key="truth") if self.a.label == "served"
@@ -1370,6 +1397,9 @@ class Sim:
                         self.cal_stale = True
                         pend = []
             score, serve, y, y_exact = (np.concatenate([p_[i] for p_ in parts]) for i in range(4))
+            # tier hits (doc 9as) do not credit the main cache's entries
+            self._tmask = (np.concatenate(self._tparts) if self.tier is not None and len(self._tparts) == len(parts)
+                           else np.zeros(len(qb), bool))
             near = np.concatenate([p_[4] for p_ in parts])
             if self.D["truth"] is self.D["answer"]:
                 b_rec = np.ones(len(qb))
@@ -1387,6 +1417,16 @@ class Sim:
                 rate = float(np.clip(target / max(hits_prev, 1), rate, 1.0))
             audit = serve & (rng.random(len(qb)) < rate)
             hits_prev = int(serve.sum())
+            if self.tier is not None:
+                # tier upkeep (LRU): every request of a stored query refreshes it; backend answers (misses,
+                # audited hits) are admitted; capacity --exact-tier-share x M / k entries (k vectors each)
+                for q, got in zip(qb.tolist(), (~serve | audit).tolist()):
+                    if q in self.tier:
+                        self.tier.move_to_end(q)
+                    elif got:
+                        self.tier[q] = True
+                        if len(self.tier) > self.tier_cap:
+                            self.tier.popitem(last=False)
             if getattr(a, "log_served", False):      # doc 9as: per-request hit / audit positions (stream index)
                 self.served_pos.extend((s + np.flatnonzero(serve)).tolist())
                 self.audit_pos.extend((s + np.flatnonzero(audit)).tolist())
@@ -1577,6 +1617,9 @@ def make_parser():
                          "distinct recent miss (0 = off), doc 9aq")
     ap.add_argument("--og-trigger-window", type=int, default=2000, help="requests the trigger looks back over")
     ap.add_argument("--lru-admit-p", type=float, default=1.0, help="lru: probability a miss is admitted (doc 9aq)")
+    ap.add_argument("--exact-tier-share", type=float, default=0.0,
+                    help="ogreedy: share of the budget for an exact-repeat tier (query -> stored backend answer, LRU, k "
+                         "vectors per entry), served outside the hit model, doc 9as; 0 = off")
     ap.add_argument("--og-recent-share", type=float, default=0.0,
                     help="ogreedy: share of the budget for a recency segment of misses' top-k answers (shallow K = k "
                          "entries, no deep search, LRU), doc 9ar; 0 = off")
