@@ -40,16 +40,17 @@ def query_file(w):
 def worker(info, qfile, jobs, done, dtype):
     from simulations.approximate_hits.diskann_aio import open_disk_index
     q = np.load(qfile, mmap_mode="r")
-    ix = open_disk_index(max_wait=3600, index_directory=info["index_dir"], num_threads=2, num_nodes_to_cache=0,
-                         cache_mechanism=0, index_prefix="ann")
+    ix = open_disk_index(max_wait=3600, index_directory=info["index_dir"], num_threads=2,
+                         num_nodes_to_cache=info.get("nodes", 0), cache_mechanism=0, index_prefix="ann")
     done.put(("ready", 0, 0.0))
     while True:
         job = jobs.get()
         if job is None:
             return
-        i, qi = job
-        ix.search(np.ascontiguousarray(q[qi], dtype=dtype), k_neighbors=10, complexity=info["L"], beam_width=info["W"])
-        done.put(("done", i, time.perf_counter()))
+        i, qi, k = job
+        ix.search(np.ascontiguousarray(q[qi], dtype=dtype), k_neighbors=min(k, info["L"]), complexity=info["L"],
+                  beam_width=info["W"])
+        done.put(("bg" if i < -1 else "done", i, time.perf_counter()))
 
 
 def spin(seconds):
@@ -58,19 +59,27 @@ def spin(seconds):
         pass
 
 
-def run_arm(name, hit, dt, qids, clients, jobs, done):
+def run_arm(name, hit, dt, qids, clients, jobs, done, audit=None, k_miss=10):
+    """audit (doc 9as, I/O-complete): requests whose hit is audited; each audit is a real backend search issued as
+    background work (it occupies a backend process but no client waits for it). Misses search with k_miss results
+    (a deep list taken from the answer search costs the same at L >= k_miss). Wall time runs until the background
+    work is done too."""
     n = len(qids)
     issue = np.zeros(n)
     finish = np.zeros(n)
     inflight = 0
     ndone = 0
+    bg_out = 0
 
     def drain(block):
-        nonlocal inflight, ndone
+        nonlocal inflight, ndone, bg_out
         try:
             kind, i, t = done.get(block=block, timeout=60 if block else None) if block else done.get_nowait()
         except Exception:
             return False
+        if kind == "bg":
+            bg_out -= 1
+            return True
         finish[i] = t
         inflight -= 1
         ndone += 1
@@ -88,14 +97,18 @@ def run_arm(name, hit, dt, qids, clients, jobs, done):
         if hit[i]:
             finish[i] = time.perf_counter()
             ndone += 1
+            if audit is not None and audit[i]:
+                jobs.put((-2 - i, int(qids[i]), 10))
+                bg_out += 1
         else:
-            jobs.put((i, int(qids[i])))
+            jobs.put((i, int(qids[i]), k_miss))
             inflight += 1
-    while inflight > 0:
+    while inflight > 0 or bg_out > 0:
         drain(True)
     wall = time.perf_counter() - t0
     lat = (finish - issue) * 1e3
     return {"arm": name, "n": n, "wall_s": wall, "qps": n / wall, "hit_rate": float(np.mean(hit)),
+            "audits": int(audit.sum()) if audit is not None else 0, "k_miss": k_miss,
             "mean_ms": float(lat.mean()), "p50_ms": float(np.percentile(lat, 50)), "p90_ms": float(np.percentile(lat, 90)),
             "p99_ms": float(np.percentile(lat, 99)), "clients": clients}
 
@@ -109,9 +122,15 @@ def main():
     ap.add_argument("--backend-procs", type=int, default=8)
     ap.add_argument("--n", type=int, default=20000)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--nodes", type=int, default=None, help="backend node cache (default: the workload's base node cache)")
+    ap.add_argument("--io-complete", action="store_true",
+                    help="doc 9as: audited hits of runs logged with --log-served become background searches; misses of "
+                         "arms named ours* search with k = --k-deep")
+    ap.add_argument("--k-deep", type=int, default=128)
     a = ap.parse_args()
     w = get(a.workload)
     info = w.backend_info()
+    info["nodes"] = w.node_cache() if a.nodes is None else a.nodes
     stream = np.asarray(np.load(w.prep_dir / "streams.npz")[w.stream], dtype=np.int64)
     warm = min(20000, len(stream) // 5)
     post = stream[warm:]
@@ -121,7 +140,11 @@ def main():
             arms.append(("none", None))
         else:
             name, path = spec.split("=", 1)
-            arms.append((name, json.loads(Path(path).read_text())["timing"]))
+            r = json.loads(Path(path).read_text())
+            t = dict(r["timing"])
+            if a.io_complete and "audit_pos" in r:
+                t["audit_post"] = np.asarray(r["audit_pos"], dtype=np.int64) - r["args"]["warmup"]
+            arms.append((name, t))
     n = min(a.n, len(post), *[len(t["hit"]) for _, t in arms if t])
     qids = post[:n]
     ctx = mp.get_context("fork")
@@ -134,7 +157,7 @@ def main():
         done.get(timeout=3600)
     logger.info(f"{w.name}: {a.backend_procs} backend processes ready; L {info['L']} beam {info['W']}; {n} requests")
     for i in range(300):                                       # warm the page cache with real misses
-        jobs.put((-1, int(qids[i])))
+        jobs.put((-1, int(qids[i]), 10))
     for i in range(300):
         done.get(timeout=600)
     out = []
@@ -142,9 +165,16 @@ def main():
         for name, t in arms:
             hit = np.zeros(n, bool) if t is None else np.asarray(t["hit"][:n], bool)
             dt = np.zeros(n) if t is None else np.asarray(t["dt_ms"][:n]) / 1e3
-            r = run_arm(name, hit, dt, qids, c, jobs, done)
+            aud = None
+            if t is not None and "audit_post" in t:
+                aud = np.zeros(n, bool)
+                ap_ = t["audit_post"]
+                aud[ap_[(ap_ >= 0) & (ap_ < n)]] = True
+            km = a.k_deep if (a.io_complete and name.startswith("ours")) else 10
+            r = run_arm(name, hit, dt, qids, c, jobs, done, audit=aud, k_miss=km)
+            r["nodes"] = info["nodes"]
             out.append(r)
-            logger.info(f"clients {c:3d} {name:12s} hit {100 * r['hit_rate']:5.1f}%  {r['qps']:7.1f} QPS  "
+            logger.info(f"clients {c:3d} {name:12s} hit {100 * r['hit_rate']:5.1f}% audits {r['audits']} k {km}  {r['qps']:7.1f} QPS  "
                         f"mean {r['mean_ms']:.1f} ms  p50 {r['p50_ms']:.1f}  p99 {r['p99_ms']:.1f}")
     for _ in procs:
         jobs.put(None)
