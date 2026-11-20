@@ -1380,7 +1380,7 @@ class Sim:
                             sv = sv | th
                             ns = np.array(ns, copy=True)
                             ns[th] = topk_present(self.D, qs[th], self.k, key="answer")
-                            self.cost["mini_hits"] = self.cost.get("tier_hits", 0) + int(th.sum())
+                            self.cost["mini_hits"] = self.cost.get("mini_hits", 0) + int(th.sum())
                 ys = self.y(qs, ns)
                 ye = ys if self.D["truth"] is self.D["answer"] else (
                     cache.served_retention(qs, ns, key="truth") if self.a.label == "served"
