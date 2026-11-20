@@ -4013,3 +4013,13 @@ First numbers before the restart (valid, single-request path): MedRAG 0.3% LRU C
 at 30 balls, 8.9 ms at 100 balls, vs 0.3 ms for the stage-2 graph on that small cache): union serving only pays on
 large caches (graph serve ~9 ms at TriviaQA 10%); rule candidate: use the cheaper serving per cache size.
 TriviaQA 0.99 1% LRU C4: 2.40x vs 2.24x (hit path 1.67 vs 3.26 ms).
+
+#### 9an (cont.). First union-serving timing results (11-20 00:25)
+TriviaQA 0.99 (speedup, hit %): 10% LRU: v6 3.47x (86.7), C2 (graph stage 2) 4.77x, C4 (30 balls) 4.42x (83.0, hit path
+5.3 ms vs 12.1), C5 (100 balls) 2.91x (hit path 14.4 ms); 10% continuous C4 3.59x (82.0); 1% LRU 2.24x -> C4 2.43x,
+C5 2.32x; 1% continuous 2.59x -> C4 2.73x, C5 2.51x. Union serving trades hit rate (86.7 -> 83.0%) for serve time and
+is not a clear win over the C2 stage-2 graph; 100 balls is slower than the graph (14 ms). Best vs best alternative so
+far: TriviaQA 0.99 10% 1.85x (C2 LRU 4.77x vs QVCache 2.59x), TriviaQA 0.6 10% 1.51x (C3 LRU 2.04x vs Aker 1.35x), TriviaQA
+0.3 10% 1.51x, MedRAG 1.86-2.74x (v6), everything else <= 1.5x. Ceiling argument: a cell can only reach 2x vs the best
+alternative if 1 / (1 - hit rate) of ours >= 2 x the alternative's measured speedup with the hit path ~free: TriviaQA 0.99
+10% (91% hits vs 60%), 0.6 10% (71% vs 27%), MedRAG; not SPACEV (hit rate 63% -> 2.7x cap vs Aker 1.8x), TripClick, ESCI.
