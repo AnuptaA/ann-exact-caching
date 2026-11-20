@@ -869,6 +869,13 @@ class Sim:
             mem = cache.memory()
         self.cost["recent_evicts"] = self.cost.get("recent_evicts", 0) + i
 
+    def _mini_admit(self, q):
+        """Mini cache (doc 9as): store q's backend answer, evicting the least recently used entry when full."""
+        self.mini[q] = True
+        self.mini.move_to_end(q)
+        if len(self.mini) > self.mini_cap:
+            self.mini.popitem(last=False)
+
     def _shallow_only_vectors(self):
         """Cached vectors held by shallow (recency-segment) entries and by no other entry."""
         cache = self.cache
@@ -1331,10 +1338,7 @@ class Sim:
             raise SystemExit("--mini-cache-share: continuous greedy (ogreedy) only")
         if self.mini is not None:            # mini cache seeded with the warm-up's requests (all answered by the backend)
             for q in np.asarray(self.stream[:a.warmup]).tolist():
-                self.mini[q] = True
-                self.mini.move_to_end(q)
-                if len(self.mini) > self.mini_cap:
-                    self.mini.popitem(last=False)
+                self._mini_admit(q)
         last_alarm = None
         last_check = a.warmup
         pending = []                # scheduled post-alarm rebuild checks (times)
@@ -1367,6 +1371,7 @@ class Sim:
                 if timed:
                     q0 = int(qs[0])
                     if self.mini is not None and q0 in self.mini:
+                        self.mini.move_to_end(q0)
                         # doc 9as: a mini-cache hit (hash lookup; its time recorded as measured, ~1 us)
                         import time as _t
                         a0 = _t.perf_counter()
@@ -1387,14 +1392,25 @@ class Sim:
                         sc, sv, ns = self._timed_lookup(q0, s + u0)
                         if self.mini is not None:
                             self._tparts.append(np.array([False]))
+                            if not sv[0]:
+                                self._mini_admit(q0)
                 else:
                     sc, Xs, ns = cache.scores(qs, self.model)
                     sv = (sc >= self.lam if self.lam is not None and cache.n_cached() >= self.k
                           else np.zeros(len(qs), bool))
-                    if self.mini is not None and len(self.mini):
+                    if self.mini is not None:
                         # doc 9as: exact repeats in the mini cache are served its stored backend answer, outside the
-                        # hit model; they count as hits at every cutoff (FAST_SCORE), as the main cache's fast path
-                        th = np.array([int(q) in self.mini for q in qs])
+                        # hit model; they count as hits at every cutoff (FAST_SCORE), as the main cache's fast path.
+                        # Request by request, in stream order: a stored query refreshes its entry; a miss of both
+                        # caches is admitted at once (its answer came from the backend), so a repeat later in the same
+                        # batch can hit (the main cache only changes per batch)
+                        th = np.zeros(len(qs), bool)
+                        for i_, q_ in enumerate(np.asarray(qs).tolist()):
+                            if q_ in self.mini:
+                                th[i_] = True
+                                self.mini.move_to_end(q_)
+                            elif not sv[i_]:
+                                self._mini_admit(q_)
                         self._tparts.append(th)
                         if th.any():
                             sc = np.where(th, 1e9, sc)
@@ -1442,15 +1458,10 @@ class Sim:
             audit = serve & (rng.random(len(qb)) < rate)
             hits_prev = int(serve.sum())
             if self.mini is not None:
-                # mini cache upkeep (LRU): every request of a stored query refreshes it; backend answers (misses,
-                # audited hits) are admitted; capacity --mini-cache-share x M / entry cost
-                for q, got in zip(qb.tolist(), (~serve | audit).tolist()):
-                    if q in self.mini:
-                        self.mini.move_to_end(q)
-                    elif got:
-                        self.mini[q] = True
-                        if len(self.mini) > self.mini_cap:
-                            self.mini.popitem(last=False)
+                # mini cache upkeep: audited hits got the backend's answer too (misses were admitted at lookup)
+                for q in qb[audit].tolist():
+                    if q not in self.mini:
+                        self._mini_admit(q)
             if getattr(a, "log_served", False):      # doc 9as: per-request hit / audit positions (stream index)
                 self.served_pos.extend((s + np.flatnonzero(serve)).tolist())
                 self.audit_pos.extend((s + np.flatnonzero(audit)).tolist())
