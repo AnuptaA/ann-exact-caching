@@ -806,6 +806,11 @@ class Sim:
         a, cache = self.a, self.cache
         cache.mark_used(near[serve], t)
         miss = [int(q) for q in qb[~serve] if int(q) not in cache.entries]
+        p_adm = getattr(a, "lru_admit_p", 1.0)
+        if p_adm < 1.0:            # doc 9aq: admit (and deep-search) only a share of the misses
+            if not hasattr(self, "lru_rng"):
+                self.lru_rng = np.random.default_rng(a.seed + 11)
+            miss = [q for q in miss if self.lru_rng.random() < p_adm]
         self.cost["topR"] += len(miss)
         for q in miss:
             cache.add(q, a.k_lru)
@@ -881,7 +886,25 @@ class Sim:
         past = [x[1] for x in self.og_miss]        # misses of earlier batches only
         self.og_miss.append((t, miss))
         new = [int(q) for q in np.unique(miss) if int(q) not in cache.entries]
+        # doc 9aq: which misses get the deep top-R search (candidates). The other misses still score candidates
+        # (their answers are labeled); only their deep lists are not fetched.
+        n_miss_new = len(new)
+        trig_m = getattr(a, "og_trigger_m", 0)
+        if trig_m > 0 and new:
+            # cluster trigger: a miss is a candidate if >= trig_m ids of its top-k answer also occur in the answer of another
+            # distinct miss within the last --og-trigger-window requests (this batch included)
+            D0 = db_view(self.D)
+            recent = np.unique(np.concatenate([x[1] for x in self.og_miss if x[0] > t - a.og_trigger_window]))
+            cnt = np.bincount(topk_present(D0, recent, k, key="answer").ravel(), minlength=cache.n_db)
+            shared = (cnt[topk_present(D0, np.array(new, dtype=np.int64), k, key="answer")] >= 2).sum(axis=1)
+            new = [q for q, sh in zip(new, shared) if sh >= trig_m]
+        smp = getattr(a, "og_sample", 1.0)
+        if smp < 1.0 and new:
+            if not hasattr(self, "og_rng"):
+                self.og_rng = np.random.default_rng(a.seed + 7)
+            new = [q for q in new if self.og_rng.random() < smp]
         self.cost["topR"] += len(new)
+        self.cost["new_misses"] = self.cost.get("new_misses", 0) + n_miss_new
         if not past:
             return
         sq, sw = np.unique(np.concatenate(past), return_counts=True)
@@ -1401,7 +1424,9 @@ def load(prep, args):
     else:
         db = np.load(ESCI / f"esci_db{meta.get('n_db', args.n_db)}_s42.npy").astype(np.float32)
         q = np.load(ESCI / "esci_queries.npy").astype(np.float32)
-    top = np.load(Path(prep) / f"top{args.R}.npy")
+    topf = Path(prep) / f"top{args.R}.npy"
+    # doc 9aq: a shell depth R below the stored 500 uses the first R columns of top500.npy
+    top = np.load(topf) if topf.exists() else np.load(Path(prep) / "top500.npy", mmap_mode="r")[:, :args.R].copy()
     draw = np.random.default_rng(1).random(len(db))
     streams = np.load(Path(prep) / "streams.npz")
     D = {"db": db, "q": q, "top": top, "draw": draw}
@@ -1482,6 +1507,13 @@ def make_parser():
                     help="ogreedy: misses of a fixed half of the queries score candidates, the other "
                          "half calibrates (use with --cal-labels maintained: calibration pairs "
                          "re-scored against the current cache every batch)")
+    ap.add_argument("--og-sample", type=float, default=1.0,
+                    help="ogreedy: share of the new misses that become candidates (get the deep top-R search), doc 9aq")
+    ap.add_argument("--og-trigger-m", type=int, default=0,
+                    help="ogreedy: a miss is a candidate only if >= this many ids of its answer occur in the answer of another "
+                         "distinct recent miss (0 = off), doc 9aq")
+    ap.add_argument("--og-trigger-window", type=int, default=2000, help="requests the trigger looks back over")
+    ap.add_argument("--lru-admit-p", type=float, default=1.0, help="lru: probability a miss is admitted (doc 9aq)")
     ap.add_argument("--og-span", type=int, default=0,
                     help="ogreedy: requests whose misses score candidates and whose hits credit entries "
                          "(0 = --cal-span)")

@@ -54,10 +54,22 @@ def build_cache(w, budget, variant, backend, seed=0):
             "--budget", f"{budget:g}", "--detect"]
     if backend == "diskann":
         argv += ["--backend-file", str(w.answers_file), "--backend-target", w.target]
+    import re
+    mk = re.fullmatch(r"(?:K(\d+))?(?:R(\d+))?", variant)
     if variant == "maxk10":
         argv += ["--max-ball-k", "10"]
     elif variant in ("f95", "f100"):
         argv += ["--f", {"f95": "0.95", "f100": "1.0"}[variant]]
+    elif variant != "default" and mk and (mk.group(1) or mk.group(2)):
+        # doc 9aq: K<N> = largest ball size, R<M> = depth of the deep list (shell); a depth R allows balls up to the
+        # largest of 10, 20, 50, 100, 200, 500 not above it
+        Kv, Rv = mk.group(1), mk.group(2)
+        if Rv:
+            argv += ["--R", Rv]
+        kmax = int(Kv) if Kv else max(x for x in (10, 20, 50, 100, 200, 500) if x <= int(Rv))
+        if Kv and Rv:
+            kmax = min(kmax, int(Rv))
+        argv += ["--max-ball-k", str(kmax)]
     elif variant != "default":
         raise ValueError(variant)
     args = OS.make_parser().parse_args(argv)
@@ -89,7 +101,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workload", required=True)
     ap.add_argument("--budget", type=float, required=True)
-    ap.add_argument("--variant", default="default", choices=["default", "maxk10", "f95", "f100"])
+    ap.add_argument("--variant", default="default", help="default, maxk10, f95, f100, K<N>, R<M>, K<N>R<M> (doc 9aq)")
     ap.add_argument("--backend", default="exact", choices=["exact", "diskann"])
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--max-post", type=int, default=0, help="cap on post-warm-up requests (0 = all; tests)")

@@ -4137,3 +4137,22 @@ hits (now ~12%), f = vector fetches (~0.08-0.10); throughput vs no cache = 1 / u
   (shell sample refilled to the budget) on TripClick, TriviaQA 0.6, SPACEV 0.6, ESCI at 1% and 10%; then per-request runs with
   candidate sampling s in {1, 0.3, 0.1, 0.03}, LRU admission probability, the cluster trigger, audit floor 3%; counters per
   request: deep searches, vectors fetched, audits.
+
+#### 9aq (cont.). Ablation queue started (11-20 16:10) and TripClick numbers
+- New flags (online_sim): --og-sample S (share of new misses that become candidates and get the deep top-R search), --og-trigger-m M /
+  --og-trigger-window W (a miss is a candidate only if >= M ids of its answer occur in the answer of another distinct miss within the last
+  W requests), --lru-admit-p P; --R below 500 uses the first R columns of top500.npy; hit_table variants K<N>, R<M>, K<N>R<M>
+  (largest ball K, deep-list depth R; R alone allows balls up to the largest of 10 / 20 / 50 / 100 / 200 / 500 not above R). Smoke tests:
+  short ogreedy run with sample 0.1 + trigger 3: 155 deep searches for 3,385 new misses; K100R128 table on TripClick 1%: p0 0.073 -> 0.27
+  (the smaller shell region fits the sampling budget more densely).
+- Queued (run_abl.sh): 59 static tables (K20 / K50 / K100 / K200 / R128 / R200 / K100R128 on TripClick, TriviaQA 0.6, SPACEV 0.6, ESCI at 1 and
+  10%; TripClick 30% x 3) on cores 8-47, and 77 per-request untimed runs (ogreedy base / sample 0.3 / 0.1 / 0.03 / trigger 3 / R128 / audit 3%,
+  LRU base / admit 0.3 / 0.1 / R128; TripClick 1 / 10 / 30%, MedRAG 0.3%, SPACEV 0.6 1%, TriviaQA 0.6 10%, ESCI 10%) on cores 48-95.
+  Results: ablation_dyn/<workload>/b<budget>/<variant>/; tables hit_tables/<w>/b<budget>_<variant>_exact.*.
+- I/O model on larger TripClick caches (throughput vs no cache; Aker 1.22 / 1.28 / 1.32 / 1.33x at 10 / 20 / 30 / 50%): LRU today 0.35 / 0.42 /
+  0.51 / 0.84x; LRU with no deep search (R <= 128, vectors from the search) 1.27 / 1.45 / 1.70 / 2.39x (1.04 / 1.14 / 1.29 / 1.80 of Aker);
+  greedy with 10% sampled candidates 0.90 / 1.02 / 1.20 / 1.76x; greedy with no deep search 1.14 / 1.28 / 1.48 / 2.09x.
+- TripClick hit rate, greedy / LRU: 0.3%: 4.9 / 14.9 (0.33); 1%: 7.3 / 18.2 (0.40); 3%: 13.5 / 23.9 (0.57); 10%: 28.5 / 34.0 (0.84); 20%: 36.2 / 44.6
+  (0.81); 30%: 48.4 / 56.0 (0.86); 50%: 70.7 / 75.1 (0.94). Reason (9ag): greedy scores candidates on earlier misses, so a first occurrence is
+  not admitted (admitted after its 2nd, hits from its 3rd) and it updates per batch; per-class hit rates at 1%: recent exact repeats LRU 80%
+  vs greedy 36%, near-duplicates 61% vs 11%. The exact-repeat fast path serves repeats of cached centers faster; it does not change what is cached.
