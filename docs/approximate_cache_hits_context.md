@@ -4168,3 +4168,23 @@ hits (now ~12%), f = vector fetches (~0.08-0.10); throughput vs no cache = 1 / u
 - Smoke (TripClick 1%, og_s0.1, s = 0.1, first 20k requests after warm-up): 152 shallow entries (the cap), hit rate 7.19% vs og_s0.1
   7.27%, retention 0.914. No gain at this size and span; the segment (1,520 vectors) is about a fifth of LRU's entries at 1%.
 - Queued: og_s0.1_recent0.1 on TripClick 1% / 10% / 30% (`/tmp/mx/abl_recent.txt`), next to og_s0.1.
+
+#### 9ar (cont.). Results (11-20 19:45) and corrections
+- Recency segment, TripClick (hit % / deep searches per request), og_s0.1 vs og_s0.1 + s = 0.1: 1% 7.1 / 0.087 vs 5.6 / 0.088; 10%
+  22.1 / 0.074 vs 18.3 / 0.078; 30% 42.8 / 0.055 vs 38.8 / 0.059. It lowers the hit rate at every size. Cause: the cutoff lambda
+  roughly doubles (median 0.76 -> 1.59, 1.42 -> 2.71, 1.42 -> 2.40). Shallow entries have no shell (intruder count 0), so near-repeat
+  hits on them look safe but have low retention, and the one global cutoff tightens for every request. Exact repeats should not share
+  the model: a separate exact-repeat tier (a hash of the query -> its top-k ids; served answer = the backend's earlier answer,
+  retention 1 on a static database) outside calibration. Memory per entry: a key plus k ids (~50 bytes vs ~3 KB per 769-d vector),
+  so 10% of the TripClick 10% budget holds ~1M entries, i.e. every distinct request of the stream; size needs no tuning there.
+- TripClick repeat gaps: post-warm-up exact repeats 18.8% of requests; within 100 / 1,000 / 3,000 / 10,000 / 30,000 requests 4.3 / 6.7 /
+  8.9 / 12.2 / 16.0%. Warm-up repeat gaps: median 797, P95 10,592 (Anupta's sizing rule: P95 of the gap, capped at 10% of the main
+  cache); a tier holding the last 10,592 requests (9,679 distinct) catches repeats worth 12.4% of requests (an upper bound on its
+  gain; some are already hits of the main cache).
+- Per-request ablations so far (results/ablation_dyn/<workload>/<size>/<variant>, 7 cells). Top-128 deep lists (R128) keep the hit rate on TripClick (LRU 18.8 vs 18.6 at 1%, 35.1 vs 33.8 at 10%, 56.5 vs 56.5 at 30%),
+  TriviaQA 0.6 10% (LRU 61.6 vs 52.2) and SPACEV 0.6 1% (continuous greedy 17.2 vs 16.5); ESCI 10% loses (continuous greedy 31.8 ->
+  23.9). The tuned DiskANN search list is already 128 on TripClick / MedRAG and 1,000 on TriviaQA (100 on SPACEV / ESCI), so a top-128
+  list can come from the answer search itself with no extra SSD reads. Candidate sampling at 10% costs 7-15% of the hit rate with
+  continuous greedy (TripClick 10% 26.1 -> 22.1) and more with LRU (33.8 -> 23.8).
+- Correction to the 9aq I/O model: QVCache's 1.06 factor was its miss latency (CPU: the in-cache kNN before the backend, the insert),
+  not SSD reads. Its disk I/O per request is (1 - h), as Aker's.
