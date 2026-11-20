@@ -37,7 +37,7 @@ def query_file(w):
     return f if f.exists() else Path("datasets/esci/data_vectors/esci_queries.npy")
 
 
-def worker(info, qfile, jobs, done):
+def worker(info, qfile, jobs, done, dtype):
     from simulations.approximate_hits.diskann_aio import open_disk_index
     q = np.load(qfile, mmap_mode="r")
     ix = open_disk_index(max_wait=3600, index_directory=info["index_dir"], num_threads=2, num_nodes_to_cache=0,
@@ -48,7 +48,7 @@ def worker(info, qfile, jobs, done):
         if job is None:
             return
         i, qi = job
-        ix.search(np.ascontiguousarray(q[qi], dtype=np.float32), k_neighbors=10, complexity=info["L"], beam_width=info["W"])
+        ix.search(np.ascontiguousarray(q[qi], dtype=dtype), k_neighbors=10, complexity=info["L"], beam_width=info["W"])
         done.put(("done", i, time.perf_counter()))
 
 
@@ -126,7 +126,7 @@ def main():
     qids = post[:n]
     ctx = mp.get_context("fork")
     jobs, done = ctx.Queue(), ctx.Queue()
-    procs = [ctx.Process(target=worker, args=(info, str(query_file(w)), jobs, done), daemon=True)
+    procs = [ctx.Process(target=worker, args=(info, str(query_file(w)), jobs, done, np.int8 if w.name.startswith("spacev") else np.float32), daemon=True)
              for _ in range(a.backend_procs)]
     for p in procs:
         p.start()

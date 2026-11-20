@@ -4089,3 +4089,16 @@ ESCI node cache, same method (16 threads): base 300 nodes 95.7 queries/s -> 100,
 in single-request latency (1.26x vs 1.17-1.23x). TripClick: node$ 1.33x < ours 1.50x. Caveats of the replay: cache-path
 times are replayed from a separate run (no contention with backend processes), one cache thread, backend workers without
 node cache, hit / miss decisions fixed from the recorded run (no feedback from completion order).
+
+#### 9ap (cont.). Larger TripClick caches, throughput queue (11-20 14:30)
+- TripClick at 20 / 30 / 50% (untimed, per request, tuned settings, graph search lists of the 10% cell): ours LRU 44.6 / 56.0 / 75.1%
+  (retention .911 / .912 / .909), continuous greedy 36.2 / 48.4 / 70.7%; Aker best (proximity 0.05) 21.9 / 24.2 / 24.7% (saturates
+  near 25%). Hit-rate caps 1/(1-h): ours 1.81 / 2.27 / 4.02x vs Aker 1.28 / 1.32 / 1.33x (ratio caps 1.4 / 1.7 / 3.0x). Static tables:
+  TripClick calibrated 32.5 / 40.2 / 52.5%; ESCI at 30 / 50%: 57.2 / 78.1% (caps 2.34x / 4.57x).
+- Latency terms: single-request mean latency (unloaded) ours 1.163x vs Aker 1.201x speedup at TripClick 10% (ours 3% slower);
+  in the closed-loop replay at 4 clients, p50 54.2 vs 57.5 ms and mean 39.6 vs 49.7 ms are queueing-dominated latencies
+  (4 requests always in flight), a different quantity.
+- Queue (started 14:20): 81 timed recording runs (every request timed; ours LRU and continuous greedy tuned, best Aker,
+  best QVCache; 21 cells: TripClick 1 / 3 / 10 / 20 / 30 / 50%, TriviaQA 0.3 / 0.6 / 0.99 at 1 / 10%, SPACEV 0.3 / 0.6 / 0.99 at 1 / 10%,
+  MedRAG 0.03 / 0.1 / 0.3%) 8 at a time, then throughput_all.py: closed-loop replays (16 clients, 12,000 requests) and the
+  equal-memory node-cache arm for each cell, sequential on a quiet machine.

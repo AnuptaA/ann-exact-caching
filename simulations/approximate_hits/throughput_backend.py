@@ -44,7 +44,7 @@ def main():
     pick = post[np.linspace(0, len(post) - 1, a.n).astype(int)]
     qf = w.prep_dir / "q.npy"
     q = np.load(qf if qf.exists() else Path("datasets/esci/data_vectors/esci_queries.npy"))
-    xq = np.ascontiguousarray(q[pick].astype(np.float32))
+    xq = np.ascontiguousarray(q[pick].astype(np.int8 if w.name.startswith("spacev") else np.float32))
     tmax = max(a.threads)
     logger.info(f"{w.name}: L {info['L']} beam {info['W']} base node cache {nodes} nodes; {len(xq)} queries; open with {tmax} threads")
     ix = open_disk_index(max_wait=3600, index_directory=info["index_dir"], num_threads=tmax, num_nodes_to_cache=int(nodes),
