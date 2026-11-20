@@ -869,6 +869,27 @@ class Sim:
             mem = cache.memory()
         self.cost["recent_evicts"] = self.cost.get("recent_evicts", 0) + i
 
+    def _aux_memory(self, new, sq):
+        """Memory held outside the cache budget by continuous greedy's population state at this batch (doc 9as),
+        in vector equivalents (bytes / (4 x dim)): the candidates' deep lists as ids (R ids each, 4 bytes) and, if a
+        system kept them until the decision, the candidates' deep-list vectors not already cached; the scoring
+        set (past misses' top-k ids, 4 bytes each, plus a count); the calibration labels (time, score, label,
+        weight: 16 bytes each); the per-entry credits (12 bytes each)."""
+        a, cache, k = self.a, self.cache, self.k
+        vb = 4.0 * self.D["db"].shape[1]
+        R = a.R
+        n_c = len(new)
+        cand_vec = 0
+        if n_c:
+            rows = np.asarray(self.D["rank"][np.asarray(new, dtype=np.int64)])[:, :R].ravel()
+            rows = np.unique(rows[rows >= 0])
+            cand_vec = int((~cache.cached[rows]).sum()) if len(rows) else 0
+        n_cal = sum(len(c[1]) for c in self.cal)
+        n_cred = sum(len(cr) for _, cr in getattr(self, "og_credit", []))
+        return {"cand": n_c, "cand_ids_vec": n_c * R * 4 / vb, "cand_vectors": cand_vec,
+                "score_q": int(len(sq)), "score_ids_vec": len(sq) * (k + 1) * 4 / vb,
+                "cal_vec": n_cal * 16 / vb, "credit_vec": n_cred * 12 / vb, "budget_vec": float(self.M)}
+
     def _mini_admit(self, q):
         """Mini cache (doc 9as): store q's backend answer, evicting the least recently used entry when full."""
         self.mini[q] = True
@@ -968,6 +989,7 @@ class Sim:
         if not past:
             return
         sq, sw = np.unique(np.concatenate(past), return_counts=True)
+        aux = self._aux_memory(new, sq)
         kvals = tuple(K for K in K_VALUES if K <= (K_LIMIT[0] or max(K_VALUES)))
         pairs = [(c, K) for c in new for K in kvals]
         pairs += [(c, K) for c, K0 in cache.entries.items() for K in kvals if K > K0 and c not in cache.shallow]
@@ -1183,7 +1205,7 @@ class Sim:
                 if v in cache.entries:
                     cache.remove(v)
                     mem = cache.memory()
-        self.og_log.append({"t": t, "rho": rho, "added": len(pop.selected), "evicted": len(victims),
+        self.og_log.append({"t": t, "rho": rho, "added": len(pop.selected), "evicted": len(victims), "aux": aux,
                             "entries": len(cache.entries), "cached": cache.n_cached(), "shallow": len(cache.shallow)})
 
     # -- database events ---------------------------------------------------
