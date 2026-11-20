@@ -4045,3 +4045,18 @@ alternative if 1 / (1 - hit rate) of ours >= 2 x the alternative's measured spee
   range, graph inserts at efConstruction 200, exact-repeat fast path, best fit among the 64 nearest centers, intruder
   count over the 10 best-fit balls (= C2); C3 = tuned with the count over 30 balls; C4 / C5 = tuned with a hit answered
   from the vectors of the 30 / 100 best-fit balls instead of a search over the whole cache.
+
+#### 9ao (cont.). Metrics, bigger caches, Aker paper (11-20 02:00)
+- The Aker paper never says cached vectors can be dropped: "result-centric caches store only the past query vectors
+  and their top-k results"; neighbor objects store "the raw vector and database-specific metadata"; its memory
+  claims are the sharing of neighbor objects between entries and a small query filter (26-276 MB, 2.5-5.4% of
+  DiskANN's pinned index). Cache sizes of 1% / 5% count neighbor objects. Decision (Jialin): keep the budget in
+  vectors (the paper's own unit); the paper must state that Aker's entries could be stored as ids only.
+- Candidate metrics beyond mean speedup (tuned ours vs best alternative, TripClick 10% / 1%, ESCI 10%, TriviaQA 0.6 10%,
+  SPACEV 0.99 10%): (a) memory the best alternative needs to match our hit rate: TripClick 13x / 9x at 0.3% / 1%, TriviaQA 0.6
+  4.5x / 4.3x at 0.3% / 1%, ESCI / SPACEV / MedRAG never reach it within 10x-33x; (b) mean latency at a fixed offered load
+  (backend as a queue, misses see (S + wait)): TripClick 10% vs Aker 1.18x / 1.48x / 1.69x at 50 / 80 / 90% of the uncached
+  capacity (M/M/1; M/D/1 1.10 / 1.31 / 1.46), TripClick 1% 1.11 / 1.27 / 1.40, ESCI 10% vs node$ 1.09 / 1.22 / 1.31, TriviaQA 0.6
+  10% 1.92 / 2.61 / 3.03, SPACEV 0.99 10% 1.40 / 1.61 / 1.70; vs no cache 1.7-15x. Hit-rate cap 1 / (1 - h) at zero load.
+- Larger TripClick caches queued (20 / 30 / 50% of the dataset): static tables, Aker (4 proximity settings), ours LRU and
+  continuous greedy per request (untimed); ESCI static tables at 30 / 50%.
