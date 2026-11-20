@@ -982,8 +982,8 @@ class Sim:
         # are the segment's (greedy's cap counts every cached vector)
         share = getattr(a, "og_recent_share", 0.0)
         sh_only = self._shallow_only_vectors() if share > 0 else 0
-        # doc 9as: the exact-repeat tier's memory is outside the main cache
-        limit = self.M * (1 - share - getattr(a, "exact_tier_share", 0.0)) + sh_only * per
+        # doc 9as: the mini cache's memory is outside the main cache
+        limit = self.M * (1 - share - getattr(a, "mini_cache_share", 0.0)) + sh_only * per
         cap = int(limit / per)
         credit = {}
         for _, cr in self.og_credit:
@@ -1321,17 +1321,20 @@ class Sim:
         self.og_pred, self.og_phi_log = {}, []
         self.served_pos, self.audit_pos = [], []
         from collections import OrderedDict
-        xt = getattr(a, "exact_tier_share", 0.0)
-        self.tier = OrderedDict() if xt > 0 else None
-        self.tier_cap = int(xt * self.M / self.k)
-        if self.tier is not None and method != "ogreedy":
-            raise SystemExit("--exact-tier-share: continuous greedy (ogreedy) only")
-        if self.tier is not None:            # seeded with the warm-up's requests (all answered by the backend)
+        xt = getattr(a, "mini_cache_share", 0.0)
+        self.mini = OrderedDict() if xt > 0 else None
+        # an entry: query hash (8 bytes) + k (id, distance) pairs (8 bytes each), in vector equivalents
+        # (float32 vectors of the database's dimension), as the paper's mini cache
+        self.mini_entry_cost = (8 + 8 * self.k) / (4 * self.D["db"].shape[1])
+        self.mini_cap = int(xt * self.M / self.mini_entry_cost)
+        if self.mini is not None and method != "ogreedy":
+            raise SystemExit("--mini-cache-share: continuous greedy (ogreedy) only")
+        if self.mini is not None:            # mini cache seeded with the warm-up's requests (all answered by the backend)
             for q in np.asarray(self.stream[:a.warmup]).tolist():
-                self.tier[q] = True
-                self.tier.move_to_end(q)
-                if len(self.tier) > self.tier_cap:
-                    self.tier.popitem(last=False)
+                self.mini[q] = True
+                self.mini.move_to_end(q)
+                if len(self.mini) > self.mini_cap:
+                    self.mini.popitem(last=False)
         last_alarm = None
         last_check = a.warmup
         pending = []                # scheduled post-alarm rebuild checks (times)
@@ -1367,17 +1370,17 @@ class Sim:
                     sc, Xs, ns = cache.scores(qs, self.model)
                     sv = (sc >= self.lam if self.lam is not None and cache.n_cached() >= self.k
                           else np.zeros(len(qs), bool))
-                    if self.tier is not None and len(self.tier):
-                        # doc 9as: exact repeats in the tier are served its stored backend answer, outside the
+                    if self.mini is not None and len(self.mini):
+                        # doc 9as: exact repeats in the mini cache are served its stored backend answer, outside the
                         # hit model; they count as hits at every cutoff (FAST_SCORE), as the main cache's fast path
-                        th = np.array([int(q) in self.tier for q in qs])
+                        th = np.array([int(q) in self.mini for q in qs])
                         self._tparts.append(th)
                         if th.any():
                             sc = np.where(th, 1e9, sc)
                             sv = sv | th
                             ns = np.array(ns, copy=True)
                             ns[th] = topk_present(self.D, qs[th], self.k, key="answer")
-                            self.cost["tier_hits"] = self.cost.get("tier_hits", 0) + int(th.sum())
+                            self.cost["mini_hits"] = self.cost.get("tier_hits", 0) + int(th.sum())
                 ys = self.y(qs, ns)
                 ye = ys if self.D["truth"] is self.D["answer"] else (
                     cache.served_retention(qs, ns, key="truth") if self.a.label == "served"
@@ -1397,8 +1400,8 @@ class Sim:
                         self.cal_stale = True
                         pend = []
             score, serve, y, y_exact = (np.concatenate([p_[i] for p_ in parts]) for i in range(4))
-            # tier hits (doc 9as) do not credit the main cache's entries
-            self._tmask = (np.concatenate(self._tparts) if self.tier is not None and len(self._tparts) == len(parts)
+            # mini-cache hits (doc 9as) do not credit the main cache's entries
+            self._tmask = (np.concatenate(self._tparts) if self.mini is not None and len(self._tparts) == len(parts)
                            else np.zeros(len(qb), bool))
             near = np.concatenate([p_[4] for p_ in parts])
             if self.D["truth"] is self.D["answer"]:
@@ -1417,16 +1420,16 @@ class Sim:
                 rate = float(np.clip(target / max(hits_prev, 1), rate, 1.0))
             audit = serve & (rng.random(len(qb)) < rate)
             hits_prev = int(serve.sum())
-            if self.tier is not None:
-                # tier upkeep (LRU): every request of a stored query refreshes it; backend answers (misses,
-                # audited hits) are admitted; capacity --exact-tier-share x M / k entries (k vectors each)
+            if self.mini is not None:
+                # mini cache upkeep (LRU): every request of a stored query refreshes it; backend answers (misses,
+                # audited hits) are admitted; capacity --mini-cache-share x M / entry cost
                 for q, got in zip(qb.tolist(), (~serve | audit).tolist()):
-                    if q in self.tier:
-                        self.tier.move_to_end(q)
+                    if q in self.mini:
+                        self.mini.move_to_end(q)
                     elif got:
-                        self.tier[q] = True
-                        if len(self.tier) > self.tier_cap:
-                            self.tier.popitem(last=False)
+                        self.mini[q] = True
+                        if len(self.mini) > self.mini_cap:
+                            self.mini.popitem(last=False)
             if getattr(a, "log_served", False):      # doc 9as: per-request hit / audit positions (stream index)
                 self.served_pos.extend((s + np.flatnonzero(serve)).tolist())
                 self.audit_pos.extend((s + np.flatnonzero(audit)).tolist())
@@ -1617,9 +1620,9 @@ def make_parser():
                          "distinct recent miss (0 = off), doc 9aq")
     ap.add_argument("--og-trigger-window", type=int, default=2000, help="requests the trigger looks back over")
     ap.add_argument("--lru-admit-p", type=float, default=1.0, help="lru: probability a miss is admitted (doc 9aq)")
-    ap.add_argument("--exact-tier-share", type=float, default=0.0,
-                    help="ogreedy: share of the budget for an exact-repeat tier (query -> stored backend answer, LRU, k "
-                         "vectors per entry), served outside the hit model, doc 9as; 0 = off")
+    ap.add_argument("--mini-cache-share", type=float, default=0.0,
+                    help="ogreedy: share of the budget for the mini cache (query hash -> the backend's top-k ids and "
+                         "distances, LRU), checked before the main cache, doc 9as; 0 = off")
     ap.add_argument("--og-recent-share", type=float, default=0.0,
                     help="ogreedy: share of the budget for a recency segment of misses' top-k answers (shallow K = k "
                          "entries, no deep search, LRU), doc 9ar; 0 = off")
@@ -1793,7 +1796,7 @@ def make_parser():
                     help="save the cache state after warm-up (for eval_timing.py)")
     ap.add_argument("--tag", type=str, default="", help="suffix of the output file name")
     ap.add_argument("--log-served", action="store_true",
-                    help="record the stream positions of hits and audited hits (doc 9as: offline exact-tier oracle)")
+                    help="record the stream positions of hits and audited hits (doc 9as: offline mini-cache oracle)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-queries", type=int, default=None, help="truncate the stream")
     ap.add_argument("--out", type=str, default=None)

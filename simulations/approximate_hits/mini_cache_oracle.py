@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
-Offline oracle for a second-tier exact-repeat cache (context doc 9as).
+Offline oracle for the mini cache (context doc 9as; the paper's term).
 
-The tier maps a query to the backend's answer for it (stored when the backend answered that query: a miss of the
-main cache, an audited hit, or a warm-up request) and serves later exact repeats of it; it sits in front of the main
-cache and is outside the hit model and calibration. Question: what share x of the memory budget B (at most 10%)
-should go to it? Giving it x costs the main cache x of its memory and gains the tier's hits on requests the main
+The mini cache maps a query's hash to the backend's top-k ids and distances for it (stored when the backend answered
+that query: a miss of the main cache, an audited hit, or a warm-up request) and serves later exact repeats of it;
+requests are checked in it before the main cache. Question: what share x of the memory budget B (at most 10%)
+should go to it? Giving it x costs the main cache x of its memory and gains the mini cache's hits on requests the main
 cache misses.
 
 Inputs: two logged runs of the main cache (online_sim --log-served) at budgets B and 0.9 B. Per x:
-  extra(x)  hits of the tier on requests the main cache (at B) misses, tier capacity C = x B / cost per entry;
-            two tier policies: Belady (perfect knowledge of the future: keep the entries whose next useful
+  extra(x)  hits of the mini cache on requests the main cache (at B) misses, capacity C = x B / cost per entry;
+            two eviction policies: Belady (perfect knowledge of the future: keep the entries whose next useful
             request, an exact repeat the main cache misses, comes soonest; bypass when the newcomer's is later)
             and LRU (admit every backend answer, any request of the query refreshes it)
   loss(x)   the main cache's hits lost by shrinking it to (1 - x) B: linear between the B and 0.9 B runs
   total(x)  = hits(B) - loss(x) + extra(x), as a share of the requests after the warm-up
-Cost per entry: --entry-cost vectors (default k = 10: the answer's vectors, the main cache's accounting; an
-ids-only entry, a query hash plus 10 ids, is ~50 bytes ~ 0.016 vectors at 769-d float32).
-Approximations: the tier's extra hits are counted against the misses of the main cache at B (at (1 - x) B it misses a
-little more, so extra is slightly low), and the main cache is assumed unaffected by the tier taking some requests.
+Cost per entry: --entry-cost vectors (default: a hash, 8 bytes, plus k ids and distances, 8 bytes each, as float32
+vectors of the database's dimension: 0.029 vectors at 769-d, k = 10).
+Approximations: the mini cache's extra hits are counted against the misses of the main cache at B (at (1 - x) B it misses a
+little more, so extra is slightly low), and the main cache is assumed unaffected by the mini cache taking some requests.
 
-  .venv/bin/python simulations/approximate_hits/exact_tier_oracle.py --workload tripclick-ip
+  .venv/bin/python simulations/approximate_hits/mini_cache_oracle.py --workload tripclick-ip
 """
 
 import json
@@ -56,7 +56,7 @@ def next_useful(q, useful):
 
 
 def belady(q, answered, miss, nxt, C, warmup):
-    """Extra hits (requests >= warmup that the main cache misses and the tier serves) of the offline-optimal tier
+    """Extra hits (requests >= warmup that the main cache misses and the mini cache serves) of the offline-optimal mini cache
     of C entries with bypass."""
     if C <= 0:
         return 0
@@ -110,11 +110,14 @@ def main():
     ap.add_argument("--workload", default="tripclick-ip")
     ap.add_argument("--budgets", type=float, nargs="+", default=[0.01, 0.1, 0.3])
     ap.add_argument("--variants", nargs="+", default=["lru_R128", "og_R128"])
-    ap.add_argument("--entry-cost", type=float, default=10.0, help="memory per tier entry, in vectors")
+    ap.add_argument("--entry-cost", type=float, default=None, help="memory per entry, in vectors (default: hash + k ids and distances)")
     ap.add_argument("--xs", type=float, nargs="+", default=[0, .0025, .005, .01, .015, .02, .03, .04, .05, .06, .08, .1])
     a = ap.parse_args()
     root = RES / "exact_oracle" / a.workload
-    n_db = np.load(f"datasets/aker/{a.workload}-docs.npy", mmap_mode="r").shape[0]
+    docs = np.load(f"datasets/aker/{a.workload}-docs.npy", mmap_mode="r")
+    n_db = docs.shape[0]
+    if a.entry_cost is None:
+        a.entry_cost = (8 + 8 * 10) / (4 * docs.shape[1])
     out = {}
     fig, axes = plt.subplots(len(a.variants), len(a.budgets), figsize=(5 * len(a.budgets), 3.8 * len(a.variants)),
                              squeeze=False)
@@ -159,23 +162,23 @@ def main():
                                  "rows": rows}
             ax = axes[i][j]
             xs = [100 * r["x"] for r in rows]
-            ax.plot(xs, [100 * r["total_belady"] for r in rows], "o-", color="#D55E00", label="total, oracle tier")
-            ax.plot(xs, [100 * r["total_lru"] for r in rows], "s-", color="#0072B2", label="total, LRU tier")
+            ax.plot(xs, [100 * r["total_belady"] for r in rows], "o-", color="#D55E00", label="total, Belady")
+            ax.plot(xs, [100 * r["total_lru"] for r in rows], "s-", color="#0072B2", label="total, LRU")
             ax.plot(xs, [100 * (hB - r["main_loss"]) for r in rows], "--", color="grey", label="main cache alone")
             ax.axhline(100 * hB, color="k", lw=0.8)
-            ax.set_title(f"{v}, cache {100 * B:g}%  (no tier {100 * hB:.1f}%; unlimited tier +{100 * unl:.1f})",
+            ax.set_title(f"{v}, cache {100 * B:g}%  (no mini cache {100 * hB:.1f}%; unlimited mini cache +{100 * unl:.1f})",
                          fontsize=9, loc="left")
-            ax.set_xlabel("share of the budget for the exact tier (%)")
+            ax.set_xlabel("share of the budget for the mini cache (%)")
             ax.set_ylabel("hit rate (%)")
             ax.grid(alpha=0.3)
             if i == 0 and j == 0:
                 ax.legend(fontsize=8)
-    fig.suptitle(f"{a.workload}: exact-repeat tier, {a.entry_cost:g} vectors per entry", fontsize=11)
+    fig.suptitle(f"{a.workload}: mini cache, {a.entry_cost:.3g} vectors per entry", fontsize=11)
     fig.tight_layout()
-    tag = f"_cost{a.entry_cost:g}"
-    fig.savefig(root / f"exact_tier{tag}.png", dpi=130)
-    (root / f"exact_tier{tag}.json").write_text(json.dumps(out, indent=1))
-    print("wrote", root / f"exact_tier{tag}.png")
+    tag = f"_cost{a.entry_cost:.3g}"
+    fig.savefig(root / f"mini_cache{tag}.png", dpi=130)
+    (root / f"mini_cache{tag}.json").write_text(json.dumps(out, indent=1))
+    print("wrote", root / f"mini_cache{tag}.png")
 
 
 if __name__ == "__main__":
