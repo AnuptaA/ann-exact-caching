@@ -1316,6 +1316,7 @@ class Sim:
         p_lru = cache.p
         self.og_credit, self.og_miss, self.og_log, self.og_fresh_log = [], [], [], []
         self.og_pred, self.og_phi_log = {}, []
+        self.served_pos, self.audit_pos = [], []
         last_alarm = None
         last_check = a.warmup
         pending = []                # scheduled post-alarm rebuild checks (times)
@@ -1386,6 +1387,9 @@ class Sim:
                 rate = float(np.clip(target / max(hits_prev, 1), rate, 1.0))
             audit = serve & (rng.random(len(qb)) < rate)
             hits_prev = int(serve.sum())
+            if getattr(a, "log_served", False):      # doc 9as: per-request hit / audit positions (stream index)
+                self.served_pos.extend((s + np.flatnonzero(serve)).tolist())
+                self.audit_pos.extend((s + np.flatnonzero(audit)).tolist())
             self.cost["topk"] += int((~serve).sum() + audit.sum())
             self.log.append({"t": t, "n": len(qb), "served": int(serve.sum()),
                              "served_retention_sum": float(y[serve].sum()),
@@ -1453,6 +1457,8 @@ class Sim:
                "og_log": self.og_log, "og_fresh_log": self.og_fresh_log, "og_phi_log": self.og_phi_log,
                "cost": dict(self.cost, vectors_fetched=cache.vectors_fetched,
                             warmup_topR=a.warmup, short_rows=self.D["short"][0])}
+        if getattr(a, "log_served", False):
+            res["served_pos"], res["audit_pos"] = self.served_pos, self.audit_pos
         if self.timing is not None:
             T = self.timing
             lat, hit = np.array(T["lat"]) * 1e3, np.array(T["hit"], dtype=bool)
@@ -1743,6 +1749,8 @@ def make_parser():
     ap.add_argument("--save-state", type=str, default=None,
                     help="save the cache state after warm-up (for eval_timing.py)")
     ap.add_argument("--tag", type=str, default="", help="suffix of the output file name")
+    ap.add_argument("--log-served", action="store_true",
+                    help="record the stream positions of hits and audited hits (doc 9as: offline exact-tier oracle)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-queries", type=int, default=None, help="truncate the stream")
     ap.add_argument("--out", type=str, default=None)
