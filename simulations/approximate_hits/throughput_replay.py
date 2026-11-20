@@ -41,7 +41,8 @@ def worker(info, qfile, jobs, done, dtype):
     from simulations.approximate_hits.diskann_aio import open_disk_index
     q = np.load(qfile, mmap_mode="r")
     ix = open_disk_index(max_wait=3600, index_directory=info["index_dir"], num_threads=2,
-                         num_nodes_to_cache=info.get("nodes", 0), cache_mechanism=0, index_prefix="ann")
+                         num_nodes_to_cache=info.get("nodes", 0), cache_mechanism=1 if info.get("nodes", 0) else 0,
+                         index_prefix="ann")
     done.put(("ready", 0, 0.0))
     while True:
         job = jobs.get()
