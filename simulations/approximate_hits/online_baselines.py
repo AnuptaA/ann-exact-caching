@@ -152,7 +152,7 @@ class Base:
                                                       "p99_ms": float(np.percentile(v, 99)), "n": int(len(v))}
             res["timing"] = {"every": T["every"], "n_timed": int(len(lat)), "hit_rate_timed": float(hit.mean()) if len(hit) else None,
                              "cache": dict(summ(lat) or {}, hits_ms=summ(lat[hit]), misses_ms=summ(lat[~hit])),
-                             "lat_ms": lat.tolist(), "hit": hit.tolist()}
+                             "lat_ms": lat.tolist(), "hit": hit.tolist(), "dt_ms": (np.array(T["dt"]) * 1e3).tolist()}
         return res
 
 
@@ -476,7 +476,7 @@ class QVCacheCore(QVCache):
         self.timing = None
         graph = bool(getattr(args, "timing_compose", None)) or bool(getattr(args, "qv_graph", False))
         if getattr(args, "timing_compose", None):
-            self.timing = {"compose": np.load(args.timing_compose), "every": args.timing_every, "lat": [], "hit": []}
+            self.timing = {"compose": np.load(args.timing_compose), "every": args.timing_every, "lat": [], "hit": [], "dt": []}
         self.core = QVCore(self.D["db"].shape[1], self.k, self.n_mini, int(self.cap), float(args.qv_D),
                            float(args.qv_alpha), self.mu, np.ascontiguousarray(self.P), self.lo, self.hi,
                            int(args.qv_buckets), graph)
@@ -502,6 +502,7 @@ class QVCacheCore(QVCache):
                 j = pos // T["every"]
                 T["lat"].append(dt + (0.0 if hit else float(T["compose"][j]) if j < len(T["compose"]) else np.nan))
                 T["hit"].append(bool(hit))
+                T["dt"].append(dt)
             if hit:
                 served[i] = True
                 near = np.asarray(near, dtype=np.int64)
@@ -543,7 +544,7 @@ class AkerRealSim(Base):
                         args.aker_real_at, args.aker_real_al)
         self.timing = None
         if getattr(args, "timing_compose", None):
-            self.timing = {"compose": np.load(args.timing_compose), "every": args.timing_every, "lat": [], "hit": []}
+            self.timing = {"compose": np.load(args.timing_compose), "every": args.timing_every, "lat": [], "hit": [], "dt": []}
 
     def n_entries(self):
         return 0
@@ -567,6 +568,7 @@ class AkerRealSim(Base):
                 j = pos // T["every"]
                 T["lat"].append(dt + (0.0 if hit else float(T["compose"][j]) if j < len(T["compose"]) else np.nan))
                 T["hit"].append(bool(hit))
+                T["dt"].append(dt)
             if hit:
                 got = np.asarray(ids, dtype=np.int64) - 1
                 served[i] = True

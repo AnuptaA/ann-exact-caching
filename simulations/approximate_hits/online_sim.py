@@ -538,7 +538,7 @@ class Sim:
             if getattr(args, "cache_impl", "python") != "core":
                 raise SystemExit("--timing-compose needs --cache-impl core")
             self.timing = {"compose": np.load(args.timing_compose), "every": args.timing_every,
-                           "lat": [], "hit": [], "stages": []}
+                           "lat": [], "hit": [], "stages": [], "dt": []}
         self.reset_detection()
         self.window = []            # (query, served, audited, audit rate), since the last alarm
 
@@ -1187,6 +1187,7 @@ class Sim:
             charge = 0.0 if r.hit else float(T["compose"][j]) if j < len(T["compose"]) else np.nan
             T["lat"].append(dt + charge)
             T["hit"].append(bool(r.hit))
+            T["dt"].append(dt)                     # the cache path alone (doc 9ap: replayed by throughput_replay.py)
             T["stages"].append((r.t_knn, r.t_balls, r.t_shell, r.t_model, r.t_serve))
         return np.array([r.score]), np.array([bool(r.hit)]), near[None, :self.k]
 
@@ -1382,7 +1383,7 @@ class Sim:
                              "cache": dict(summ(lat) or {}, hits_ms=summ(lat[hit]), misses_ms=summ(lat[~hit])),
                              "stage_ms": dict(zip(("knn", "balls", "shell", "model", "serve"),
                                                   map(float, st.mean(axis=0)))) if len(st) else None,
-                             "lat_ms": lat.tolist(), "hit": hit.tolist(),
+                             "lat_ms": lat.tolist(), "hit": hit.tolist(), "dt_ms": (np.array(T["dt"]) * 1e3).tolist(),
                              "ef1": self.cache.ef1, "ef2": self.cache.ef2}
         return res
 

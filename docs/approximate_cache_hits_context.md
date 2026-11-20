@@ -4060,3 +4060,26 @@ alternative if 1 / (1 - hit rate) of ours >= 2 x the alternative's measured spee
   10% 1.92 / 2.61 / 3.03, SPACEV 0.99 10% 1.40 / 1.61 / 1.70; vs no cache 1.7-15x. Hit-rate cap 1 / (1 - h) at zero load.
 - Larger TripClick caches queued (20 / 30 / 50% of the dataset): static tables, Aker (4 proximity settings), ours LRU and
   continuous greedy per request (untimed); ESCI static tables at 30 / 50%.
+
+### 9ap. Throughput (closed loop, real DiskANN misses) (11-20 04:30)
+Question (Jialin): do we get larger gains in throughput than in workload time? What do Aker / QVCache measure?
+- Aker (paper, Sec. 5): the client issues requests from a single thread ("The benchmark runs with a single
+  thread"); QPS is therefore 1 / mean latency, the same as our workload-time speedup; concurrency is left to future work
+  (global lock). QVCache (arXiv 2602.02057): hit ratio, hit latency, p50 latency (p99 omitted: "unless the hit ratio is above
+  99%, P99 is dominated by queries that miss"), throughput ("we report the metric reflecting this benefit"), 10-recall@10,
+  vectors retrieved; headline "p50 latency up to 40-1000x lower". Neither reports latency under load.
+- Latency at fixed load: at load 0 it equals the workload-time speedup; both systems' waits grow toward saturation; ours vs an
+  alternative grows with load when our hit rate is higher (waits scale with 1 / (1 - load x miss share)).
+- Real DiskANN on this machine's volume is I/O bound: TripClick, search list 128 / beam 32, base node cache, batch_search
+  from 1 to 32 threads: 87.7 queries/s at every thread count (~170 reads per query at ~15,000 reads/s). DiskANN's
+  Python binding holds the GIL (search: a Python loop keeps 34% of its speed during searches; batch_search: ~1%), so the
+  replay below uses backend worker processes.
+- throughput_replay.py: replays a timed cache run's per-request decisions (hit or miss) and measured cache-path times (online_sim
+  --timing-every 1 now records dt_ms) in closed loop: one cache thread (serial, busy-waits the measured time), misses go
+  to 8 DiskANN worker processes (real searches, no node cache, same for every arm), at most C requests in flight.
+  TripClick 10%, 20,000 requests, queries per second (hit rate): no cache 67.0; ours (tuned LRU) 99.8-100.5 (33-34%);
+  Aker (proximity 0.05) 80.5-80.6 (17%); identical at C = 4 / 16 / 64. Ours / Aker = 1.25x (cap 1.24x), ours / none 1.50x
+  (cap 1.52x), vs 0.97x and 1.16x in single-request mean latency. p50 latency at C = 4: 54.2 / 57.5 / 59.1 ms (ours / Aker / none).
+  ESCI 10%, C = 16: no cache 75.9; ours (tuned continuous greedy, 27.9% hits) 104.6 = 1.38x (cap 1.39x).
+- DiskANN with the cache's memory as node cache, same method (batch_search, 16 threads, 3,000 queries): TripClick 87.7 (base 1,828
+  nodes) -> 116.6 queries/s (154,753 nodes) = 1.33x; ESCI measured next.
