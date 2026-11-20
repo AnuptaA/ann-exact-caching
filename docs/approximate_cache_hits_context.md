@@ -4102,3 +4102,14 @@ node cache, hit / miss decisions fixed from the recorded run (no feedback from c
   best QVCache; 21 cells: TripClick 1 / 3 / 10 / 20 / 30 / 50%, TriviaQA 0.3 / 0.6 / 0.99 at 1 / 10%, SPACEV 0.3 / 0.6 / 0.99 at 1 / 10%,
   MedRAG 0.03 / 0.1 / 0.3%) 8 at a time, then throughput_all.py: closed-loop replays (16 clients, 12,000 requests) and the
   equal-memory node-cache arm for each cell, sequential on a quiet machine.
+
+#### 9ap (cont.). The replay leaves out background I/O (11-20 15:00)
+Jialin's objection: the replay is built from a recording that charges nothing for audits, for the deep top-R search of an admitted
+miss, or for fetching its vectors, but a saturated SSD pays for all of them. Measured DiskANN throughput on TripClick (16 threads,
+real index): search list 128: 88.0 queries/s; 500: 28.5 (3.1x the I/O); 1000: 14.7 (6.0x). Our LRU admits every miss with a top-500
+deep list (R = 500; ball K = 20, shell sample p = 7%) and Aker needs only the k + delta answer of the normal search. Per request, in
+units of one normal search: ours = 0.66 x (answer 1 + deep 3.1 + vector fetches ~0.3) + audits 0.034 = ~2.9 (if the answer comes
+from the same L = 500 search: 0.66 x 3.4 = 2.2), no cache = 1.0, Aker = 0.82. Estimate (not measured live): an I/O-saturated
+system with this admission would be slower than no cache. Ideas: admit fewer misses, shallower R (top-128 from the same search,
+~0.9 units), shell from fewer ranks. A live or I/O-complete test is needed before any throughput claim. The 81-run recording
+queue was stopped (13 recordings kept).

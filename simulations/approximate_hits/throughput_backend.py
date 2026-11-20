@@ -32,10 +32,13 @@ def main():
     ap.add_argument("--n", type=int, default=4000, help="queries per measurement (post-warm-up requests, evenly spaced)")
     ap.add_argument("--nodes", type=int, default=None, help="node cache size (default: the workload's base node cache); "
                     "the equal-memory arm uses per_budget[budget].nodes_cached of timing_v6/<w>/backend_s50.json")
+    ap.add_argument("--L", type=int, default=None, help="search list (default: the workload's)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     w = get(a.workload)
     info = w.backend_info()
+    if a.L:
+        info["L"] = a.L
     nodes = w.node_cache() if a.nodes is None else a.nodes
     z = np.load(w.prep_dir / "streams.npz")
     s = np.asarray(z[w.stream], dtype=np.int64)
