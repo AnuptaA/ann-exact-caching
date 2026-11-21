@@ -268,3 +268,6 @@ datasets/tripclick/*
 datasets/medrag/*
 !datasets/medrag/*.sh
 !datasets/medrag/*.py
+
+# Virtual environments (from main)
+.venv*/

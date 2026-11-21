@@ -6,3 +6,12 @@ scikit-learn
 tqdm
 seaborn
 umap-learn
+# Added from main (scipy is imported by simulations/approximate_hits/online_sim.py)
+scipy
+pytest
+lightgbm
+
+# ESCI 50K embedding sample and Q1: see requirements-q1.txt, requirements-encode.txt
+pandas
+torch
+sentence-transformers
