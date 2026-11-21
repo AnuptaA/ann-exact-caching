@@ -94,15 +94,14 @@ class Aker:
             with aker_check.CaptureStderr() as cap:
                 self.h = lib.shim_create(dim, pool, topk, delta, risk, a_tighten, a_loosen,
                                          str(CONFIG).encode())
-            held = aker_check.parse_filter(cap.text)
-            if held is not None:
-                aker_check.check_filter(held, {"faiss_M": int(os.environ.get("AKER_FILTER_M", 4)),
-                                               "efConstruction": int(os.environ.get("AKER_FILTER_EFC", 8)),
-                                               "efSearch": int(os.environ.get("AKER_FILTER_EFS", 16))})
-                logger.info(f"Aker query filter: {held}")
+            allow = os.environ.get("AKER_ALLOW_UNVERIFIED_FILTER") == "1"
+            held = aker_check.verify_filter(cap.text, {"faiss_M": int(os.environ.get("AKER_FILTER_M", 4)),
+                                                       "efConstruction": int(os.environ.get("AKER_FILTER_EFC", 8)),
+                                                       "efSearch": int(os.environ.get("AKER_FILTER_EFS", 16))}, allow)
+            if held is None:
+                logger.warning("filter parameters not verified (--allow-unverified-filter)")
             else:
-                logger.warning("no FILTER line at creation: the filter parameters were not verified (the unmodified "
-                               "library hard-codes efConstruction 16 and efSearch 8, not the paper's 8 and 16)")
+                logger.info(f"Aker query filter: {held}")
         else:
             self.h = lib.shim_create(dim, pool, topk, delta, risk, a_tighten, a_loosen, str(CONFIG).encode())
         if not self.h:
@@ -454,6 +453,8 @@ def main():
     ap.add_argument("--filter-m", type=int, default=4, help="query filter HNSW m (paper: 4; needs the vendored build)")
     ap.add_argument("--filter-efc", type=int, default=8, help="filter efConstruction (paper: 8)")
     ap.add_argument("--filter-efs", type=int, default=16, help="filter efSearch (paper: 16)")
+    ap.add_argument("--allow-unverified-filter", action="store_true",
+                    help="run even if the FILTER line is missing or differs from the requested parameters")
     ap.add_argument("--prox-percentile", type=float, default=None,
                     help="Proximity mode: threshold = this percentile of the squared distances between the distinct "
                          "warm-up queries (harness/thresholds.py; the harness uses 0.1 and 1)")
@@ -499,7 +500,8 @@ def main():
     except ImportError:
         pass
     os.environ.update({"AKER_FILTER_M": str(args.filter_m), "AKER_FILTER_EFC": str(args.filter_efc),
-                       "AKER_FILTER_EFS": str(args.filter_efs)})
+                       "AKER_FILTER_EFS": str(args.filter_efs),
+                       "AKER_ALLOW_UNVERIFIED_FILTER": "1" if args.allow_unverified_filter else "0"})
     prep = Path(args.prep)
     db, q, top, stream = load(prep, args.stream, native=args.timing)
     if args.warmup is None:

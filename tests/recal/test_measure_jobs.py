@@ -232,3 +232,22 @@ def test_capture_stderr_collects_descriptor_two_output():
     with aker_check.CaptureStderr() as cap:
         os.write(2, b"FILTER faiss_M=4 efConstruction=8 efSearch=16 metric=0\n")
     assert aker_check.parse_filter(cap.text)["efSearch"] == 16
+
+
+def test_aker_build_defaults_to_the_vendored_library():
+    text = (ROOT / "simulations/approximate_hits/aker_real/build.sh").read_text()
+    assert "AKER_SRC=${AKER_SRC:-vendored}" in text
+    assert "AKER_SRC=${AKER_SRC:-clone}" not in text
+
+
+def test_filter_check_fails_unless_allowed():
+    from recal.measure import aker_check
+    paper = "FILTER faiss_M=4 efConstruction=8 efSearch=16 metric=0"
+    assert aker_check.verify_filter(paper)["efSearch"] == 16
+    swapped = "FILTER faiss_M=4 efConstruction=16 efSearch=8 metric=0"
+    with pytest.raises(SystemExit):
+        aker_check.verify_filter(swapped)
+    with pytest.raises(SystemExit):
+        aker_check.verify_filter("no line here")
+    assert aker_check.verify_filter("no line here", allow_unverified=True) is None
+    assert aker_check.verify_filter(swapped, allow_unverified=True)["efConstruction"] == 16

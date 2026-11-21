@@ -47,3 +47,21 @@ def check_filter(held: dict, expected: dict = PAPER_FILTER) -> None:
         if held.get(key) != want:
             raise SystemExit(f"Aker filter holds {key}={held.get(key)}, expected {want} "
                              "(build the shim against the vendored library: AKER_SRC=vendored sh aker_real/build.sh)")
+
+
+def verify_filter(text: str, expected: dict = PAPER_FILTER, allow_unverified: bool = False) -> dict | None:
+    """The FILTER line in `text` must show `expected`. A missing line or other values fail the run unless
+    allow_unverified (the unmodified library prints no line and hard-codes efConstruction 16, efSearch 8)."""
+    held = parse_filter(text)
+    if held is None:
+        if allow_unverified:
+            return None
+        raise SystemExit("no FILTER line at creation: the filter parameters cannot be verified "
+                         "(build with AKER_SRC=vendored, or pass --allow-unverified-filter)")
+    try:
+        check_filter(held, expected)
+    except SystemExit:
+        if allow_unverified:
+            return held
+        raise
+    return held

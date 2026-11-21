@@ -13,11 +13,12 @@
 set -e
 TP=${TP:-${RECAL_THIRD_PARTY:-$HOME/third_party}}
 HERE=$(cd "$(dirname "$0")" && pwd)
-# AKER_SRC=clone (default): the authors' clone at $TP/aker (commit 6bb326a), filter parameters hard-coded.
-# AKER_SRC=vendored: the repository's third_party/aker (local patches in PATCHES.md), built from a copy at
-# $TP/aker_vendored; it exposes the query filter's HNSW parameters and the shim sets the paper's values
+# AKER_SRC=vendored (default): the repository's third_party/aker (local patches in PATCHES.md), built from a
+# copy at $TP/aker_vendored; it exposes the query filter's HNSW parameters and the shim sets the paper's values
 # (m 4, efConstruction 8, efSearch 16; override with AKER_FILTER_M / AKER_FILTER_EFC / AKER_FILTER_EFS).
-AKER_SRC=${AKER_SRC:-clone}
+# AKER_SRC=clone: the authors' clone at $TP/aker (commit 6bb326a), filter parameters hard-coded (efConstruction
+# 16, efSearch 8); runs on it need --allow-unverified-filter.
+AKER_SRC=${AKER_SRC:-vendored}
 SHIM_DEFS=""
 if [ "$AKER_SRC" = "vendored" ]; then
   SRC=$TP/aker_vendored
