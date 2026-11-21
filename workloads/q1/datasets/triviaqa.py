@@ -129,7 +129,7 @@ def check_safe_torch() -> None:
                            f"need >= {MIN_TORCH[0]}.{MIN_TORCH[1]}")
 
 
-def dpr_query_encoder(checkpoint_dir: Path, max_length: int = 64, device: str = "cpu",
+def dpr_query_encoder(checkpoint_dir: Path, max_length: int = 256, device: str = "cpu",
                       tokenizer_dir: Path | None = None, threads: int | None = None):
     """Callable list[str] -> (n, 768) ndarray using the DPR question encoder (CLS).
 
