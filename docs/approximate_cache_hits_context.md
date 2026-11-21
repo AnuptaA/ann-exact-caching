@@ -4188,3 +4188,31 @@ hits (now ~12%), f = vector fetches (~0.08-0.10); throughput vs no cache = 1 / u
   continuous greedy (TripClick 10% 26.1 -> 22.1) and more with LRU (33.8 -> 23.8).
 - Correction to the 9aq I/O model: QVCache's 1.06 factor was its miss latency (CPU: the in-cache kNN before the backend, the insert),
   not SSD reads. Its disk I/O per request is (1 - h), as Aker's.
+
+### 9as. Mini cache and the I/O-complete replay (11-20 20:00 - 11-21 00:15)
+
+Terms (the paper's): the **mini cache** holds exact repeats (query -> the backend's top-k result vectors, LRU), checked before
+the **main cache**; requests it does not answer take the main path. Its hits are served outside the hit model and count as hits
+at every cutoff in calibration (over all hits, as the main cache's own exact-repeat fast path), decided with Jialin 11-20.
+Entries hold their k result vectors, as Aker's cache returns vectors (k vectors per entry; ids-only would be 0.029 vectors).
+- Oracle (mini_cache_oracle.py; logged main-cache runs at B and 0.9 B; continuous greedy with top-128 lists), net hit-rate change
+  (LRU mini cache / Belady) by mini-cache share of the budget: TripClick 1%: +1.7 / +3.7 at 0.5%, +2.9 / +6.7 at 10% (main cache
+  loses only 0.16 points); 10%: best LRU at 2%: +2.0 (Belady +5.3), at 10% +1.4; 30%: best LRU at 1%: +1.5, at 10% -0.1. SPACEV 0.6:
+  LRU ~0 at 1% (net negative), +0.5 at 10% share of a 10% cache; TriviaQA 0.6: ~0 at 1%, +1.5 at 10% of a 10% cache (simZipf
+  traces have no temporal locality; Belady still +1.5-5.8). The best share depends on the workload: an online rule should compare
+  the marginal hits of the two (e.g. a ghost list beyond the mini cache's LRU tail vs the main cache's lowest credit per vector).
+- Live (continuous greedy, top-128 lists, exact backend, per-request admission): TripClick 1% 9.9 -> 13.5% (share 10%), 10% 26.3 ->
+  29.4% (2%), 30% 46.5 -> 48.4% (1%); retention unchanged (0.913-0.924). A first version admitted per batch of 1,000 and gained
+  0.1 points: bursts repeat within a batch (4.3% of requests repeat within 100).
+- I/O-complete replay, TripClick 10% (first 20,000 requests after warm-up, 16 clients, 8 DiskANN processes, base node cache
+  loaded by sample queries, misses of ours search with k = 128 at L = 128, audited hits are real background searches; hits return
+  vectors, so no extra reads for admission): none 87.9 QPS, ours 111.8 (1.27x; hit 25.1%, 597 audits), Aker 105.6 (1.20x; 17.2%),
+  DiskANN with the cache's memory as node cache (154,753 nodes) 116.7 (1.33x). The disk model predicted 1.28x / 1.21x / -; ours is
+  1.06x Aker, 0.96x the node cache. (Without the base node cache: none 66.9, ours 85.4 = 1.28x, Aker 80.6 = 1.20x; the replay first
+  passed cache_mechanism 0, which loads no node cache: fixed.) Loading a node cache by sample queries takes ~70 min with 8 processes.
+- Memory outside the budget (og_log "aux", TripClick 1%, one batch): candidates' deep lists as ids 150 vectors, scoring set 265,
+  labels 43, credits 6 (~3% of the 15,239-vector budget); holding the candidates' deep-list vectors until the batch decision would
+  need 86,647 vectors (5.7x the budget). So a real system must not keep them: either decide per request, or re-read the chosen
+  entries' vectors (TripClick 10%: 10.4 ball + 24.1 shell-sample vectors per request, ~0.2 searches' worth of reads if re-read).
+- Queued: timed recordings (ours with the mini cache, and the best alternative) for TriviaQA 0.6 10%, SPACEV 0.6 10%, MedRAG 0.3%,
+  then their replays and node-cache arms, one at a time (run_replay_io2.sh).
