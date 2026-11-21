@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from recal.backend import ExactBackend
-from recal.measure.jobs_util import stamp_result
+from recal.measure.jobs_util import add_hash_flag, register_args, stamp_result
 from recal.params import Params
 from recal.stored import StoredAnswers
 from recal.system import ReCal
@@ -138,11 +138,13 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--log-served", action="store_true")
     ap.add_argument("--tag", default="")
     ap.add_argument("--out", required=True)
+    add_hash_flag(ap)
     return ap
 
 
 def main() -> None:
     args = parser().parse_args()
+    register_args(args)
     result = stamp_result(run(args))
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

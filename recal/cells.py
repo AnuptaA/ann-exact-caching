@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 
 from recal import accounting, sim
-from recal.measure.jobs_util import stamp_result
+from recal.measure.jobs_util import register_args, stamp_result
 
 SIM = "simulations/approximate_hits/online_sim.py"
 SIM_METHOD = {"prototype": "static", "aker": "aker", "qvcache": "qvcache"}
@@ -92,6 +92,7 @@ def main() -> None:
     ap = sim.parser()
     ap.add_argument("--method", choices=["recal", "prototype", "aker", "qvcache", "proximity"], required=True)
     a = ap.parse_args()
+    register_args(a)
     if a.method == "proximity":
         raise SystemExit("Proximity mode needs the real Aker library built on Linux: needs cluster check "
                          "(make q1-run-proximity-p0.1-b5, or aker_real with --prox-frac)")

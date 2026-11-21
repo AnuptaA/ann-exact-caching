@@ -69,34 +69,83 @@ def test_argv_forms_agree():
     }
 
 
+def stub_script(tmp_path, default):
+    path = tmp_path / "stub_job.py"
+    path.write_text(
+        "import argparse, sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[2])!r})\n"
+        "from recal.measure import jobs_util\n"
+        "ap = argparse.ArgumentParser()\n"
+        f"ap.add_argument('--beta', type=float, default={default})\n"
+        "ap.add_argument('--alpha', type=float, default=0.5)\n"
+        "ap.add_argument('--out', default='x')\n"
+        "jobs_util.add_hash_flag(ap)\n"
+        "args = ap.parse_args()\n"
+        "jobs_util.register_args(args)\n"
+        "print(jobs_util.stamp_result({})['config_hash'])\n"
+    )
+    return path
+
+
+def stub_line(script, result):
+    return f"[ -f {result} ] || {sys.executable} {script} --out o --alpha 0.5 > /dev/null"
+
+
 def test_check_exit_codes(tmp_path):
     path = tmp_path / "r.json"
-    assert ju.main(["check", str(path), LINE]) == 1
-    good = {"config_hash": ju.config_hash(ju.jobline_args(LINE))}
-    path.write_text(json.dumps(good))
-    assert ju.main(["check", str(path), LINE]) == 0
-    path.write_text(json.dumps({"config_hash": "other"}))
-    assert ju.main(["check", str(path), LINE]) == 2
+    line = f"[ -f {path} ] || x.py"
+    assert ju.main(["check", str(path), line]) == 1
+    path.write_text(json.dumps({"config_hash": "x", "hash_scheme": 2}))
+    assert ju.check_result(path, line, hasher=lambda l: "x") == 0
+    assert ju.check_result(path, line, hasher=lambda l: "other") == 2
+    assert ju.check_result(path, line, hasher=lambda l: None) == 2
     path.write_text('{"config_hash": ')
-    assert ju.main(["check", str(path), LINE]) == 2
+    assert ju.main(["check", str(path), line]) == 2
     path.write_text("[1]")
-    assert ju.main(["check", str(path), LINE]) == 2
+    assert ju.main(["check", str(path), line]) == 2
 
 
-def test_check_no_hash_policy(tmp_path):
+def test_result_without_scheme_two_hash_is_stale_unless_trusted(tmp_path):
     path = tmp_path / "r.json"
+    line = f"[ -f {path} ] || x.py"
     path.write_text("{}")
-    assert ju.main(["check", str(path), LINE]) == 0
-    assert ju.main(["check", str(path), LINE, "--strict-hash"]) == 2
-    path.write_text(json.dumps({"config_hash": "other"}))
-    assert ju.main(["check", str(path), LINE, "--trust-existing"]) == 0
+    assert ju.main(["check", str(path), line]) == 2
+    path.write_text(json.dumps({"config_hash": "same"}))
+    assert ju.check_result(path, line, hasher=lambda l: "same") == 2     # old scheme
+    assert ju.main(["check", str(path), line, "--trust-existing"]) == 0
 
 
-def test_stamp_result_matches_jobline():
-    argv = ["--method", "recal", "--prep", "p", "--budget", "0.05", "--out", "o", "--tag", "_z"]
-    res = ju.stamp_result({}, argv)
-    assert res["config_hash"] == ju.config_hash(ju.jobline_args(LINE))
-    assert "code_commit" in res
+def test_changed_default_makes_existing_result_stale(tmp_path, monkeypatch):
+    monkeypatch.setattr(ju, "SCRIPT_MARKERS", ju.SCRIPT_MARKERS + ("stub_job.py",))
+    result = tmp_path / "r.json"
+    script = stub_script(tmp_path, default=1.0)
+    line = stub_line(script, result)
+    stored = ju.jobline_hash(line)
+    assert stored is not None
+    result.write_text(json.dumps({"config_hash": stored, "hash_scheme": 2}))
+    assert ju.check_result(result, line) == 0
+    stub_script(tmp_path, default=2.0)                                   # a default changes in code
+    assert ju.check_result(result, line) == 2
+
+
+def test_hash_ignores_noise_keys_and_follows_commit():
+    a = {"alpha": 0.5, "out": "a", "threads": 4}
+    b = {"alpha": 0.5, "out": "b", "threads": 8}
+    assert ju.resolved_hash(a, "c1") == ju.resolved_hash(b, "c1")
+    assert ju.resolved_hash(a, "c1") != ju.resolved_hash(a, "c2")
+    assert ju.resolved_hash(a, "c1") != ju.resolved_hash(dict(a, alpha=0.6), "c1")
+
+
+def test_stamp_result_scheme_two_after_register():
+    import argparse
+    ns = argparse.Namespace(alpha=0.5, out="o", print_config_hash=False)
+    ju.register_args(ns)
+    try:
+        res = ju.stamp_result({})
+        assert res["hash_scheme"] == 2 and res["config_hash"] == ju.resolved_hash(vars(ns))
+        assert "code_commit" in res
+    finally:
+        ju._registered.clear()
 
 
 @pytest.mark.parametrize(

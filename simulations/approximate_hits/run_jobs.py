@@ -2,7 +2,8 @@
 """Runs a file of job lines (jobs_v6.py output) with --workers at a time, each pinned to its own block of
 --cores-per-job cores (taskset; composed timing runs: CPU only, doc 9ad). Lines that only prepare (cp /
 mkdir) run first, in order. Order: --first budgets (main cache sizes) before the others.
-A job whose result JSON exists is skipped only if its config_hash matches the job line's arguments;
+A job whose result JSON exists is skipped only if its config_hash (resolved settings plus code commit)
+matches the job line;
 stale or unreadable results are moved to <json>.stale and rerun. Exit status is 1 if any line failed.
 
   python3 simulations/approximate_hits/run_jobs.py /tmp/mx/v6_timing.txt --workers 8
@@ -77,7 +78,7 @@ def main():
     ap.add_argument("--first-core", type=int, default=8)
     ap.add_argument("--first", default="0.01,0.1,0.001,0.0001", help="budgets run first")
     ap.add_argument("--trust-existing", action="store_true", help="a result that exists counts as done")
-    ap.add_argument("--strict-hash", action="store_true", help="a result without config_hash is stale")
+    ap.add_argument("--strict-hash", action="store_true", help="no effect: a result without a scheme 2 config hash is always stale")
     a = ap.parse_args()
     lines = [l for l in open(a.lines).read().splitlines() if l.strip()]
     prep = [l for l in lines if not is_job(l)]

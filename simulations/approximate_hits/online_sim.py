@@ -1860,11 +1860,21 @@ def make_parser():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-queries", type=int, default=None, help="truncate the stream")
     ap.add_argument("--out", type=str, default=None)
+    ap.add_argument("--print-config-hash", action="store_true", help="print the config hash and exit")
     return ap
+
+
+def _register_args(args):
+    try:
+        from recal.measure.jobs_util import register_args
+    except ImportError:
+        return
+    register_args(args)
 
 
 def main():
     args = make_parser().parse_args()
+    _register_args(args)
     K_LIMIT[0] = args.max_ball_k
     D, streams = load(args.prep, args)
     if args.warmup is None:         # from the FULL stream (--max-queries truncates it for the states)

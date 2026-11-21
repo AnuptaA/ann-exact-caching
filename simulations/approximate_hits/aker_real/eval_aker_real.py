@@ -464,6 +464,7 @@ def main():
     ap.add_argument("--max-requests", type=int, default=None)
     ap.add_argument("--progress", type=int, default=5000, help="log every this many requests")
     ap.add_argument("--out", type=str, default=None)
+    ap.add_argument("--print-config-hash", action="store_true", help="print the config hash and exit")
     ap.add_argument("--stream", choices=["trace", "random", "shift", "multishift"],
                     default="trace", help="request stream of the prep (streams.npz)")
     ap.add_argument("--data-change", choices=["none", "churn", "drift"], default="none",
@@ -492,6 +493,11 @@ def main():
         args.delta = 5 if args.legacy_defaults else 0
     if args.alpha_tighten is None:
         args.alpha_tighten = 0.9 if args.legacy_defaults else 0.25
+    try:
+        from recal.measure.jobs_util import register_args
+        register_args(args)
+    except ImportError:
+        pass
     os.environ.update({"AKER_FILTER_M": str(args.filter_m), "AKER_FILTER_EFC": str(args.filter_efc),
                        "AKER_FILTER_EFS": str(args.filter_efs)})
     prep = Path(args.prep)

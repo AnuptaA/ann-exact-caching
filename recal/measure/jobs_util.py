@@ -1,8 +1,13 @@
 """Helpers for job runners: atomic result writes, config hash, freshness, retry class.
 
 CLI (used by the shell runners):
-  python -m recal.measure.jobs_util check <json> <jobline> [--strict-hash] [--trust-existing]
+  python -m recal.measure.jobs_util check <json> <jobline> [--trust-existing]
       exit 0 fresh, 1 missing, 2 stale / partial / unreadable
+
+Hash scheme 2: the hash covers every argument after defaults are applied (minus the timing-noise keys) and the
+code commit. A job script registers its parsed arguments with register_args(); `<script> <args>
+--print-config-hash` prints the hash the script would store, which is how a job line is checked without a run.
+A result without a scheme 2 hash is stale (--trust-existing restores the existence check).
   python -m recal.measure.jobs_util classify <exit code> <logfile>
       prints ok, retry or fatal
 """
@@ -31,6 +36,9 @@ TRANSIENT_CODES = {137, -9}
 TRANSIENT_MESSAGES = ("machine not quiet",)
 
 FRESH, MISSING, STALE = 0, 1, 2
+HASH_SCHEME = 2
+HASH_FLAG = "--print-config-hash"
+_registered: dict = {}
 
 
 def atomic_write_json(path: Any, obj: Any, **dump_kwargs: Any) -> None:
@@ -112,10 +120,38 @@ def code_commit(cwd: Optional[Path] = None) -> str:
         return "unknown"
 
 
+def resolved_hash(resolved: dict, commit: Optional[str] = None) -> str:
+    """Hash of the resolved settings plus the code commit (scheme 2)."""
+    args = {k: v for k, v in resolved.items() if k != "print_config_hash"}
+    text = json.dumps(
+        {"args": normalize_args(args), "code_commit": commit or code_commit()}, sort_keys=True, default=str
+    )
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def add_hash_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(HASH_FLAG, action="store_true", help="print the config hash and exit")
+
+
+def register_args(args: argparse.Namespace) -> None:
+    """Call right after parsing and after defaults are resolved: remember the settings, honour the hash flag."""
+    resolved = dict(vars(args))
+    if resolved.get("print_config_hash"):
+        print(resolved_hash(resolved))
+        raise SystemExit(0)
+    _registered.clear()
+    _registered.update(resolved)
+
+
 def stamp_result(result: dict, argv: Optional[list] = None) -> dict:
-    """Add config_hash (from the command-line arguments) and code_commit."""
-    argv = sys.argv[1:] if argv is None else argv
-    result["config_hash"] = config_hash(argv_to_dict(argv))
+    """Add config_hash and code_commit: scheme 2 when the script registered its arguments."""
+    if _registered:
+        result["config_hash"] = resolved_hash(_registered)
+        result["hash_scheme"] = HASH_SCHEME
+    else:
+        argv = sys.argv[1:] if argv is None else argv
+        result["config_hash"] = config_hash(argv_to_dict(argv))
+        result["hash_scheme"] = 1
     result["code_commit"] = code_commit()
     return result
 
@@ -150,9 +186,39 @@ def is_job_line(line: str) -> bool:
     return any(m in line for m in JOB_MARKERS)
 
 
+def jobline_hash(line: str, repo: Optional[Path] = None) -> Optional[str]:
+    """Hash the script of a job line would store, from `<interpreter> ... --print-config-hash`."""
+    try:
+        tokens = shlex.split(line)
+    except ValueError:
+        return None
+    marker = next((i for i, t in enumerate(tokens) if any(t.endswith(m) for m in SCRIPT_MARKERS)), None)
+    if marker is None:
+        return None
+    start = next((i for i in range(marker, -1, -1) if re.search(r"python[\d.]*$", tokens[i])), None)
+    if start is None:
+        return None
+    cmd = []
+    for tok in tokens[start:]:
+        if tok in SHELL_STOPS or re.match(r"^\d*>", tok):
+            break
+        cmd.append(tok)
+    repo = repo or Path(__file__).resolve().parents[2]
+    env = dict(os.environ, PYTHONPATH=str(repo) + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    try:
+        out = subprocess.run(cmd + [HASH_FLAG], cwd=repo, env=env, capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = out.stdout.split()
+    return lines[-1] if out.returncode == 0 and lines else None
+
+
 def check_result(path: Any, line: str, strict_hash: bool = False,
-                 trust_existing: bool = False) -> int:
-    """FRESH (0), MISSING (1) or STALE (2) for the result of a job line."""
+                 trust_existing: bool = False, hasher: Any = None) -> int:
+    """FRESH (0), MISSING (1) or STALE (2) for the result of a job line.
+
+    strict_hash is accepted for old callers: a result without a scheme 2 hash is always stale now.
+    """
     path = Path(path)
     if not path.is_file():
         return MISSING
@@ -165,12 +231,10 @@ def check_result(path: Any, line: str, strict_hash: bool = False,
     if not isinstance(data, dict):
         return STALE
     stored = data.get("config_hash")
-    if stored is None:
-        if strict_hash:
-            return STALE
-        print(f"warning: no config_hash in {path}, accepted", file=sys.stderr)
-        return FRESH
-    return FRESH if stored == config_hash(jobline_args(line)) else STALE
+    if stored is None or data.get("hash_scheme") != HASH_SCHEME:
+        return STALE
+    expected = (hasher or jobline_hash)(line)
+    return FRESH if expected is not None and stored == expected else STALE
 
 
 def classify_exit(code: int, log_text: str) -> str:
