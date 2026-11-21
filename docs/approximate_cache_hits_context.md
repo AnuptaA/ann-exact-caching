@@ -4263,3 +4263,18 @@ fast path, tuned search lists. Runs (/tmp/mx/gen_final.py, results/final/<worklo
 replay input) and 37 headline cells (exact backend). Throughput replays (with re-reads) at more sizes: TripClick 1% / 30%,
 SPACEV 0.99 10%, SPACEV 0.6 1%, TriviaQA 0.99 10%, TriviaQA 0.6 1%, MedRAG 0.1%, with the best alternative's timed recording
 (run_replay_extra.sh). quiet_tp.sh now pauses other jobs only while a replay measures (QUIET_FLAG), not while it loads.
+
+#### 9at (cont.). First results (11-21 16:30 - 20:05)
+- SPACEV 0.6 10% node cache at native int8 bytes (~998k nodes): 142.5 QPS = 1.44x DiskANN alone (1.67x when matched to float32
+  copies). Ours 1.40x without re-reads -> 0.97x of it.
+- Re-reading chosen candidates' vectors (one random 4 KB read per vector), whole stream: MedRAG 0.3% 5.00x -> 4.06x (9.3 vectors
+  per request); SPACEV 0.6 10% 1.40x -> 1.24x (14.0); TripClick 10% 1.34x -> 1.05x (34.6 vectors per request; below Aker 1.22x and
+  the node cache 1.33x). Shell samples are most of it (TripClick: 24 of 34). The counter counted every re-coding of a resized
+  entry's sample; counting only vectors no entry samples already (samp_new, fixed 20:00): 19.8 instead of 26.9 per request on
+  TripClick 10% (first 20k): the re-reads above are ~1.3x too many; the extra replays are re-recorded with the fix. Lever: count
+  intruders with DiskANN's in-memory PQ codes instead of our own 4-bit shell sample (no reads, no shell memory) - not tried.
+- Final config, headline (exact backend, one seed, retention 0.908-0.936 everywhere): above the best of Aker / QVCache in every
+  cell but TripClick 0.3% (8.9 vs Aker 9.2). At 10% caches deep lists of 128 cost hit rate vs continuous greedy with 500 (SPACEV
+  0.99 58.7 vs 66.1, TriviaQA 0.99 79.0 vs 91.4, TriviaQA 0.6 61.9 vs 68.4, ESCI 29.4 vs 33.1). TriviaQA's search list is 1,000, so
+  its rule is R = min(500, L) = 500 at no extra I/O: TriviaQA rerun with R 500 (results/final; the R 128 runs in final_R128).
+  SPACEV / ESCI (L 100) and TripClick / MedRAG (L 128) keep R = L.
