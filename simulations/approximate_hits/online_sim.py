@@ -371,7 +371,7 @@ class Cache:
         if len(self.cv) < k:
             # fewer than k cached vectors: nothing can be served
             X[:, -1] = 0.0
-            near[:] = 0
+            near[:] = -1          # no answer (-1 matches no id; 0 is a valid id)
             return X, near
         for s in range(0, n, CHUNK):
             q = Q[qidx[s:s + CHUNK]]
@@ -1292,7 +1292,7 @@ class Sim:
         if not r.hit and (cache.ef2 or getattr(cache, "serve_balls", 0)):
             near = np.asarray(cache.core.serve(x, int(cache.ef2)), dtype=np.int64)
         if len(near) < self.k:
-            near = np.concatenate([near, np.zeros(self.k - len(near), np.int64)])
+            near = np.concatenate([near, np.full(self.k - len(near), -1, np.int64)])
         pos = t - self.a.warmup
         if pos % T["every"] == 0:
             j = pos // T["every"]
@@ -1839,6 +1839,8 @@ def make_parser():
     ap.add_argument("--qv-mini", type=int, default=4)
     ap.add_argument("--qv-D", type=float, default=0.075, help="QVCache deviation factor")
     ap.add_argument("--qv-alpha", type=float, default=0.9)
+    ap.add_argument("--qv-batch-insert", action="store_true",
+                    help="QVCache (python): lookups against the batch-start cache, misses inserted at the end of the batch (old rule)")
     ap.add_argument("--qv-dims", type=int, default=16)
     ap.add_argument("--qv-buckets", type=int, default=8)
     ap.add_argument("--alarm-audit-rate", type=float, default=None,

@@ -162,3 +162,24 @@ def test_run_jobs_status_stale_rerun(tmp_path):
     path.write_text(json.dumps({"config_hash": "old"}))
     assert rj.result_status(line, False, False)[1] == 2
     assert rj.result_status(line, False, True)[1] == 0
+
+
+def test_aker_filter_line_parsing_and_check():
+    import pytest
+    from recal.measure import aker_check
+    text = "noise\nFILTER faiss_M=4 efConstruction=8 efSearch=16 metric=0\nmore"
+    held = aker_check.parse_filter(text)
+    assert held == {"faiss_M": 4, "efConstruction": 8, "efSearch": 16, "metric": 0}
+    aker_check.check_filter(held)
+    unpatched = aker_check.parse_filter("FILTER faiss_M=4 efConstruction=16 efSearch=8 metric=0")
+    with pytest.raises(SystemExit):
+        aker_check.check_filter(unpatched)
+    assert aker_check.parse_filter("nothing here") is None
+
+
+def test_capture_stderr_collects_descriptor_two_output():
+    import os
+    from recal.measure import aker_check
+    with aker_check.CaptureStderr() as cap:
+        os.write(2, b"FILTER faiss_M=4 efConstruction=8 efSearch=16 metric=0\n")
+    assert aker_check.parse_filter(cap.text)["efSearch"] == 16

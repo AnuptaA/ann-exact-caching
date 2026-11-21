@@ -16,7 +16,8 @@ from pathlib import Path
 
 RES = "simulations/approximate_hits/results"
 PY = ".venv-ann/bin/python -u simulations/approximate_hits/aker_real/eval_aker_real.py"
-GRID = list(itertools.product([0.9, 0.25], [0, 5, 10]))
+# the paper's cell (alpha_tighten 0.25, delta 0) first; 0.9 is the authors' bootstrap config
+GRID = list(itertools.product([0.25, 0.9], [0, 5, 10]))
 
 
 def settings(prep, only):

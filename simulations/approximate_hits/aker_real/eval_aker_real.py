@@ -35,6 +35,7 @@ import json
 import time
 import ctypes
 import argparse
+import os
 import logging
 from pathlib import Path
 
@@ -85,8 +86,25 @@ class Aker:
         lib.shim_status.argtypes = [P]
         lib.shim_destroy.argtypes = [P]
         self.lib, self.dim, self.topk, self.delta = lib, dim, topk, delta
-        self.h = lib.shim_create(dim, pool, topk, delta, risk, a_tighten, a_loosen,
-                                 str(CONFIG).encode())
+        try:
+            from recal.measure import aker_check
+        except ImportError:
+            aker_check = None
+        if aker_check is not None:
+            with aker_check.CaptureStderr() as cap:
+                self.h = lib.shim_create(dim, pool, topk, delta, risk, a_tighten, a_loosen,
+                                         str(CONFIG).encode())
+            held = aker_check.parse_filter(cap.text)
+            if held is not None:
+                aker_check.check_filter(held, {"faiss_M": int(os.environ.get("AKER_FILTER_M", 4)),
+                                               "efConstruction": int(os.environ.get("AKER_FILTER_EFC", 8)),
+                                               "efSearch": int(os.environ.get("AKER_FILTER_EFS", 16))})
+                logger.info(f"Aker query filter: {held}")
+            else:
+                logger.warning("no FILTER line at creation: the filter parameters were not verified (the unmodified "
+                               "library hard-codes efConstruction 16 and efSearch 8, not the paper's 8 and 16)")
+        else:
+            self.h = lib.shim_create(dim, pool, topk, delta, risk, a_tighten, a_loosen, str(CONFIG).encode())
         if not self.h:
             raise SystemExit("shim_create failed")
         self.ids = np.zeros(topk, dtype=np.int64)
@@ -428,9 +446,17 @@ def main():
     ap.add_argument("--prep", type=str, default=str(RES / "online" / "spacev-aker-0.99"))
     ap.add_argument("--budget", type=float, default=0.01, help="pool size, share of the database")
     ap.add_argument("--k", type=int, default=10)
-    ap.add_argument("--delta", type=int, default=5, help="Aker top_delta (reserve neighbors)")
+    ap.add_argument("--delta", type=int, default=None, help="Aker top_delta (reserve neighbors); default 0, the paper's")
     ap.add_argument("--risk", type=float, default=0.35)
-    ap.add_argument("--alpha-tighten", type=float, default=0.9)
+    ap.add_argument("--alpha-tighten", type=float, default=None, help="default 0.25, the paper's")
+    ap.add_argument("--legacy-defaults", action="store_true",
+                    help="the authors' bootstrap defaults (alpha_tighten 0.9, delta 5) instead of the paper's")
+    ap.add_argument("--filter-m", type=int, default=4, help="query filter HNSW m (paper: 4; needs the vendored build)")
+    ap.add_argument("--filter-efc", type=int, default=8, help="filter efConstruction (paper: 8)")
+    ap.add_argument("--filter-efs", type=int, default=16, help="filter efSearch (paper: 16)")
+    ap.add_argument("--prox-percentile", type=float, default=None,
+                    help="Proximity mode: threshold = this percentile of the squared distances between the distinct "
+                         "warm-up queries (harness/thresholds.py; the harness uses 0.1 and 1)")
     ap.add_argument("--alpha-loosen", type=float, default=1.1)
     ap.add_argument("--warmup", type=int, default=None,
                     help="warm-up requests (default: min(20000, a fifth of the full stream); 11-13: MedRAG-Zipf has 10k)")
@@ -462,10 +488,24 @@ def main():
     add_args(ap)
     args = ap.parse_args()
     sys.path.append(str(HERE.parent.parent.parent))
+    if args.delta is None:
+        args.delta = 5 if args.legacy_defaults else 0
+    if args.alpha_tighten is None:
+        args.alpha_tighten = 0.9 if args.legacy_defaults else 0.25
+    os.environ.update({"AKER_FILTER_M": str(args.filter_m), "AKER_FILTER_EFC": str(args.filter_efc),
+                       "AKER_FILTER_EFS": str(args.filter_efs)})
     prep = Path(args.prep)
     db, q, top, stream = load(prep, args.stream, native=args.timing)
     if args.warmup is None:
         args.warmup = min(20000, len(stream) // 5)
+    if args.prox_percentile is not None:
+        from harness.thresholds import pairwise_sq_percentiles
+        history = np.unique(np.asarray(stream[:args.warmup]))
+        thresh = pairwise_sq_percentiles(np.asarray(q[history], dtype=np.float32), (args.prox_percentile,))
+        args.global_thresh = thresh[args.prox_percentile]
+        os.environ["AKER_GLOBAL_THRESH"] = repr(args.global_thresh)
+        logger.info(f"Proximity mode: global threshold {args.global_thresh:.4g} "
+                    f"({args.prox_percentile} percentile of squared distances between {len(history)} distinct queries)")
     if args.prox_frac is not None:
         import os
         rows = np.random.default_rng(0).choice(len(q), min(5000, len(q)), replace=False)

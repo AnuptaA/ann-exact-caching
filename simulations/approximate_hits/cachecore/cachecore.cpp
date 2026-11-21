@@ -29,7 +29,9 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <exception>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <stdexcept>
 #include <thread>
@@ -374,6 +376,7 @@ public:
         {
             py::gil_scoped_release nogil;
             // phase 1: decisions (stage 1); hnswlib's search list is global, so it is set once per phase
+            if ((ef1 > 0 || ef2 > 0) && !graph_on_) throw std::invalid_argument("graph search on a core built without graph");
             if (ef1 > 0) hnsw_->setEf(std::max(ef1, k_));
             if (cidx_ && ball_mode_ > 0) cidx_->setEf(std::max<size_t>(ball_ef_, std::max<size_t>(ball_m_, std::max(N_BALLS, shell_balls_))));
             parallel_for(n, threads_, [&](ssize_t i) { res[i] = lookup_ptr(base + i * d_, lam, ef1, 0, 1, true, true); });
@@ -615,11 +618,10 @@ private:
         // members' slots are stored per entry (stable while referenced); dedupe by a stamp per slot
         std::vector<int> slots;
         // thread-local stamps (batch lookups run requests in parallel); the counter is global so cores never clash
-        thread_local std::vector<uint32_t> vstamp;
-        static std::atomic<uint32_t> ctr(0);
+        thread_local std::vector<uint64_t> vstamp;
+        static std::atomic<uint64_t> ctr(0);   // 64 bits: no wrap-around, so no thread's stamps can go stale
         if (vstamp.size() < vid_.size()) vstamp.resize(vid_.size(), 0);
-        uint32_t st = ++ctr;
-        if (st == 0) { std::fill(vstamp.begin(), vstamp.end(), 0); st = ctr = 1; }
+        uint64_t st = ++ctr;
         for (size_t j = 0; j < std::min(m, best.size()); ++j)
             for (int sl : eslot_[best[j]])
                 if (vstamp[sl] != st) { vstamp[sl] = st; slots.push_back(sl); }
@@ -873,9 +875,20 @@ private:
         if (threads <= 1 || n < 2) { for (ssize_t i = 0; i < n; ++i) f(i); return; }
         std::vector<std::thread> th;
         std::atomic<ssize_t> next(0);
+        std::exception_ptr first_error;
+        std::mutex error_mutex;
         for (int t = 0; t < threads; ++t)
-            th.emplace_back([&] { for (ssize_t i; (i = next.fetch_add(1)) < n;) f(i); });
+            th.emplace_back([&] {
+                try {
+                    for (ssize_t i; (i = next.fetch_add(1)) < n;) f(i);
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(error_mutex);
+                    if (!first_error) first_error = std::current_exception();
+                    next.store(n);   // stop the other workers
+                }
+            });
         for (auto& h : th) h.join();
+        if (first_error) std::rethrow_exception(first_error);   // an exception in a thread would call std::terminate
     }
 
     int d_, k_, shell_balls_, M_, efc_, seed_, threads_ = 1, inc_efc_ = 40, serve_balls_ = 0, serve_ef1_ = 0;

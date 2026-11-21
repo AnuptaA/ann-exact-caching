@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Summary of the real-Aker runs (results/aker_real/<prep>/<setting>_b<B>/at<a>_d<d>.json).
-Per cell: the authors' default (alpha_tighten 0.9, delta 5) and the best grid
+Per cell: the authors' bootstrap config (alpha_tighten 0.9, delta 5) and the best grid
 setting (highest hit rate with retention >= T against the backend's answer, else
 the highest retention, marked '!'). Hit % / retention vs backend / vs exact;
 data changes also: retention of queries whose answers include inserted vectors
@@ -51,7 +51,7 @@ def main():
             if not runs:
                 continue
             setting, b = d.name.rsplit("_b", 1)
-            ok = {k: v for k, v in runs.items() if v["ret_b"] >= args.T}
+            ok = {k: v for k, v in runs.items() if v["ret_x"] >= args.T}
             best = max(ok, key=lambda k: ok[k]["hit"]) if ok else \
                 max(runs, key=lambda k: runs[k]["ret_b"])
 

@@ -75,6 +75,18 @@ extern "C"
         aker::Logger::setMinLevel(aker::Logger::Level::k_warning);
         anns_cache_parameter_c_t p{};
         akerImportAnnsCacheConfig(const_cast<char*>(config_path), &p);
+#ifdef RECAL_AKER_FILTER
+        /* Built against the vendored library (third_party/aker), which exposes the query filter's HNSW
+         * parameters. Defaults are the paper's: m 4, efConstruction 8, efSearch 16 (the unmodified library
+         * hard-codes efSearch 8 and efConstruction 16). */
+        auto env_int = [](const char* name, int fallback) {
+            const char* v = std::getenv(name);
+            return v ? std::atoi(v) : fallback;
+        };
+        p.filter.hnsw_m = env_int("AKER_FILTER_M", 4);
+        p.filter.ef_construction = env_int("AKER_FILTER_EFC", 8);
+        p.filter.ef_search = env_int("AKER_FILTER_EFS", 16);
+#endif
         p.vector_format.dimension = dim;
         p.vector_format.vector_in_bytes = static_cast<std::size_t>(dim) * sizeof(float);
         p.capacity.pool_size = pool;

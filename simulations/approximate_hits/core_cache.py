@@ -209,7 +209,7 @@ class CoreCache(Cache):
         X = np.asarray(feat, dtype=np.float64)
         near = np.asarray(near, dtype=np.int64)
         if self.core.n_cached() < self.k:
-            near[:] = 0
+            near[:] = -1          # no answer (-1 matches no id; 0 is a valid id)
         return X, near
 
     def scores(self, qidx, model):

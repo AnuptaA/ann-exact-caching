@@ -413,6 +413,16 @@ class QVCache(Base):
         self.last_used[self.fill] = t
 
     def batch(self, qb, s, truth, truth_x=None):
+        """One rule set with QVCacheCore: lookup and insertion per request (a repeat inside a batch can hit).
+        `--qv-batch-insert` restores the old behaviour (lookups against the batch-start cache, the batch's
+        misses inserted at its end)."""
+        if getattr(self.a, "qv_batch_insert", False) or len(qb) <= 1:
+            return self._batch(qb, s, truth, truth_x)
+        parts = [self._batch(qb[i:i + 1], s + i, truth[i:i + 1], None if truth_x is None else truth_x[i:i + 1])
+                 for i in range(len(qb))]
+        return tuple(np.concatenate([p[j] for p in parts]) for j in range(3))
+
+    def _batch(self, qb, s, truth, truth_x=None):
         k, Q, a = self.k, self.D["q"], self.a
         n = len(qb)
         served = np.zeros(n, dtype=bool)
