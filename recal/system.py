@@ -148,9 +148,9 @@ class ReCal:
         self.status.margin_unreachable = built.margin_unreachable
         self.constructions += 1
         self.last_construction = self.t
+        self.signals.after_construction(self)
         if self.first_construction_bytes is None:
             self.first_construction_bytes = dict(self.bytes_by_structure())
-        self.signals.after_construction(self)
         return built
 
     # ---- reports ---------------------------------------------------------------------------------

@@ -74,7 +74,7 @@ def test_main_hits_meet_target_on_stationary_stream(world):
     rng, data, centers, p, backend, system, M = world
     for q in make_stream(rng, centers, 2600):
         system.serve(q, 5)
-    stream = make_stream(rng, centers, 3000, repeat_share=0.0)
+    stream = make_stream(rng, centers, 6000, repeat_share=0.0)
     truth, _ = backend.search(np.stack(stream), 5, kind="eval")
     recalls = []
     for q, t in zip(stream, truth):
@@ -119,3 +119,4 @@ def test_mini_cache_without_repeats_falls_to_the_floor(tmp_path):
     assert system.core.mini_capacity() == params.mini_floor
     first = system.first_construction_bytes
     assert first["mini_cache"] <= params.mini_floor * (40 + 8 * 5)
+    assert first["total"] <= 0.6 * data.size * 4

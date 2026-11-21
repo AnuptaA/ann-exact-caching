@@ -8,7 +8,7 @@ from recal import policy
 from recal.core import Core
 from recal.history import reuse_distances
 
-INDEX_BYTES_PER_ENTRY = 140.0   # HNSW links per center (M = 16): level-0 links plus the expected upper levels
+INDEX_BYTES_PER_ENTRY = 164.0   # HNSW per center (M = 16): links (140) plus 4-byte index, 8-byte label, pointer, level
 MODEL_BYTES = 80.0
 EPS = 1e-9
 
@@ -415,7 +415,7 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
     core.set_external_bytes("calibration_window", float(W * p.item_bytes + 4 * 8 * (len(edges) + 1)))
     mini_bytes = R * (40.0 + 8.0 * p.K)
     total = core.bytes_by_structure()["total"]
-    info = {"total_bytes": total, "over_budget": total > M, "entries": n_entries, "used_bytes": used, "budget": budget, "R": R, "mini_bytes": mini_bytes,
+    info = {"total_bytes": total, "over_budget": total + mini_bytes > M, "entries": n_entries, "used_bytes": used, "budget": budget, "R": R, "mini_bytes": mini_bytes,
             "m": m, "n_train": int(len(y)), "n_cal": int(len(cscore)), "roles": {k: len(v) for k, v in roles.items()},
             "candidates": int(len(prop.centers)), "proposed_entries": int(len(prop.entry_cand))}
     return Built(core, model, m, R, edges, window, cert.lam, cert, h0, W, unreachable, train_scores, sel_centers,
