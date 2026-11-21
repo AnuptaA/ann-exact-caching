@@ -513,7 +513,8 @@ class Core {
                 ignored++;
                 continue;
             }
-            // lists that deletes shortened below their built length take the insert directly (U4)
+            // lists that deletes shortened below their built length take the insert without displacement (U4);
+            // the new vector still counts against the headroom
             std::vector<char> direct(joins.size());
             for (size_t i = 0; i < joins.size(); i++) direct[i] = live_len(entries_[joins[i]]) < entries_[joins[i]].built_len;
             double added = data_slot_bytes(d) + reverse_map_bytes() + 4.0 * joins.size();
@@ -540,9 +541,7 @@ class Core {
             int freed = 0;
             for (const auto& kv : drops)
                 if (data_count_[kv.first] - kv.second <= 0) freed++;
-            bool all_direct = true;
-            for (size_t i = 0; i < joins.size(); i++) all_direct = all_direct && direct[i];
-            if (freed < 1 && !all_direct) {   // U4: lists shortened by deletes take the insert directly
+            if (freed < 1) {
                 frozen++;
                 continue;
             }

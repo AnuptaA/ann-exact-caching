@@ -69,13 +69,40 @@ def test_insert_frozen_when_displacement_frees_nothing():
     assert core.n_data_slots() <= live + (0 if frozen else 0)
 
 
-def test_shortened_list_takes_insert_directly():
+def test_shortened_list_takes_insert_without_displacement_and_counts_headroom():
     core, data = line_core()
     assert core.delete_id(101) and core.delete_id(102)       # the list lost members: shorter than built
     live = core.n_data_slots()
-    admitted, frozen, _, _ = core.insert_batch(np.array([901]), np.array([[1.5, 0.0]], np.float32), 0.0)
+    admitted, frozen, _, left = core.insert_batch(np.array([901]), np.array([[1.5, 0.0]], np.float32), 1000.0)
     assert (admitted, frozen) == (1, 0)
-    assert core.n_data_slots() == live + 1                   # taken directly: no displacement, the pool grows
+    assert core.n_data_slots() == live + 1                   # no displacement: the pool grows
+    assert left < 1000.0                                     # and the vector is charged to the headroom
+
+
+def test_shortened_list_is_frozen_when_headroom_is_used_up():
+    core, data = line_core()
+    assert core.delete_id(101) and core.delete_id(102)
+    live = core.n_data_slots()
+    admitted, frozen, _, _ = core.insert_batch(np.array([901]), np.array([[1.5, 0.0]], np.float32), 0.0)
+    assert (admitted, frozen) == (0, 1)
+    assert core.n_data_slots() == live
+
+
+def test_inserts_into_shortened_lists_keep_bytes_within_budget():
+    core, data = line_core()
+    budget = 20000.0
+    core.set_budget(budget)
+    base = core.bytes_by_structure()
+    left = base["headroom"]
+    assert core.delete_id(101) and core.delete_id(102)
+    admitted = 0
+    for k in range(60):
+        a, _, _, left = core.insert_batch(np.array([1000 + k]), np.array([[1.5, 0.0]], np.float32), left)
+        admitted += a
+    b = core.bytes_by_structure()
+    grown = b["data_pool"] + b["reverse_map"] - base["data_pool"] - base["reverse_map"]
+    assert admitted > 0
+    assert grown <= 0.02 * budget          # later inserts displace instead of growing the pool
 
 
 def test_sweep_removes_stale_pointers_and_keeps_radius():
