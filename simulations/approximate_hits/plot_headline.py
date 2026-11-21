@@ -38,7 +38,7 @@ STYLE = {"aker_paper": ("Aker, paper default (a_T .25, a_L 1.1)", "#0072B2", "D"
          "lru": ("LRU", "#6B6B6B", "^", 1.6),
          "aker": ("Aker, tuned by hand to the target", "#0072B2", "D", 1.6),
          "qvcache": ("QVCache, tuned by hand to the target", "#009E73", "s", 1.6),
-         "ours_final": ("Ours, final config (mini cache, top-128 lists)", "#E69F00", "*", 2.4)}
+         "ours_final": ("Ours, final config (mini cache 2%, deep list = search list, max 128 or 500)", "#E69F00", "*", 2.4)}
 JITTER = {"ours_final": 1.02, "ours": 1.0, "ours_drift": 1.04, "ours_online": 0.97, "lru": 0.93, "aker": 1.07, "qvcache": 1.14, "aker_paper": 1.07, "qvcache_paper": 1.14}     # x offsets (log axis)
 # (title, prep, stream, uses real Aker?)
 LAYOUT = [
