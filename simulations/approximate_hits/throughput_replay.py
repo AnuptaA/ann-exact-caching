@@ -44,15 +44,43 @@ def worker(info, qfile, jobs, done, dtype):
                          num_nodes_to_cache=info.get("nodes", 0), cache_mechanism=1 if info.get("nodes", 0) else 0,
                          index_prefix="ann")
     done.put(("ready", 0, 0.0))
+    reader = None
     while True:
         job = jobs.get()
         if job is None:
             return
         i, qi, k = job
+        if i == -3:                       # doc 9as: re-read qi vectors (random 4 KB sectors of the disk index, O_DIRECT)
+            if reader is None:
+                reader = SectorReader(str(Path(info["index_dir"]) / "ann_disk.index"))
+            reader.read(qi)
+            done.put(("bg", i, time.perf_counter()))
+            continue
         # a deep list of k > L needs a search list of at least k (SPACEV / ESCI: L 100 < 128)
         ix.search(np.ascontiguousarray(q[qi], dtype=dtype), k_neighbors=k, complexity=max(info["L"], k),
                   beam_width=info["W"])
         done.put(("bg" if i < -1 else "done", i, time.perf_counter()))
+
+
+class SectorReader:
+    """Random 4 KB reads of the disk index with O_DIRECT (no page cache), 8 at a time: the cost of re-reading
+    vectors chosen for the cache (one read per vector: an upper bound when several nodes share a sector)."""
+    def __init__(self, path, threads=8):
+        import os
+        import mmap
+        from concurrent.futures import ThreadPoolExecutor
+        self.os = os
+        self.fd = os.open(path, os.O_RDONLY | os.O_DIRECT)
+        self.n_sec = os.fstat(self.fd).st_size // 4096
+        self.bufs = [mmap.mmap(-1, 4096) for _ in range(threads)]
+        self.pool = ThreadPoolExecutor(threads)
+        self.rng = np.random.default_rng()
+
+    def read(self, m):
+        secs = self.rng.integers(1, self.n_sec, size=int(m))
+        nb = len(self.bufs)
+        list(self.pool.map(lambda j: [self.os.preadv(self.fd, [self.bufs[j]], int(x) * 4096) for x in secs[j::nb]],
+                           range(nb)))
 
 
 def spin(seconds):
@@ -61,7 +89,7 @@ def spin(seconds):
         pass
 
 
-def run_arm(name, hit, dt, qids, clients, jobs, done, audit=None, k_miss=10):
+def run_arm(name, hit, dt, qids, clients, jobs, done, audit=None, k_miss=10, fetch=None):
     """audit (doc 9as, I/O-complete): requests whose hit is audited; each audit is a real backend search issued as
     background work (it occupies a backend process but no client waits for it). Misses search with k_miss results
     (a deep list taken from the answer search costs the same at L >= k_miss). Wall time runs until the background
@@ -105,12 +133,18 @@ def run_arm(name, hit, dt, qids, clients, jobs, done, audit=None, k_miss=10):
         else:
             jobs.put((i, int(qids[i]), k_miss))
             inflight += 1
+        if fetch is not None and fetch[i] > 0:
+            m = int(fetch[i])
+            for c0 in range(0, m, 64):            # background vector re-reads, in chunks of 64
+                jobs.put((-3, min(64, m - c0), 0))
+                bg_out += 1
     while inflight > 0 or bg_out > 0:
         drain(True)
     wall = time.perf_counter() - t0
     lat = (finish - issue) * 1e3
     return {"arm": name, "n": n, "wall_s": wall, "qps": n / wall, "hit_rate": float(np.mean(hit)),
             "audits": int(audit.sum()) if audit is not None else 0, "k_miss": k_miss,
+            "vector_rereads": int(fetch.sum()) if fetch is not None else 0,
             "mean_ms": float(lat.mean()), "p50_ms": float(np.percentile(lat, 50)), "p90_ms": float(np.percentile(lat, 90)),
             "p99_ms": float(np.percentile(lat, 99)), "clients": clients}
 
@@ -129,6 +163,7 @@ def main():
                     help="doc 9as: audited hits of runs logged with --log-served become background searches; misses of "
                          "arms named ours* search with k = --k-deep")
     ap.add_argument("--k-deep", type=int, default=128)
+    ap.add_argument("--no-reread", action="store_true", help="--io-complete without the vector re-reads")
     a = ap.parse_args()
     w = get(a.workload)
     info = w.backend_info()
@@ -146,6 +181,13 @@ def main():
             t = dict(r["timing"])
             if a.io_complete and "audit_pos" in r:
                 t["audit_post"] = np.asarray(r["audit_pos"], dtype=np.int64) - r["args"]["warmup"]
+            if a.io_complete and not a.no_reread and r["log"] and "fetched" in r["log"][0]:
+                # vectors the cache read for chosen candidates (ball members + shell samples), per batch: re-read
+                # from disk at the batch's end (candidates are kept as ids until chosen)
+                W = r["args"]["warmup"]
+                cum = np.array([x["fetched"] + x["samp_fetched"] for x in r["log"]], dtype=np.int64)
+                tt = np.array([x["t"] for x in r["log"]], dtype=np.int64) - W - 1
+                t["reread_at"] = (tt[1:], np.diff(cum))
             arms.append((name, t))
     n = min(a.n, len(post), *[len(t["hit"]) for _, t in arms if t])
     qids = post[:n]
@@ -173,10 +215,16 @@ def main():
                 ap_ = t["audit_post"]
                 aud[ap_[(ap_ >= 0) & (ap_ < n)]] = True
             km = a.k_deep if (a.io_complete and name.startswith("ours")) else 10
-            r = run_arm(name, hit, dt, qids, c, jobs, done, audit=aud, k_miss=km)
+            fe = None
+            if t is not None and "reread_at" in t:
+                fe = np.zeros(n, np.int64)
+                at, m = t["reread_at"]
+                keep = (at >= 0) & (at < n)
+                np.add.at(fe, at[keep], m[keep])
+            r = run_arm(name, hit, dt, qids, c, jobs, done, audit=aud, k_miss=km, fetch=fe)
             r["nodes"] = info["nodes"]
             out.append(r)
-            logger.info(f"clients {c:3d} {name:12s} hit {100 * r['hit_rate']:5.1f}% audits {r['audits']} k {km}  {r['qps']:7.1f} QPS  "
+            logger.info(f"clients {c:3d} {name:12s} hit {100 * r['hit_rate']:5.1f}% audits {r['audits']} rereads {r['vector_rereads']} k {km}  {r['qps']:7.1f} QPS  "
                         f"mean {r['mean_ms']:.1f} ms  p50 {r['p50_ms']:.1f}  p99 {r['p99_ms']:.1f}")
     for _ in procs:
         jobs.put(None)
