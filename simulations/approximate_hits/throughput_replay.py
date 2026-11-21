@@ -200,6 +200,11 @@ def main():
     for _ in procs:
         done.get(timeout=3600)
     logger.info(f"{w.name}: {a.backend_procs} backend processes ready; L {info['L']} beam {info['W']}; {n} requests")
+    import os
+    flag = os.environ.get("QUIET_FLAG")      # doc 9at: the arms need a quiet machine (quiet_tp.sh pauses other jobs once set)
+    if flag:
+        Path(flag).touch()
+        time.sleep(15)
     for i in range(300):                                       # warm the page cache with real misses
         jobs.put((-1, int(qids[i]), 10))
     for i in range(300):
@@ -226,6 +231,8 @@ def main():
             out.append(r)
             logger.info(f"clients {c:3d} {name:12s} hit {100 * r['hit_rate']:5.1f}% audits {r['audits']} rereads {r['vector_rereads']} k {km}  {r['qps']:7.1f} QPS  "
                         f"mean {r['mean_ms']:.1f} ms  p50 {r['p50_ms']:.1f}  p99 {r['p99_ms']:.1f}")
+    if flag:
+        Path(flag).unlink(missing_ok=True)
     for _ in procs:
         jobs.put(None)
     path = Path(a.out or RES / "throughput" / f"replay_{w.name}.json")
