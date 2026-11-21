@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import time
+
 import numpy as np
 
 from recal import build as builder
@@ -23,6 +25,7 @@ class Response:
     path: int = 0
     background: list = field(default_factory=list)   # backend work caused by the request: (kind, depth)
     audited: bool = False
+    cache_ms: float = 0.0              # cache-path time of the request (hash, mini lookup, probe, score)
 
 
 class ReCal:
@@ -62,17 +65,20 @@ class ReCal:
         self.requests += 1
         self.log.append_hash(self.core.hash_vector(q))
         m = 0 if self.p.idealized else (self.built.m if self.built else 0)
+        t0 = time.perf_counter()
         res = self.core.lookup(q, K, self.lam, m, True)
+        cache_ms = (time.perf_counter() - t0) * 1e3
         if res.path == MINI_HIT:                      # Q2: touches nothing else
             self.counts["mini_hits"] += 1
-            return Response(res.ids, res.dists, "mini", path=res.path)
+            return Response(res.ids, res.dists, "mini", path=res.path, cache_ms=cache_ms)
         if res.path == MISS_K_MAX:
             self.counts["k_max_misses"] += 1
             ids, dists = self.backend.search(q, K, kind="miss")
-            return Response(ids, dists, "backend", path=res.path, background=[("miss", K)])
+            return Response(ids, dists, "backend", path=res.path, background=[("miss", K)], cache_ms=cache_ms)
         self.t += 1
         self.window and self.window.expire(self.t)
         response = self._main_path(q, K, res)
+        response.cache_ms = cache_ms
         self.status.record(self.lam)
         self.signals.after_request(self, response.score if response.score is not None and res.has_score else None)
         if self.rebuild_requested:

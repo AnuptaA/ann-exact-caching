@@ -5,8 +5,10 @@ mkdir) run first. Order: --first budgets (main cache sizes) before the others.
 
   python3 simulations/approximate_hits/run_jobs.py /tmp/mx/v6_timing.txt --workers 8
 """
+import os
 import re
 import sys
+import shutil
 import argparse
 import subprocess
 import threading
@@ -42,7 +44,9 @@ def main():
         with lock:
             w = free.pop(0)
         c0 = a.first_core + w * a.cores_per_job
-        cmd = l.replace(".venv-core/bin/python", f"taskset -c {c0}-{c0 + a.cores_per_job - 1} .venv-core/bin/python", 1)
+        cmd = l
+        if shutil.which("taskset") and c0 + a.cores_per_job <= (os.cpu_count() or 0):   # pin only where it can work
+            cmd = l.replace(".venv-core/bin/python", f"taskset -c {c0}-{c0 + a.cores_per_job - 1} .venv-core/bin/python", 1)
         try:
             subprocess.run(["sh", "-c", cmd], check=False)
         finally:
