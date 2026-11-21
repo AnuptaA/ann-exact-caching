@@ -106,3 +106,16 @@ def test_construction_keeps_mini_cache(world):
             break
     assert system.built is not None and size_before > 0
     assert system.core.mini_size() >= min(size_before, system.built.R)
+
+
+def test_mini_cache_without_repeats_falls_to_the_floor(tmp_path):
+    rng, data, centers = make_world(seed=5)
+    params = Params(K=5, k_max=20, H=3000, cold_start=1500, min_ess=30.0, seed=1)
+    system = ReCal(ExactBackend(data), params, 0.6 * data.size * 4, tmp_path)
+    for q in make_stream(rng, centers, 1600, repeat_share=0.0):
+        system.serve(q, 5)
+    assert system.built is not None
+    assert system.built.R == params.mini_floor
+    assert system.core.mini_capacity() == params.mini_floor
+    first = system.first_construction_bytes
+    assert first["mini_cache"] <= params.mini_floor * (40 + 8 * 5)

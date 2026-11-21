@@ -31,6 +31,7 @@ def test_cell_writes_the_result_shape_and_bytes(prep, tmp_path, backend):
                                     "--out", str(tmp_path / "out")])
     r = sim.run(args)
     assert r["method"] == "recal" and r["within_M"] and r["bytes"]["total"] <= r["M"]
+    assert "bytes_first_construction" in r
     assert set(r["log"][0]) >= {"t", "n", "served", "served_retention_sum", "audited_served", "lambda", "memory",
                                 "cached", "entries"}
     assert sum(b["n"] for b in r["log"]) == 4000 or sum(b["n"] for b in r["log"]) > 3000

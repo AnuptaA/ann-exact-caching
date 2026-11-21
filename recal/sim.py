@@ -105,7 +105,8 @@ def run(args) -> dict:
         "cost": {"topk": backend.stats.get("miss", {}).get("searches", 0) + backend.stats.get("audit", {}).get("searches", 0),
                  "topR": backend.stats.get("candidate", {}).get("searches", 0)},
         "background": backend.stats, "counts": system.counts, "status": system.status_report(),
-        "bytes": {k: float(v) for k, v in bytes_.items()}, "M": M, "within_M": bool(bytes_["total"] <= M),
+        "bytes": {k: float(v) for k, v in bytes_.items()},
+        "bytes_first_construction": system.first_construction_bytes, "M": M, "within_M": bool(bytes_["total"] <= M),
         "info": [getattr(system.built, "info", None)] if system.built else [], "seconds": time.time() - t0,
     }
     if args.log_served:
