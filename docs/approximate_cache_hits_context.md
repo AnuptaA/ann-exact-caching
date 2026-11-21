@@ -4240,3 +4240,26 @@ DiskANN alone in the same run:
   1.45x / 1.14x / 1.11x; MedRAG 0.3% 6.85x / QVCache 1.83x / 1.01x. (Misses charged DiskANN's mean, not their own measured time.)
 - TriviaQA hit path: 8.8 ms per hit (stage-2 serve at ef 2048 over 1M cached vectors), 1.2 ms per miss; the replay's single cache
   thread does not bind there (~4.5 ms per request at 23 QPS).
+
+#### 9as (cont.). Whole-stream replays (11-21 08:15 - 15:20)
+Whole stream after warm-up, I/O-complete (no vector re-reads yet), 16 clients; node-cache ratios from the 20k runs:
+| cell | DiskANN QPS | ours (hit %) | best alternative | node cache | ours / best other |
+|---|---|---|---|---|---|
+| TripClick 10% | 87.6 | 1.34x (29.2) | Aker 1.22x (18.3) | 1.33x | 1.01x |
+| TriviaQA 0.6 10% | 14.1 | 2.21x (60.7) | Aker 1.38x (27.1) | 1.10x | 1.60x |
+| SPACEV 0.6 10% (R 100, K <= 50) | 99.3 | 1.40x (32.9) | Aker 1.14x (12.6) | 1.67x (float32-matched) | 0.84x |
+| MedRAG 0.3% (8,000 requests) | 75.0 | 5.00x (89.2) | QVCache 1.85x (46.4) | 1.05x | 2.70x |
+Every ours / alternative ratio is within ~0.02 of the disk model. Candidates are chosen from ids alone (greedy's marginal hits are
+set overlaps of top-K ids with past misses' top-10 ids; the radius is the distance DiskANN returns); only chosen entries need
+vectors (ball members, shell samples), so a real system keeps candidates as ids and re-reads chosen vectors: added to the replay
+(--io-complete re-reads per batch, random 4 KB O_DIRECT reads; queued for all four cells). SPACEV node cache at native int8 bytes
+(~355 MB -> ~998k nodes): queued.
+
+### 9at. Final-config sweep (11-21 15:20, Jialin away 12-24 h: fill the headline / latency / throughput plots)
+Config: continuous greedy, deep lists R = min(128, L) (TripClick / MedRAG / TriviaQA 128, SPACEV / ESCI 100 with balls up to K 50),
+mini cache at 2% of the budget (one fixed share; no online rule yet, decided with Jialin), robust 4-bit range, inserts at 200,
+fast path, tuned search lists. Runs (/tmp/mx/gen_final.py, results/final/<workload>/b<size>/{timed,headline}): 31 timed cells
+(DiskANN backend, every request timed, --log-served: gives the composed latency on the timing plot's 1-in-50 requests and the
+replay input) and 37 headline cells (exact backend). Throughput replays (with re-reads) at more sizes: TripClick 1% / 30%,
+SPACEV 0.99 10%, SPACEV 0.6 1%, TriviaQA 0.99 10%, TriviaQA 0.6 1%, MedRAG 0.1%, with the best alternative's timed recording
+(run_replay_extra.sh). quiet_tp.sh now pauses other jobs only while a replay measures (QUIET_FLAG), not while it loads.
