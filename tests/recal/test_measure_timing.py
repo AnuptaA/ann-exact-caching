@@ -1,3 +1,4 @@
+import json
 import os
 import itertools
 
@@ -68,21 +69,54 @@ def test_register_exempt(tmp_path, monkeypatch):
     assert not os.path.exists(path)
 
 
-@pytest.mark.parametrize("k,delta,big_r", [(10, 5, 500), (10, 0, 20), (100, 5, 500)])
-def test_every_miss_charged(k, delta, big_r):
+def table():
+    return te.DepthLatency([10, 20, 100, 500], [0.002, 0.0025, 0.004, 0.012])
+
+
+@pytest.mark.parametrize("k,delta,big_r", [(10, 5, 500), (10, 0, 20), (10, 5, 70)])
+def test_every_miss_charged_at_its_depth(k, delta, big_r):
     base = [0.004, 0.006, 0.005]
-    charges, approx = [], set()
+    charges, depths_seen = [], set()
     depths = [k, big_r, k + delta]
     for b, depth in itertools.product(base, depths):
-        c, a = te.backend_charge(b, depth, k)
-        assert c >= b
+        c, approx = te.backend_charge(b, depth, k, table())
+        assert c >= b and not approx
         charges.append(c)
-        if a:
-            approx.add(depth)
-    out = te.summarize_charges(charges, len(charges), approx)
+        depths_seen.add(depth)
+    out = te.summarize_charges(charges, len(charges), depths_seen)
     assert out["n_charged"] == out["n_misses"]
     assert out["min_charge_s"] >= min(base)
-    assert big_r in out["approximated_depths"]
+    assert big_r in out["depths_charged"]
+
+
+def test_deeper_misses_cost_more_than_depth_k():
+    t = table()
+    c10, _ = te.backend_charge(0.004, 10, 10, t)
+    c500, _ = te.backend_charge(0.004, 500, 10, t)
+    assert c10 == 0.004
+    assert c500 == pytest.approx(0.004 * 0.012 / 0.002)
+
+
+def test_depth_table_interpolates_clamps_below_and_fails_above():
+    t = table()
+    assert t.latency(60) == pytest.approx(0.00325)              # midway between 20 and 100
+    assert t.latency(5) == pytest.approx(0.002)                 # below the smallest depth: no extrapolation
+    assert t.ratio(5, 10) == 1.0
+    with pytest.raises(ValueError):
+        t.latency(501)
+
+
+def test_deep_call_without_a_table_is_refused_not_approximated():
+    assert te.backend_charge(0.004, 10, 10)[0] == 0.004
+    with pytest.raises(ValueError):
+        te.backend_charge(0.004, 70, 10)
+
+
+def test_depth_table_loads_from_probe_json(tmp_path):
+    path = tmp_path / "d.json"
+    path.write_text(json.dumps({"depth_latency": {"depths": [100, 10], "mean_ms": [4.0, 2.0]}}))
+    t = te.DepthLatency.load(path)
+    assert t.depths == [10.0, 100.0] and t.latency(10) == pytest.approx(0.002)
 
 
 def test_charge_never_zero():

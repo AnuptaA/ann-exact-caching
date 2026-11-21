@@ -23,12 +23,35 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 
+def depth_latency(ix, xs, rows, depths, search_list, beam):
+    """Mean and p50 latency (ms) of single-query searches asking for `depth` neighbors."""
+    out = {"depths": [], "mean_ms": [], "p50_ms": [], "search_list": search_list, "beam": beam,
+           "rule": "complexity = max(search_list, depth)"}
+    for depth in depths:
+        lat = []
+        for i in rows:
+            a = time.perf_counter()
+            ix.search(xs[i], k_neighbors=depth, complexity=max(search_list, depth), beam_width=beam)
+            lat.append(time.perf_counter() - a)
+        out["depths"].append(int(depth))
+        out["mean_ms"].append(float(np.mean(lat) * 1e3))
+        out["p50_ms"].append(float(np.median(lat) * 1e3))
+        logger.info(f"depth {depth}: {out['mean_ms'][-1]:.1f} ms mean")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prep", required=True)
     ap.add_argument("--index", required=True, help="DiskANN index directory (prefix ann)")
     ap.add_argument("--raw-768", action="store_true", help="queries without the appended 0 (native mips index)")
-    ap.add_argument("--efforts", type=int, nargs="+", default=[64, 128, 200, 320, 512, 800, 1250, 2000])
+    ap.add_argument("--efforts", type=int, nargs="*", default=None,
+                    help="search lists of the latency grid (default 64 ... 2000; none when --depths is given)")
+    ap.add_argument("--depths", type=int, nargs="+", default=None,
+                    help="requested depths to time at --search-list / --beam (search list max(L, depth)); "
+                         "writes depth_latency for the composed-timing charge (eval_timing_online --depth-latency)")
+    ap.add_argument("--search-list", type=int, default=200, help="search list L of the --depths mode")
+    ap.add_argument("--beam", type=int, default=2, help="beam width of the --depths mode")
     ap.add_argument("--beams", type=int, nargs="+", default=[2, 4, 8, 16, 32])
     ap.add_argument("--n-recall", type=int, default=0,
                     help="queries for a batched recall per (search list, beam width); default 0 = none (11-13: "
@@ -55,6 +78,10 @@ def main():
     for i in rows[:20]:                                         # warm-up, untimed
         ix.search(xs[i], k_neighbors=10, complexity=128, beam_width=2)
     res = {"prep": args.prep, "index": args.index, "n": args.n, "grid": []}
+    if args.efforts is None:
+        args.efforts = [] if args.depths else [64, 128, 200, 320, 512, 800, 1250, 2000]
+    if args.depths:
+        res["depth_latency"] = depth_latency(ix, xs, rows, sorted(set(args.depths)), args.search_list, args.beam)
     for L in args.efforts:
         base = {}
         for W in sorted(set(args.beams) | {2}):

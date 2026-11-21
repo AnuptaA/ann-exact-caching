@@ -41,6 +41,8 @@ import argparse
 import platform
 import subprocess
 
+import numpy as np
+
 CLK = os.sysconf("SC_CLK_TCK")
 DISK = re.compile(r"(nvme\d+n\d+|sd[a-z]+|vd[a-z]+|xvd[a-z]+)$")
 
@@ -187,20 +189,55 @@ def compute_verdict(samples, duration_s, every_s, max_cores, max_io, start_ok,
     return "quiet", "ok"
 
 
-def backend_charge(base_s, depth, k):
-    """Charge (s) for one backend call of `depth` neighbors, given the measured
-    depth-k latency base_s. Deeper calls are charged at least base_s (lower bound).
-    Returns (charge_s, approximated)."""
+class DepthLatency:
+    """Backend latency by requested depth (latency_probe.py --depths), mean seconds per call.
+
+    ratio(depth, k) = latency(depth) / latency(k), at least 1. Between measured depths the latency is
+    interpolated linearly; below the smallest measured depth it is the smallest measured value (no
+    extrapolation below); above the largest measured depth the charge is undefined and raises.
+    """
+
+    def __init__(self, depths, mean_s):
+        order = sorted(range(len(depths)), key=lambda i: depths[i])
+        self.depths = [float(depths[i]) for i in order]
+        self.mean_s = [float(mean_s[i]) for i in order]
+        if not self.depths or min(self.mean_s) <= 0:
+            raise ValueError("empty or non-positive depth latency table")
+
+    @classmethod
+    def load(cls, path):
+        with open(path) as f:
+            t = json.load(f)["depth_latency"]
+        return cls(t["depths"], [m / 1e3 for m in t["mean_ms"]])
+
+    def latency(self, depth):
+        if depth > self.depths[-1]:
+            raise ValueError(f"depth {depth} is beyond the deepest measured depth {int(self.depths[-1])}")
+        return float(np.interp(depth, self.depths, self.mean_s))
+
+    def ratio(self, depth, k):
+        return max(1.0, self.latency(depth) / self.latency(k))
+
+
+def backend_charge(base_s, depth, k, table=None):
+    """Charge (s) for one backend call of `depth` neighbors, given the measured depth-k latency base_s
+    of that request. With a depth table the charge is base_s scaled by table(depth) / table(k) (never
+    below base_s); without one only calls of depth k can be charged. Returns (charge_s, False)."""
     if base_s is None or base_s <= 0:
         raise ValueError(f"no backend latency for the charge (base_s={base_s})")
-    return float(base_s), depth != k
+    if depth == k:
+        return float(base_s), False
+    if table is None:
+        raise ValueError(f"no depth latency table to charge a call of depth {depth} (k={k}); "
+                         "measure one with latency_probe.py --depths, or pass --legacy-charge")
+    return float(base_s) * table.ratio(depth, k), False
 
 
-def summarize_charges(charges, n_misses, approx_depths):
-    """charges: list of charges of the timed misses that were charged."""
+def summarize_charges(charges, n_misses, depths=()):
+    """charges: list of charges of the timed misses that were charged; depths: depths charged."""
     return {"n_misses": int(n_misses), "n_charged": len(charges),
             "min_charge_s": min(charges) if charges else None,
-            "approximated_depths": sorted(approx_depths)}
+            "depths_charged": sorted(set(depths))}
 
 
 def _registry_dir():

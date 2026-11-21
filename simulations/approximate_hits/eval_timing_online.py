@@ -1078,12 +1078,16 @@ def main():
     ap.add_argument("--no-backend-arms", action="store_true",
                     help="skip DiskANN alone / equal memory (measured once per workload by "
                          "eval_timing_backend.py, doc 9ad); speedups are then computed by plot_timing")
+    ap.add_argument("--depth-latency", default=None,
+                    help="composed timing: backend latency by requested depth (latency_probe.py --depths); a miss "
+                         "deeper than k is charged the measured latency of its depth. Required when a call deeper "
+                         "than k occurs (unless --legacy-charge)")
     ap.add_argument("--legacy-charge", action="store_true",
                     help="composed timing: charge only backend calls of depth k (old behaviour; "
-                         "deeper misses can be charged nothing)")
+                         "deeper misses are charged nothing)")
     ap.add_argument("--out", required=True)
     from simulations.approximate_hits.timing_env import (
-        add_args, make_guard, backend_charge, summarize_charges)
+        add_args, make_guard, backend_charge, summarize_charges, DepthLatency)
     add_args(ap)
     args = ap.parse_args()
     if os.environ.get("NO_GC"):           # diagnostic (doc 9ag): no cyclic GC pauses inside timed requests
@@ -1207,7 +1211,8 @@ def main():
     maint = 0.0
     audit_s, n_audit_timed = 0.0, 0
     trace = []
-    miss_charges, n_timed_misses, approx_depths = [], 0, set()
+    miss_charges, n_timed_misses, charged_depths = [], 0, set()
+    depth_table = DepthLatency.load(args.depth_latency) if args.depth_latency else None
     t0 = time.time()
     for i, qi in enumerate(req.tolist()):
         t_req = args.warmup + i
@@ -1217,10 +1222,9 @@ def main():
         if compose is not None:
             def backend(qi_, kk, _timed=timed, _i=i):
                 if _timed and not chg[1] and (kk == args.k or not args.legacy_charge):
-                    chg[0], approx = backend_charge(float(compose[tj_of[_i]]), kk, args.k)
+                    chg[0], _ = backend_charge(float(compose[tj_of[_i]]), kk, args.k, depth_table)
                     chg[1] = True
-                    if approx:
-                        approx_depths.add(kk)
+                    charged_depths.add(kk)
                 return stored(qi_, kk)
         else:
             backend = live if timed else stored
@@ -1288,7 +1292,8 @@ def main():
     th = hits[timed_mask]
     charges = None
     if compose is not None:
-        charges = summarize_charges(miss_charges, n_timed_misses, approx_depths)
+        charges = summarize_charges(miss_charges, n_timed_misses, charged_depths)
+        charges["depth_latency"] = args.depth_latency
         charges["legacy_charge"] = bool(args.legacy_charge)
         if not args.legacy_charge:
             assert charges["n_charged"] == charges["n_misses"], f"uncharged misses: {charges}"

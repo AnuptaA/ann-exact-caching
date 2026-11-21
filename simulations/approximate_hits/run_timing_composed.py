@@ -79,7 +79,9 @@ def main():
         if not lat.exists():
             print(f"skip (no baseline latencies yet): {j}", flush=True)
             continue
-        l = l.replace("--no-backend-arms", f"--no-backend-arms --compose-backend {lat}")
+        depth = lat.with_name("backend_depth_latency.json")
+        extra = f" --depth-latency {depth}" if depth.exists() else ""
+        l = l.replace("--no-backend-arms", f"--no-backend-arms --compose-backend {lat}{extra}")
         l = l.replace("--wait-quiet 30", "--allow-busy")
         jobs.append(l)
     jobs.sort(key=order)
