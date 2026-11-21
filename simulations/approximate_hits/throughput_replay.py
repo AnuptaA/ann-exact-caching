@@ -17,7 +17,9 @@ with a recorded seed, and the residency before and after each arm is stored.
 from the recorded run's "background" stats (searches and mean depth, scaled to the replayed requests and spread
 evenly), plus misses at the recorded mean miss depth. Runs without the field behave as before (audit_pos at k 10;
 misses of arms named ours* at --k-deep). Still NOT counted: admission vector fetches, shell-sample reads and
-rebuild/greedy/eviction CPU. Each backend process opens its own index and node cache.
+rebuild/greedy/eviction CPU. The backend is one index (one node cache) served by --backend-procs search threads
+of this process; --legacy-workers restores the old pool of processes that each open their own index and node
+cache. Every result records index_instances and node_cache_bytes_loaded.
 Reports completed requests per second (QPS) and the latency (issue to completion) percentiles. "none" = no cache
 (every request goes straight to the backend, cache time 0). Same backend processes and node-cache setting for
 every arm. Needs a quiet machine.
@@ -31,6 +33,8 @@ import time
 import argparse
 import logging
 import queue
+import struct
+import threading
 import multiprocessing as mp
 from pathlib import Path
 
@@ -67,6 +71,90 @@ def worker(info, qfile, jobs, done, dtype):
         ix.search(np.ascontiguousarray(q[qi], dtype=dtype), k_neighbors=k, complexity=max(info["L"], k),
                   beam_width=info["W"])
         done.put(("bg" if i < -1 else "done", i, time.perf_counter()))
+
+
+class ThreadWorker:
+    """A search thread with the interface get_message expects of a process."""
+
+    def __init__(self, target):
+        self.thread = threading.Thread(target=target, daemon=True)
+        self.pid = None
+
+    def start(self):
+        self.thread.start()
+        self.pid = self.thread.ident
+
+    def is_alive(self):
+        return self.thread.is_alive()
+
+    def terminate(self):
+        pass
+
+
+class SharedBackend:
+    """One index, one node cache, `threads` search threads. open_index() is called exactly once."""
+
+    def __init__(self, open_index, queries, dtype, L, W, threads):
+        self.instances = 0
+        self.index = open_index()
+        self.instances += 1
+        self.queries, self.dtype, self.L, self.W = queries, dtype, L, W
+        self.jobs, self.done = queue.Queue(), queue.Queue()
+        self.procs = [ThreadWorker(self._loop) for _ in range(threads)]
+
+    def search(self, qi, k):
+        # a deep list of k > L needs a search list of at least k
+        return self.index.search(np.ascontiguousarray(self.queries[qi], dtype=self.dtype), k_neighbors=k,
+                                 complexity=max(self.L, k), beam_width=self.W)
+
+    def _loop(self):
+        self.done.put(("ready", 0, 0.0))
+        while True:
+            job = self.jobs.get()
+            if job is None:
+                return
+            i, qi, k = job
+            self.search(qi, k)
+            self.done.put(("bg" if i < -1 else "done", i, time.perf_counter()))
+
+    def start(self):
+        for p in self.procs:
+            p.start()
+
+    def stop(self):
+        for _ in self.procs:
+            self.jobs.put(None)
+
+
+def search_parallelism(search, calls, threads):
+    """Wall time of `calls` searches in sequence over the wall time of the same searches split over `threads`
+    threads: about `threads` when the binding releases the GIL, about 1 when it does not."""
+    t0 = time.perf_counter()
+    for c in calls:
+        search(c)
+    serial = time.perf_counter() - t0
+    chunks = [calls[i::threads] for i in range(threads)]
+    workers = [threading.Thread(target=lambda ch=ch: [search(c) for c in ch]) for ch in chunks]
+    t0 = time.perf_counter()
+    for t in workers:
+        t.start()
+    for t in workers:
+        t.join()
+    return serial / (time.perf_counter() - t0)
+
+
+def node_cache_bytes(index_dir, nodes):
+    """Bytes of a node cache of `nodes` nodes: nodes x max_node_len from the header of ann_disk.index
+    (nr, nc as int32, then npts, ndims, medoid, max_node_len as uint64). None if the header is unreadable."""
+    if not nodes:
+        return 0
+    try:
+        with open(Path(index_dir) / "ann_disk.index", "rb") as f:
+            head = f.read(8 + 8 * 4)
+        max_node_len = struct.unpack("<QQQQ", head[8:40])[3]
+    except (OSError, struct.error):
+        return None
+    return int(nodes) * int(max_node_len) if 0 < max_node_len < (1 << 20) else None
 
 
 def spin(seconds):
@@ -239,7 +327,12 @@ def main():
     ap.add_argument("--workload", required=True)
     ap.add_argument("--arm", action="append", required=True, help="none | name=<timed run json>")
     ap.add_argument("--clients", type=int, nargs="+", default=[16])
-    ap.add_argument("--backend-procs", type=int, default=8)
+    ap.add_argument("--backend-procs", type=int, default=8,
+                    help="search threads of the shared index (processes with --legacy-workers)")
+    ap.add_argument("--legacy-workers", action="store_true",
+                    help="old behaviour: one process per worker, each with its own index and node cache")
+    ap.add_argument("--allow-serialized-search", action="store_true",
+                    help="run even if concurrent searches of the shared index do not overlap (GIL held by the binding)")
     ap.add_argument("--n", type=int, default=20000)
     ap.add_argument("--out", default=None)
     ap.add_argument("--nodes", type=int, default=None, help="backend node cache (default: the workload's base node cache)")
@@ -283,16 +376,43 @@ def main():
             if (idx >= len(t["pos"])).any() or not np.array_equal(t["pos"][np.minimum(idx, len(t["pos"]) - 1)], positions):
                 raise SystemExit(f"arm {name}: recording does not cover the sampled positions")
             sel[name] = idx
+    dtype = np.int8 if w.name.startswith("spacev") else np.float32
+    backend = None
     ctx = mp.get_context("fork")
-    jobs, done = ctx.Queue(), ctx.Queue()
-    procs = [ctx.Process(target=worker, args=(info, str(query_file(w)), jobs, done, np.int8 if w.name.startswith("spacev") else np.float32), daemon=True)
-             for _ in range(a.backend_procs)]
-    for p in procs:
-        p.start()
+    if a.legacy_workers:
+        jobs, done = ctx.Queue(), ctx.Queue()
+        procs = [ctx.Process(target=worker, args=(info, str(query_file(w)), jobs, done, dtype), daemon=True)
+                 for _ in range(a.backend_procs)]
+        instances = a.backend_procs
+    else:
+        from simulations.approximate_hits.diskann_aio import open_disk_index
+        nodes0 = info.get("nodes", 0)
+        backend = SharedBackend(
+            lambda: open_disk_index(max_wait=3600, index_directory=info["index_dir"], num_threads=2 * a.backend_procs,
+                                    num_nodes_to_cache=nodes0, cache_mechanism=1 if nodes0 else 0,
+                                    index_prefix="ann"),
+            np.load(query_file(w), mmap_mode="r"), dtype, info["L"], info["W"], a.backend_procs)
+        jobs, done, procs = backend.jobs, backend.done, backend.procs
+        instances = backend.instances
+        par = search_parallelism(lambda qi: backend.search(int(qi), 10), [int(x) for x in stream[:8 * a.backend_procs]],
+                                 a.backend_procs)
+        logger.info(f"concurrent searches overlap {par:.1f}x over {a.backend_procs} threads")
+        if par < 1.5 and not a.allow_serialized_search:
+            raise SystemExit(f"concurrent searches overlap only {par:.2f}x: the binding holds the GIL, so a shared "
+                             "index would serialize the backend; use --legacy-workers or --allow-serialized-search")
+    assert a.legacy_workers or instances == 1, f"{instances} index instances, expected 1"
+    node_bytes = node_cache_bytes(info["index_dir"], info["nodes"])
+    loaded = None if node_bytes is None else node_bytes * instances
+    if backend is not None:
+        backend.start()
+    else:
+        for p in procs:
+            p.start()
     try:
         for _ in procs:
             get_message(done, procs, deadline, True)
-        logger.info(f"{w.name}: {a.backend_procs} backend processes ready; L {info['L']} beam {info['W']}; {n} requests")
+        logger.info(f"{w.name}: {a.backend_procs} backend {'processes' if backend is None else 'threads'} ready; "
+                    f"{instances} index instance(s); L {info['L']} beam {info['W']}; {n} requests")
 
         def warm_page_cache():
             for i in range(300):
@@ -327,6 +447,9 @@ def main():
                                 aud = np.isin(t["pos"][sel[name]], t["audit_pos"])
                     r = run_arm(name, hit, dt, qids, c, jobs, done, procs, deadline, audit=aud, k_miss=km, background=plan)
                     r["nodes"] = info["nodes"]
+                    r["backend_mode"] = "processes" if backend is None else "shared"
+                    r["index_instances"] = instances
+                    r["node_cache_bytes_loaded"] = loaded
                     r["repetition"] = rep
                     r["order_seed"] = a.seed
                     r["warmup"] = warm
@@ -334,8 +457,11 @@ def main():
                     out.append(r)
                     logger.info(f"clients {c:3d} {name:12s} hit {100 * r['hit_rate']:5.1f}% bg {r['background_searches']} audits {r['audits']} k {km}  "
                                 f"{r['qps']:7.1f} QPS  mean {r['mean_ms']:.1f} ms  p50 {r['p50_ms']:.1f}  p99 {r['p99_ms']:.1f}")
-        for _ in procs:
-            jobs.put(None)
+        if backend is not None:
+            backend.stop()
+        else:
+            for _ in procs:
+                jobs.put(None)
     except BaseException:
         for p in procs:
             if p.is_alive():

@@ -66,7 +66,9 @@ def main():
     state = {} if a.no_evict else {"evict": pagecache.evict(index_paths)}
     before = dict(pagecache.residency(index_paths), **state)
     ix.batch_search(xq[:200], 10, info["L"], num_threads=min(8, tmax), beam_width=info["W"])          # warm the page cache / node cache
+    from simulations.approximate_hits.throughput_replay import node_cache_bytes
     res = {"workload": w.name, "L": info["L"], "beam": info["W"], "node_cache": nodes, "n": len(xq), "warmup": warm,
+           "index_instances": 1, "node_cache_bytes_loaded": node_cache_bytes(info["index_dir"], int(nodes)),
            "sample_seed": a.seed, "legacy_sample": a.legacy_sample, "index_dir": info["index_dir"], "runs": []}
     res["page_cache"] = pagecache.record(before, None)
     for t in a.threads:

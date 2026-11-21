@@ -256,3 +256,67 @@ def test_run_to_file_checks_exit_code_and_output(tmp_path, monkeypatch):
     throughput_all.run_to_file(["py", "s"], out)
     assert json.loads(out.read_text()) == [{"x": 1}]
     assert not (tmp_path / "o.json.part").exists()
+
+
+class MockIndex:
+    def __init__(self, work):
+        self.work = work
+        self.calls = []
+
+    def search(self, query, k_neighbors, complexity, beam_width):
+        self.calls.append((k_neighbors, complexity))
+        self.work()
+
+
+def make_shared(work, threads=4, L=100):
+    opened = []
+
+    def open_index():
+        opened.append(1)
+        return MockIndex(work)
+
+    queries = np.zeros((10, 3), np.float32)
+    backend = tr.SharedBackend(open_index, queries, np.float32, L, 2, threads)
+    return backend, opened
+
+
+def test_shared_backend_opens_one_index_for_all_threads():
+    backend, opened = make_shared(lambda: time.sleep(0.001))
+    backend.start()
+    for _ in backend.procs:
+        assert backend.done.get(timeout=5)[0] == "ready"
+    for i in range(20):
+        backend.jobs.put((i, i % 10, 10))
+    got = [backend.done.get(timeout=5) for _ in range(20)]
+    backend.stop()
+    assert backend.instances == 1 and len(opened) == 1
+    assert sorted(m[1] for m in got) == list(range(20))
+    assert len(backend.index.calls) == 20
+
+
+def test_shared_backend_search_list_covers_deep_requests():
+    backend, _ = make_shared(lambda: None, L=100)
+    backend.search(0, 128)
+    backend.search(0, 10)
+    assert backend.index.calls == [(128, 128), (10, 100)]
+
+
+def test_search_parallelism_detects_overlap_and_gil_bound_search():
+    sleeping = tr.search_parallelism(lambda c: time.sleep(0.01), list(range(16)), 4)
+    assert sleeping > 2.0
+
+    def busy(c):
+        x = 0
+        for _ in range(200_000):
+            x += 1
+
+    assert tr.search_parallelism(busy, list(range(16)), 4) < 1.5
+
+
+def test_node_cache_bytes_reads_header_and_handles_missing(tmp_path):
+    import struct
+    assert tr.node_cache_bytes(tmp_path, 0) == 0
+    assert tr.node_cache_bytes(tmp_path, 100) is None
+    head = struct.pack("<ii", 100, 1) + struct.pack("<QQQQ", 5000, 768, 7, 3200)
+    (tmp_path / "ann_disk.index").write_bytes(head + b"\0" * 64)
+    assert tr.node_cache_bytes(tmp_path, 100) == 320000
