@@ -291,3 +291,25 @@ def test_ten_thousand_vector_synthetic_run():
     b = core.bytes_by_structure()
     assert b["total"] == pytest.approx(sum(v for k, v in b.items() if k not in ("total", "budget")))
     assert b["total"] > b["data_pool"]
+
+
+def test_mini_cache_stores_four_byte_ids_and_payload_matches_formula():
+    rng, data, centers, js, K = random_case(seed=14)
+    d = data.shape[1]
+    core, *_ = build_core(data, centers, K, js, budget=1_000_000.0)
+    core.mini_set_capacity(4)
+    for i in range(4):
+        core.mini_put(rng.normal(size=d).astype(np.float32), np.arange(K, dtype=np.int64) + i, np.ones(K, np.float32))
+    assert core.mini_payload_bytes() == 4 * 8 * K
+    assert core.bytes_by_structure()["mini_cache"] == 4 * (40 + 8 * K)
+    h, ids, dists = core.mini_dump()[0]
+    assert ids.dtype == np.int64 and len(ids) == K
+
+
+def test_mini_cache_rejects_ids_beyond_four_bytes():
+    rng, data, centers, js, K = random_case(seed=15)
+    core, *_ = build_core(data, centers, K, js, budget=1_000_000.0)
+    core.mini_set_capacity(2)
+    q = rng.normal(size=data.shape[1]).astype(np.float32)
+    with pytest.raises(ValueError):
+        core.mini_put(q, np.array([2**40] * K, dtype=np.int64), np.ones(K, np.float32))

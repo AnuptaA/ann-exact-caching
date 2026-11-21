@@ -90,7 +90,7 @@ struct Entry {
 };
 
 struct MiniEntry {
-    std::vector<int64_t> ids;
+    std::vector<int32_t> ids;
     std::vector<float> dists;
 };
 
@@ -328,7 +328,7 @@ class Core {
         if (mini_capacity_ == 0) return;
         uint64_t h = hash_bytes(q.data(), d);
         MiniEntry e;
-        e.ids.assign(ids.data(), ids.data() + ids.shape(0));
+        e.ids = ids_to_int32(ids.data(), ids.shape(0));
         e.dists.assign(dists.data(), dists.data() + dists.shape(0));
         auto it = mini_map_.find(h);
         if (it != mini_map_.end()) {
@@ -354,7 +354,7 @@ class Core {
     py::list mini_dump() const {
         py::list out;
         for (auto it = mini_lru_.rbegin(); it != mini_lru_.rend(); ++it)
-            out.append(py::make_tuple(it->first, py::array_t<int64_t>(it->second.ids.size(), it->second.ids.data()),
+            out.append(py::make_tuple(it->first, widen(it->second.ids),
                                       py::array_t<float>(it->second.dists.size(), it->second.dists.data())));
         return out;
     }
@@ -363,7 +363,7 @@ class Core {
                        py::array_t<float, py::array::c_style | py::array::forcecast> dists) {
         if (mini_capacity_ == 0) return;
         MiniEntry e;
-        e.ids.assign(ids.data(), ids.data() + ids.shape(0));
+        e.ids = ids_to_int32(ids.data(), ids.shape(0));
         e.dists.assign(dists.data(), dists.data() + dists.shape(0));
         auto it = mini_map_.find(h);
         if (it != mini_map_.end()) {
@@ -382,6 +382,14 @@ class Core {
         if (!mini_get(h, K, r)) return py::none();
         return py::make_tuple(py::array_t<int64_t>(r.ids.size(), r.ids.data()),
                               py::array_t<float>(r.dists.size(), r.dists.data()));
+    }
+
+    // allocated bytes of the stored ids and distances (the 8K part of the entry size)
+    size_t mini_payload_bytes() const {
+        size_t b = 0;
+        for (const auto& kv : mini_lru_)
+            b += kv.second.ids.capacity() * sizeof(int32_t) + kv.second.dists.capacity() * sizeof(float);
+        return b;
     }
 
     size_t mini_size() const { return mini_lru_.size(); }
@@ -599,6 +607,21 @@ class Core {
     int n_shell_slots() const { return (int)(shell_codes_.size() / code_bytes_); }
     int dim() const { return d; }
     int k_max() const { return k_max_; }
+
+    static py::array_t<int64_t> widen(const std::vector<int32_t>& v) {
+        py::array_t<int64_t> out(v.size());
+        for (size_t i = 0; i < v.size(); i++) out.mutable_at(i) = v[i];
+        return out;
+    }
+
+    static std::vector<int32_t> ids_to_int32(const int64_t* p, py::ssize_t n) {
+        std::vector<int32_t> out(n);
+        for (py::ssize_t i = 0; i < n; i++) {
+            if (p[i] < INT32_MIN || p[i] > INT32_MAX) throw std::invalid_argument("id does not fit in 4 bytes");
+            out[i] = (int32_t)p[i];
+        }
+        return out;
+    }
 
     static double mini_entry_bytes(int K) { return 40.0 + 8.0 * K; }
     static double data_slot_bytes(int d) { return 4.0 * d + 12.0; }
@@ -909,6 +932,7 @@ PYBIND11_MODULE(_recal_core, mod) {
         .def("mini_dump", &Core::mini_dump)
         .def("mini_put_hash", &Core::mini_put_hash)
         .def("mini_get_hash", &Core::mini_get_hash)
+        .def("mini_payload_bytes", &Core::mini_payload_bytes)
         .def("mini_size", &Core::mini_size)
         .def("mini_capacity", &Core::mini_capacity)
         .def("bytes_by_structure", &Core::bytes_by_structure)
