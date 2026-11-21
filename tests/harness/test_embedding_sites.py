@@ -18,6 +18,9 @@ AUDITED_SITES = {
     "workloads/q1/datasets/triviaqa.py",
     "workloads/q1/datasets/triviaqa_evidence.py",
     "datasets/esci/build_embedding_subsample.py",
+    # advisor's scripts: not run in this repository's pipeline, their vectors are obtained precomputed
+    "datasets/tripclick/build_workload.py",
+    "datasets/reembed_triviaqa_queries.py",
 }
 # investigations/ holds exploratory scripts that no pipeline stage runs
 SKIPPED_DIRS = {"venv", "stale", "tests", ".git", "build", "third_party", "node_modules", "investigations"}

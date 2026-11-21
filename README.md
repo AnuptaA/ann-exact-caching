@@ -88,3 +88,16 @@ Workloads and experiments (advisor's pipeline):
 Job runner: job generators print one shell command per line and each command skips itself when its result JSON exists. `run_jobs.py <file> --workers N --cores-per-job C --first-core F` runs the lines with `taskset` pinning (rewriting `.venv-core/bin/python`). `mx_run_job.sh` admits a job only when free memory allows it (learned per-class peaks in `$RECAL_QUEUE_DIR/peaks.tsv`, retries after out-of-memory kills, `HOLD` and `skip.txt` files); `mx_complete.sh`, `mx_requeue.sh` and `mx_watchdog4.sh` re-run missing jobs and supervise. Timing runs go through `run_timing_batch2.sh`, which suspends other jobs and checks that the machine is quiet. The runner assumes a large Linux host with `/proc`.
 
 Tests (no data or services): `.venv/bin/python -m pytest tests/approximate_hits tests/base tests/cache tests/utils tests/workloads tests/harness`. `make test-q1` runs the harness and workload tests. The results of the last run are in `INTEGRATION.md`.
+
+## Fetching the precomputed TripClick and MedRAG vectors
+
+The vectors are on a shared Google Drive folder (ask the project owner for access). Use only the TripClick and MedRAG files and do not re-share them.
+
+```sh
+python3 -m venv .venv-fetch && .venv-fetch/bin/pip install gdown
+sh scripts/fetch_drive_data.sh --local --dry-run   # list what would happen (add --listing file.json to stay offline)
+sh scripts/fetch_drive_data.sh --local             # TripClick and MedRAG's small files: needs about 0.5 GB and 10 GB free
+sh scripts/fetch_drive_data.sh --cluster           # adds the MedRAG corpus: about 74 GB more (Linux cluster only)
+```
+
+The script downloads by file id (never the whole folder), refuses to start if fewer than 10 GB would remain free, places files where the workload registry expects them (`datasets/aker/`, `datasets/medrag/`, `datasets/tripclick/`) and runs `scripts/verify_data.py`. `datasets/MANIFEST.md` records name, size, shape, dtype and SHA-256.
