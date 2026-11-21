@@ -5,7 +5,7 @@ import time
 from workloads.q1.recall import recall_batch
 
 GRID = (10, 20, 30, 40, 50, 75, 100, 150, 200, 300, 400)
-TARGET_RECALL = 0.9
+TARGET_RECALL = 0.95
 
 
 def sweep(backend, queries, base, kth_dist, grid=GRID, list_size=10) -> list[dict]:
