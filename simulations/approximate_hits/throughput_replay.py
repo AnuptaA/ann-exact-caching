@@ -49,7 +49,8 @@ def worker(info, qfile, jobs, done, dtype):
         if job is None:
             return
         i, qi, k = job
-        ix.search(np.ascontiguousarray(q[qi], dtype=dtype), k_neighbors=min(k, info["L"]), complexity=info["L"],
+        # a deep list of k > L needs a search list of at least k (SPACEV / ESCI: L 100 < 128)
+        ix.search(np.ascontiguousarray(q[qi], dtype=dtype), k_neighbors=k, complexity=max(info["L"], k),
                   beam_width=info["W"])
         done.put(("bg" if i < -1 else "done", i, time.perf_counter()))
 
