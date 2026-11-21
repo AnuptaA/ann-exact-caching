@@ -89,6 +89,17 @@ Job runner: job generators print one shell command per line and each command ski
 
 Tests (no data or services): `.venv/bin/python -m pytest tests/approximate_hits tests/base tests/cache tests/utils tests/workloads tests/harness`. `make test-q1` runs the harness and workload tests. The results of the last run are in `INTEGRATION.md`.
 
+## ReCal implementation (`recal/`)
+
+`recal/` implements ReCal as specified in system design v10 (C++ core `recal/core/`, Python construction, hit policy, updates and rebuild signals); `recal/README.md` maps every specification item to its code and test, and `PROGRESS.md` records the implementation state, deviations and open questions. The advisor's prototype and drivers in `simulations/approximate_hits/` are unchanged apart from the fixes below, and stay available for comparison.
+
+- Build and test: `sh recal/core/build.sh` and `.venv-core/bin/python -m pytest tests/recal` (Python 3.11; `envs/core.txt`).
+- Run a cell: `PYTHONPATH=. .venv-core/bin/python -m recal.cells --method recal|prototype|aker|qvcache --prep <prep> --stream <name> --budget 0.05 --out <dir>`; `python -m recal.jobs` prints job lines for `simulations/approximate_hits/run_jobs.py`.
+- Budget rule: every system gets the same byte budget M, a percentage of the dataset's stored bytes (N x d x bytes per coordinate), and is charged for everything it keeps in RAM to serve: vectors at their stored precision, ids, graphs and indexes, entry metadata, models and its own caches. Every result JSON carries `bytes` by structure, `M` and `within_M`.
+- Baseline settings: Aker at the paper's settings (alpha_T 0.25, alpha_L 1.1, delta 0, FIFO, query-filter HNSW m 4, efConstruction 8, efSearch 16; the filter values need the shim built against the vendored library: `AKER_SRC=vendored sh simulations/approximate_hits/aker_real/build.sh`; `--legacy-defaults` restores the authors' bootstrap 0.9 and delta 5); Proximity is Aker's fixed-threshold mode with the 0.1 and 1 percentiles of the squared distances between distinct history queries (`--prox-percentile`); QVCache with D 0.075, alpha 0.9 and four mini-indexes, lookup and insertion per request.
+- Measurement fixes (each behind a flag that restores the old behaviour; see `PROGRESS.md`, M5 and M6): throughput replay aligned to recorded request ids and failing on dead workers; page cache evicted between arms (`posix_fadvise`) with randomized arm order; every composed-timing miss charged a backend latency; the quiet guard fails closed; result files written atomically and stamped with a config hash so stale results are not reused; core ranges from the machine; cache-core crash paths fixed.
+- Parts that need the Linux cluster (DiskANN, the real Aker library and Proximity mode, `mincore` and `fadvise`, `/proc`-based queue and guard, MedRAG, SPACEV and TriviaQA at 10M) are implemented and mock-tested; they are listed in `PROGRESS.md`.
+
 ## Fetching the precomputed TripClick and MedRAG vectors
 
 The vectors are on a shared Google Drive folder (ask the project owner for access). Use only the TripClick and MedRAG files and do not re-share them.

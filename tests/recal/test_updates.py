@@ -121,3 +121,32 @@ def test_updater_batches_and_headroom(tmp_path):
     b = system.bytes_by_structure()
     assert b["total"] <= M + 1
     assert system.delete([int(system.core.entry(0)["response_ids"][0])]) == 1
+
+
+def test_shells_and_mini_cache_are_untouched_by_updates():
+    rng, data, centers, js, K = random_case(seed=30)
+    core, ids, lists = build_core(data, centers, K, js)
+    core.mini_set_capacity(3)
+    q = rng.normal(size=data.shape[1]).astype(np.float32)
+    core.mini_put(q, np.arange(K, dtype=np.int64), np.ones(K, np.float32))
+    shells = [core.entry(e)["shell_slots"] for e in range(len(centers))]
+    n_shell, mini = core.n_shell_slots(), core.mini_size()
+    core.insert_batch(np.arange(40) + 80_000, rng.normal(size=(40, data.shape[1])).astype(np.float32), 1e12)
+    core.delete_id(int(core.entry(0)["response_ids"][0]))
+    core.sweep()
+    assert [core.entry(e)["shell_slots"] for e in range(len(centers))] == shells
+    assert core.n_shell_slots() == n_shell and core.mini_size() == mini
+    assert core.mini_get(q, K) is not None
+
+
+def test_database_ids_are_never_reused():
+    from recal.backend import ExactBackend
+    rng = np.random.default_rng(0)
+    backend = ExactBackend(rng.normal(size=(50, 4)).astype(np.float32))
+    backend.delete(np.array([3]))
+    with pytest.raises(ValueError):
+        backend.insert(np.array([3]), rng.normal(size=(1, 4)).astype(np.float32))
+    with pytest.raises(ValueError):
+        backend.insert(np.array([7]), rng.normal(size=(1, 4)).astype(np.float32))
+    backend.insert(np.array([1000]), rng.normal(size=(1, 4)).astype(np.float32))
+    assert 1000 in backend.search(backend.vectors[-1], 1)[0]
