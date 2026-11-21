@@ -89,6 +89,45 @@ struct Entry {
     int32_t built_len = 0;       // response length at construction (jK)
 };
 
+// hnswlib space over entry numbers: an element is its entry index (4 bytes), a query is a tagged buffer.
+// The centers live once, in the entries; the index holds only links, the index and the label.
+class CenterSpace : public hnswlib::SpaceInterface<float> {
+public:
+    CenterSpace(const std::vector<Entry>* entries, size_t dim) : entries_(entries), dim_(dim) {}
+    size_t get_data_size() override { return sizeof(int32_t); }
+    hnswlib::DISTFUNC<float> get_dist_func() override { return &CenterSpace::dist; }
+    void* get_dist_func_param() override { return this; }
+
+    // query buffer: a negative tag followed by the vector
+    static std::vector<float> tagged_query(const float* v, size_t dim) {
+        std::vector<float> buf(dim + 1);
+        int32_t tag = -1;
+        std::memcpy(buf.data(), &tag, sizeof(tag));
+        std::memcpy(buf.data() + 1, v, dim * sizeof(float));
+        return buf;
+    }
+
+private:
+    const float* vec(const void* p) const {
+        int32_t id;
+        std::memcpy(&id, p, sizeof(id));
+        return id >= 0 ? (*entries_)[id].center.data() : static_cast<const float*>(p) + 1;
+    }
+    static float dist(const void* a, const void* b, const void* param) {
+        const CenterSpace* self = static_cast<const CenterSpace*>(param);
+        const float* x = self->vec(a);
+        const float* y = self->vec(b);
+        float s = 0;
+        for (size_t i = 0; i < self->dim_; i++) {
+            float t = x[i] - y[i];
+            s += t * t;
+        }
+        return s;
+    }
+    const std::vector<Entry>* entries_;
+    size_t dim_;
+};
+
 struct MiniEntry {
     std::vector<int32_t> ids;
     std::vector<float> dists;
@@ -204,10 +243,13 @@ class Core {
         index_.reset();
         space_.reset();
         if (!entries_.empty()) {
-            space_ = std::make_unique<hnswlib::L2Space>(d);
+            space_ = std::make_unique<CenterSpace>(&entries_, d);
             index_ = std::make_unique<hnswlib::HierarchicalNSW<float>>(space_.get(), entries_.size(), M,
                                                                        ef_construction, seed);
-            for (size_t i = 0; i < entries_.size(); i++) index_->addPoint(entries_[i].center.data(), i);
+            for (size_t i = 0; i < entries_.size(); i++) {
+                int32_t id = (int32_t)i;
+                index_->addPoint(&id, i);
+            }
         }
         index_ready_ = true;
         built_ = true;
@@ -392,6 +434,11 @@ class Core {
         return b;
     }
 
+    // bytes per element of the center index outside its links: independent of the dimension
+    size_t center_index_payload_per_element() const {
+        return index_ ? index_->size_data_per_element_ - index_->size_links_level0_ : 0;
+    }
+
     size_t mini_size() const { return mini_lru_.size(); }
     size_t mini_capacity() const { return mini_capacity_; }
 
@@ -551,9 +598,10 @@ class Core {
         rev = (double)live * 12.0;
         for (const auto& kv : mini_lru_) mini += mini_entry_bytes((int)kv.second.ids.size());
         if (index_) {
-            // graph links only: the centers themselves are charged to the entries
+            // allocated size of the index: level-0 blocks (links, 4-byte index, 8-byte label), link-list pointers, levels and upper links;
+            // the label map and the visited-list pool are not counted (a few percent of the index)
             size_t n = index_->cur_element_count;
-            double links = (double)n * index_->size_links_level0_;
+            double links = (double)index_->max_elements_ * (index_->size_data_per_element_ + sizeof(void*) + sizeof(int));
             for (size_t i = 0; i < n; i++) links += (double)index_->element_levels_[i] * index_->size_links_per_element_;
             index = links;
         }
@@ -650,7 +698,7 @@ class Core {
     std::vector<uint8_t> shell_codes_;
     std::unordered_map<int64_t, int32_t> shell_build_map_;  // transient (S10)
     std::vector<Entry> entries_;
-    std::unique_ptr<hnswlib::L2Space> space_;
+    std::unique_ptr<CenterSpace> space_;
     std::unique_ptr<hnswlib::HierarchicalNSW<float>> index_;
     std::vector<std::vector<int32_t>> inv_;  // data slot -> entries listing it
 
@@ -699,7 +747,8 @@ class Core {
             std::vector<std::pair<double, int>> near;
             if (index_) {
                 index_->setEf(std::max<size_t>(ef_search_, k));
-                auto pq = index_->searchKnn(v, k);
+                auto tq = CenterSpace::tagged_query(v, d);
+                auto pq = index_->searchKnn(tq.data(), k);
                 while (!pq.empty()) {
                     near.emplace_back(0.0, (int)pq.top().second);
                     pq.pop();
@@ -799,7 +848,8 @@ class Core {
             return;
         }
         index_->setEf(std::max<size_t>(ef_search_, want));
-        auto pq = index_->searchKnn(q, want);
+        auto tq = CenterSpace::tagged_query(q, d);
+        auto pq = index_->searchKnn(tq.data(), want);
         while (!pq.empty()) {
             int e = (int)pq.top().second;
             out.emplace_back(l2(q, entries_[e].center.data(), d), e);
@@ -933,6 +983,7 @@ PYBIND11_MODULE(_recal_core, mod) {
         .def("mini_put_hash", &Core::mini_put_hash)
         .def("mini_get_hash", &Core::mini_get_hash)
         .def("mini_payload_bytes", &Core::mini_payload_bytes)
+        .def("center_index_payload_per_element", &Core::center_index_payload_per_element)
         .def("mini_size", &Core::mini_size)
         .def("mini_capacity", &Core::mini_capacity)
         .def("bytes_by_structure", &Core::bytes_by_structure)

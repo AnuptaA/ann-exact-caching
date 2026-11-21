@@ -313,3 +313,16 @@ def test_mini_cache_rejects_ids_beyond_four_bytes():
     q = rng.normal(size=data.shape[1]).astype(np.float32)
     with pytest.raises(ValueError):
         core.mini_put(q, np.array([2**40] * K, dtype=np.int64), np.ones(K, np.float32))
+
+
+def test_center_index_keeps_no_copy_of_the_centers():
+    rng = np.random.default_rng(3)
+    n, d, K = 400, 128, 5
+    data = rng.normal(size=(n, d)).astype(np.float32)
+    centers = rng.normal(size=(30, d)).astype(np.float32)
+    core, *_ = build_core(data, centers, K, [1] * 30, budget=50_000_000.0)
+    assert core.center_index_payload_per_element() == 12
+    index_bytes = core.bytes_by_structure()["center_index"]
+    assert index_bytes < 30 * 4 * d    # a copy of the centers alone would exceed this per element sum
+    # allocated size: level-0 blocks and pointers charged for every slot, links above level 0 on top
+    assert index_bytes >= 30 * (12 + 8 + 4)
