@@ -185,7 +185,9 @@ def main():
                 # vectors the cache read for chosen candidates (ball members + shell samples), per batch: re-read
                 # from disk at the batch's end (candidates are kept as ids until chosen)
                 W = r["args"]["warmup"]
-                cum = np.array([x["fetched"] + x["samp_fetched"] for x in r["log"]], dtype=np.int64)
+                # shell-sample vectors: samp_new (11-21: only ones no entry sampled already) where logged, else
+                # samp_fetched (every re-coding counted: ~1.4x too many on TripClick 10%)
+                cum = np.array([x["fetched"] + x.get("samp_new", x["samp_fetched"]) for x in r["log"]], dtype=np.int64)
                 tt = np.array([x["t"] for x in r["log"]], dtype=np.int64) - W - 1
                 t["reread_at"] = (tt[1:], np.diff(cum))
             arms.append((name, t))
