@@ -53,7 +53,8 @@ if os.environ.get("TIMING_VERSION") == "timing_v6":        # v6 (doc 9ah): the r
     SIZES = {w.name: list(w.budgets) for w in _WL.values() if len(w.budgets) == 4 and w.budgets != tuple(BUDGETS)}   # 0.3% already holds MedRAG-Zipf's working set
 # LRU's cache update (DiskANN top-500 search for the new entry, insert, evictions) is charged as
 # background work (decided with Jialin, 11-11); the sync runs stay in the table only
-TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
+TECHS = [("ours_final", "Ours, final config", "C0", lambda n: False),     # doc 9at (results/final, see final_timing)
+         ("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
          ("ours_online", "Ours (continuous greedy)", "C0", lambda n: n.startswith("oursonline_")),
          ("lru_bg", "LRU", "C1", lambda n: n.startswith(("lru_bg_", "lru_s"))),
          ("aker", "Aker", "C2", lambda n: n.startswith("aker_")),
@@ -64,7 +65,7 @@ TECHS = [("ours", "Ours", "C0", lambda n: n.startswith("ours_")),
 
 TABLE_ONLY = [("ours_drift", "Ours (drift handling)", lambda n: n.startswith("oursdrift_")),
               ("lru_sync", "LRU (sync update)", lambda n: n.startswith("lru_sync_"))]
-HEADLINE_KEY = {"ours": "ours", "ours_drift": "ours_drift", "ours_online": "ours_online", "lru_bg": "lru", "lru_sync": "lru", "aker": "aker", "qvcache": "qvcache",
+HEADLINE_KEY = {"ours_final": "ours_final", "ours": "ours", "ours_drift": "ours_drift", "ours_online": "ours_online", "lru_bg": "lru", "lru_sync": "lru", "aker": "aker", "qvcache": "qvcache",
                 "aker_paper": "aker_paper", "qvcache_paper": "qvcache_paper"}
 
 
@@ -124,7 +125,45 @@ def load_v6(name, budget, every=50):
     for key, rs in cand.items():
         ok = [r for r in rs if (r["retention_vs_backend_hits"] or 0) >= T_ - TOL_]
         out[key] = max(ok, key=lambda r: r["hit_rate"]) if ok else max(rs, key=lambda r: r["retention_vs_backend_hits"] or 0)
+    fr = final_timing(name, budget, a, every)
+    if fr is not None:
+        out["ours_final"] = fr
     return out
+
+
+def final_timing(name, budget, arm, every=50):
+    """doc 9at: the final-config run (every request's cache path timed) composed as the v6 runs: the requests at stream
+    positions warm-up + j x every, each miss charged that request's measured DiskANN time (backend_s50_lat.npy)."""
+    f = RES / "final" / name / f"b{budget:g}" / "timed" / "ogreedy.json"
+    if not (f.parent / "DONE").exists():
+        return None
+    r0 = json.loads(f.read_text())
+    T = r0.get("timing")
+    if not T:
+        return None
+    comp = np.load(RES / "timing_v6" / name / f"backend_s{every}_lat.npy") * 1e3
+    hit = np.asarray(T["hit"], dtype=bool)
+    dt = np.asarray(T["dt_ms"])
+    pos = np.arange(0, len(hit), every)[:len(comp)]
+    j = np.arange(len(pos))
+    lat = dt[pos] + np.where(hit[pos], 0.0, comp[j])
+    log = r0["log"]
+    n, sv = sum(x["n"] for x in log), sum(x["served"] for x in log)
+    hl = lat[hit[pos]]
+    ml = lat[~hit[pos]]
+    r = {"file": "final", "hit_rate": sv / max(n, 1),
+         "retention_vs_backend_hits": sum(x["served_retention_sum"] for x in log) / sv if sv else None,
+         "recall_vs_exact_all": float("nan"), "audited_share": 0.0,
+         "cache": {"mean_ms": float(lat.mean()), "p99_ms": float(np.percentile(lat, 99)),
+                   "hits_ms": {"mean_ms": float(hl.mean())} if len(hl) else None,
+                   "misses_ms": {"mean_ms": float(ml.mean())} if len(ml) else None},
+         "stage_ms": {}, "timing": {"hit": []}, "backend": arm["backend"], "n_timed": int(len(lat)),
+         "environment": {"verdict": "composed"}}
+    if f"{budget:g}" in arm["per_budget"]:
+        r["backend_mem"] = arm["per_budget"][f"{budget:g}"]
+    r["speedup"] = {"overall": arm["backend"]["mean_ms"] / r["cache"]["mean_ms"],
+                    "limit_1_over_1_minus_h": 1 / max(1 - r["hit_rate"], 1e-9)}
+    return r
 
 
 T_, TOL_ = 0.9, 0.01
