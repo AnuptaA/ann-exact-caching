@@ -1,0 +1,5 @@
+# .venv-ann: real Aker (shim), DiskANN backends, timing and throughput runs.
+faiss-cpu==1.8.*
+diskannpy==0.7.*
+numpy==1.25.*
+scipy

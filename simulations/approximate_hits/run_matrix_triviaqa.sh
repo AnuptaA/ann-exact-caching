@@ -13,10 +13,10 @@
 # /tmp/mx/HOLD, for its first 15 min). The "already done?" check is made after taking the
 # lock, so a prep that finished while waiting is not redone.
 PFX=${1:-dpr}
-cd /local/home/jialind/ann-exact-caching || exit 1
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
-export LD_LIBRARY_PATH=/home/jialind/third_party/aker/build/lib:/home/jialind/third_party/boost-install/lib:/home/jialind/third_party/faiss-install/lib64:$LD_LIBRARY_PATH PYTHONPATH=.
-M=/tmp/mx
+export LD_LIBRARY_PATH=${RECAL_THIRD_PARTY:-$HOME/third_party}/aker/build/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/boost-install/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/faiss-install/lib64:$LD_LIBRARY_PATH PYTHONPATH=.
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 P=$S/results/online
 W=$S/mx_run_job.sh

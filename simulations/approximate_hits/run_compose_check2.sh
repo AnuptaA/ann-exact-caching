@@ -2,8 +2,8 @@
 # Second composed-timing check (doc 9ad), SPACEV Zipf 0.99, 1%: the DiskANN-alone arm rerun with a 10 ms
 # gap between searches (matching the spacing of a technique run's timed requests), then the six
 # techniques composed, one at a time and 6 at once (4 cores each). Live results: timing_v4 (unchanged).
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 R=$S/results
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.

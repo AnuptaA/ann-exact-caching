@@ -4,8 +4,8 @@
 #   1. DiskANN-only arms with the base node cache (10 ms gap), one at a time on a quiet machine;
 #   2. every technique job, composed (charged the v5 baseline latencies), 12 at once.
 # Restartable: finished JSONs are skipped.
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
 REG=$M/registry; mkdir -p $REG

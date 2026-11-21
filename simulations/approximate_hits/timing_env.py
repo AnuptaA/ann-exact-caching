@@ -191,7 +191,8 @@ class QuietGuard:
         self._t0 = time.time()
         # the sampler is a separate process, so it keeps sampling while this process holds the GIL
         # (diskannpy does while loading an index) and does not disturb the timed threads
-        self._path = f"/tmp/timing_env_{os.getpid()}.samples"
+        self._path = os.path.join(os.environ.get("RECAL_TMP", "/tmp"),
+                                  f"timing_env_{os.getpid()}.samples")
         self._proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "monitor",
                                        "--pid", str(os.getpid()), "--every", str(self.sample_s),
                                        "--out", self._path], stdin=subprocess.DEVNULL)

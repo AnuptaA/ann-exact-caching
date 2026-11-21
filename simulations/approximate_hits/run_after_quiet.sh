@@ -1,8 +1,8 @@
 #!/bin/sh
 # doc 9ai: after the quiet checks: headline per-request reruns (graph path, priority order) and pool
 # statistics side by side; interim plots every hour, final plots at the end.
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx; S=simulations/approximate_hits
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}; S=simulations/approximate_hits
 plots() {
   TIMING_VERSION=timing_v6 PYTHONPATH=. .venv/bin/python $S/plot_timing.py > /dev/null 2>&1
   HEADLINE_V6=1 PYTHONPATH=. .venv/bin/python $S/plot_headline.py > /dev/null 2>&1

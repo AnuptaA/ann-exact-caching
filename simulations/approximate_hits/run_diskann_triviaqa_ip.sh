@@ -8,8 +8,8 @@
 # search effort is tuned to recall@10 0.95 (and 0.9) and the answers written
 # (results/backends/<prep>/diskann.npz) for the inexact-backend runs and for timing.
 # Not timing: index builds and answer files only.
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 B=$S/results/backends
 P=$S/results/online

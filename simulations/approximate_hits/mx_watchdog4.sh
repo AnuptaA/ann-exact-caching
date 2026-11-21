@@ -9,8 +9,8 @@
 # Processes registered with priority "timing" (the quiet timing runs) are never killed.
 # Admission control loop: each kill raises the growth-reservation factor (/tmp/mx/growth_factor)
 # by 0.25 (max 1); each 15 min without kills and with >= 60 GB available lowers it by 0.1 (min 0.2).
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 REG=$M/registry
 mkdir -p $REG
 priv_of() { awk '/^Private_(Clean|Dirty):/ {s += $2} END {printf "%d", s / 1048576}' /proc/$1/smaps_rollup 2>/dev/null; }
@@ -57,9 +57,9 @@ while :; do
     for pair in req2.sh:REQ.DONE he.sh:HE.DONE es.sh:TSTATES_ESCI.DONE after_timing.sh:TIMING3C.DONE; do
       sc=${pair%%:*}; fl=${pair#*:}
       [ -f $M/$sc ] || continue
-      if [ ! -f $M/$fl ] && ! pgrep -f "/tmp/mx/$sc" > /dev/null; then
+      if [ ! -f $M/$fl ] && ! pgrep -f "${RECAL_QUEUE_DIR:-/tmp/mx}/$sc" > /dev/null; then
         echo "$(date +%T) $sc not running: restarting" >> $M/watchdog.log
-        nohup sh /tmp/mx/$sc >> $M/${sc%.sh}.log 2>&1 &
+        nohup sh ${RECAL_QUEUE_DIR:-/tmp/mx}/$sc >> $M/${sc%.sh}.log 2>&1 &
       fi
     done
   fi

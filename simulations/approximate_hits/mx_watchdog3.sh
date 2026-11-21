@@ -7,8 +7,8 @@
 # Every 10 min: append a status line to /tmp/mx/status.log and restart the driver
 # if it is gone before /tmp/mx/ALL_3.DONE exists (safe: finished and running jobs
 # are skipped by mx_run_job.sh). Every hour: mx_requeue.sh for given-up jobs.
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 i=0
 while [ ! -f $M/TIMING3C.DONE ] || [ ! -f $M/REQ.DONE ] || [ ! -f $M/HE.DONE ]; do
   # make the kernel's out-of-memory killer prefer light jobs (ESCI, 1% budget, real Aker;
@@ -44,9 +44,9 @@ while [ ! -f $M/TIMING3C.DONE ] || [ ! -f $M/REQ.DONE ] || [ ! -f $M/HE.DONE ]; 
     for pair in req2.sh:REQ.DONE he.sh:HE.DONE es.sh:TSTATES_ESCI.DONE after_timing.sh:TIMING3C.DONE; do
       sc=${pair%%:*}; fl=${pair#*:}
       [ -f $M/$sc ] || continue
-      if [ ! -f $M/$fl ] && ! pgrep -f "/tmp/mx/$sc" > /dev/null; then
+      if [ ! -f $M/$fl ] && ! pgrep -f "${RECAL_QUEUE_DIR:-/tmp/mx}/$sc" > /dev/null; then
         echo "$(date +%T) $sc not running: restarting" >> $M/watchdog.log
-        nohup sh /tmp/mx/$sc >> $M/${sc%.sh}.log 2>&1 &
+        nohup sh ${RECAL_QUEUE_DIR:-/tmp/mx}/$sc >> $M/${sc%.sh}.log 2>&1 &
       fi
     done
   fi

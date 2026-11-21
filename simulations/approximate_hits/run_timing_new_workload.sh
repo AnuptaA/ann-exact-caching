@@ -7,8 +7,8 @@
 # after the workload's headline runs, which pick the Aker / QVCache settings).
 #   run_timing_new_workload.sh <prep>
 P=$1
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 R=$S/results
 B=$R/backends/$P

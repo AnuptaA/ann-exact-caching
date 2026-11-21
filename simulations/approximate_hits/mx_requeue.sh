@@ -4,11 +4,11 @@
 # hand), at most twice per job overall (/tmp/mx/requeued.log). Job lines come from all queue
 # lists of the drivers; jobs that never started are left to their own queues.
 # Run by mx_watchdog.sh every hour; safe to run by hand.
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 W=simulations/approximate_hits/mx_run_job.sh
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
-export LD_LIBRARY_PATH=/home/jialind/third_party/aker/build/lib:/home/jialind/third_party/boost-install/lib:/home/jialind/third_party/faiss-install/lib64:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=${RECAL_THIRD_PARTY:-$HOME/third_party}/aker/build/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/boost-install/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/faiss-install/lib64:$LD_LIBRARY_PATH
 touch $M/requeued.log
 OUT=$M/requeue_$(date +%H%M%S).txt
 : > $OUT

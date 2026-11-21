@@ -1,0 +1,10 @@
+# .venv-core: C++ cache core build and the online simulator on it (Python 3.11).
+# Versions as recorded in docs/approximate_cache_hits_context.md (9ah) and the audit.
+numpy==1.25.*
+scipy==1.13.1
+scikit-learn==1.6.1
+pybind11==3.1.0
+faiss-cpu==1.8.*
+diskannpy==0.7.*
+matplotlib
+pytest

@@ -1,0 +1,12 @@
+# .venv: workload preparation, embeddings, the offline evaluations and plots (no versions recorded upstream).
+numpy
+scipy
+scikit-learn
+pandas
+matplotlib
+seaborn
+tqdm
+torch
+transformers
+sentence-transformers
+pytest

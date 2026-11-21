@@ -1,8 +1,8 @@
 #!/bin/sh
 # doc 9ah: after the v6 timing batch: (1) its failed jobs again (Aker library paths fixed; finished runs are
 # skipped), (2) contention check: the two heaviest LRU cells alone, (3) headline per-request reruns, (4) plots.
-cd /local/home/jialind/ann-exact-caching || exit 1
-S=simulations/approximate_hits; R=$S/results; M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+S=simulations/approximate_hits; R=$S/results; M=${RECAL_QUEUE_DIR:-/tmp/mx}
 while [ ! -f $M/V6_TIMING.DONE ]; do sleep 60; done
 echo "$(date +%T) timing rerun of failed jobs"
 python3 $S/run_jobs.py $M/v6_timing2.txt --workers 8

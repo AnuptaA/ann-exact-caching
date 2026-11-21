@@ -1,0 +1,2 @@
+# Q1 harness and workloads (pgvector answer table, Aker and Proximity replay). Pinned set: requirements-q1.lock.
+-r ../requirements-q1.txt

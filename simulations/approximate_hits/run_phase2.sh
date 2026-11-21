@@ -3,8 +3,8 @@
 #   (TripClick / MedRAG timing under the old setup was stopped and set aside: the setup is being changed)
 #   2. node-cache curve per index (quiet, sequential): where the latency gain saturates;
 #   3. adaptive stage-1 tuning (CPU only, 3 cells at a time) on the 10% states of a first set of cells.
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 R=$S/results
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.

@@ -1,9 +1,9 @@
 #!/bin/sh
 # doc 9ah milestone 3: online_sim timed mode (core, two-stage, composed DiskANN charges) vs the v5 harness
 # runs of the same cells. After run_core_parity.sh.
-cd /local/home/jialind/ann-exact-caching || exit 1
-R=simulations/approximate_hits/results; O=/tmp/mx/tcheck
-while [ ! -f /tmp/mx/CORE_PARITY.DONE ]; do sleep 60; done
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+R=simulations/approximate_hits/results; O=${RECAL_QUEUE_DIR:-/tmp/mx}/tcheck
+while [ ! -f ${RECAL_QUEUE_DIR:-/tmp/mx}/CORE_PARITY.DONE ]; do sleep 60; done
 mkdir -p $O
 efs() { python3 -c "
 import json; d=json.load(open('$R/timing_v4/$1/stage1_b$2.json'))
@@ -22,4 +22,4 @@ run tripclick-ip 0.1 lru lru --detect --k-lru 20
 run tripclick-ip 0.1 ogreedy oursonline --detect --og-evict utility
 run tripclick-ip 0.1 greedy oursdrift --detect score --response rebuild
 wait
-touch /tmp/mx/CORE_TIMING_CHECK.DONE
+touch ${RECAL_QUEUE_DIR:-/tmp/mx}/CORE_TIMING_CHECK.DONE

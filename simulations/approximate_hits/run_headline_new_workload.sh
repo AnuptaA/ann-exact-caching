@@ -7,10 +7,10 @@
 #   run_headline_new_workload.sh <prep>      (waits for results/online/<prep>/top500.npy)
 # Template lists: /tmp/mx job lists (see the list order below). Flag: /tmp/mx/HEADLINE_<prep>.DONE
 P=$1
-cd /local/home/jialind/ann-exact-caching || exit 1
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=. MX_PRIORITY=plot
-export LD_LIBRARY_PATH=/home/jialind/third_party/aker/build/lib:/home/jialind/third_party/boost-install/lib:/home/jialind/third_party/faiss-install/lib64
-M=/tmp/mx
+export LD_LIBRARY_PATH=${RECAL_THIRD_PARTY:-$HOME/third_party}/aker/build/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/boost-install/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/faiss-install/lib64
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 while [ ! -f $S/results/online/$P/top500.npy ]; do sleep 300; done
 TPL=triviaqa-ip-0.6

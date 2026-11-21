@@ -5,10 +5,10 @@
 # stable-trace runs at 1% and 10% (ours / LRU: the matrix configurations; Aker / QVCache: full grids)
 # and real Aker on the trace. No multishift streams, no data-change rankings.
 PFX=${1:-ip}
-cd /local/home/jialind/ann-exact-caching || exit 1
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
-export LD_LIBRARY_PATH=/home/jialind/third_party/aker/build/lib:/home/jialind/third_party/boost-install/lib:/home/jialind/third_party/faiss-install/lib64:$LD_LIBRARY_PATH
-M=/tmp/mx
+export LD_LIBRARY_PATH=${RECAL_THIRD_PARTY:-$HOME/third_party}/aker/build/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/boost-install/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/faiss-install/lib64:$LD_LIBRARY_PATH
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 P=$S/results/online
 W=$S/mx_run_job.sh

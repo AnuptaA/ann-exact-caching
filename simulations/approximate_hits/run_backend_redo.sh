@@ -5,8 +5,8 @@
 #     setting (eval_real_backend.py --fixed, plot priority, old files archived as diskann_v1.*),
 #  4. warm-up states for timing_v4, 5. the final timing batch (run_timing_batch2.sh final).
 # Every step waits on its predecessor's outputs; jobs go through the runner (mx_complete.sh).
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 R=$S/results
 export PYTHONPATH=. OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 MX_PRIORITY=plot

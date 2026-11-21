@@ -26,12 +26,12 @@ LINE=$2
 PRIO=${MX_PRIORITY:-plot}
 CAP=345
 HEADROOM=20
-PEAKS=/tmp/mx/peaks.tsv
-REG=/tmp/mx/registry
+PEAKS=${RECAL_QUEUE_DIR:-/tmp/mx}/peaks.tsv
+REG=${RECAL_QUEUE_DIR:-/tmp/mx}/registry
 mkdir -p $REG
 JSON=$(printf '%s' "$LINE" | grep -o "\[ -f [^ ]*json" | cut -d' ' -f3)
 LOG=$(printf '%s' "$LINE" | grep -oE "> [^ ]*logs/[^ ]*\.txt" | cut -c3-)
-LOCK=/tmp/mx/admit.lock
+LOCK=${RECAL_QUEUE_DIR:-/tmp/mx}/admit.lock
 
 jkey() {   # job class: prep folder, budget, method / script (from a command line)
   printf '%s' "$1" | awk '{
@@ -76,7 +76,7 @@ growth() {   # GB still expected to be allocated by registered jobs
     read k pr e < "$f"
     p=$(priv_of $pid); [ -n "$p" ] || continue
     [ "$e" -gt "$p" ] && echo $(( e - p ))
-  done | awk -v f="$(cat /tmp/mx/growth_factor 2>/dev/null || echo 1)" '{s += $1} END {printf "%d\n", f * s}'
+  done | awk -v f="$(cat ${RECAL_QUEUE_DIR:-/tmp/mx}/growth_factor 2>/dev/null || echo 1)" '{s += $1} END {printf "%d\n", f * s}'
 }
 mem() { awk -v w="$1" '/MemTotal/ {t = $2} /MemAvailable/ {a = $2} END {
   if (w == "used") printf "%d\n", (t - a) / 1048576; else printf "%d\n", a / 1048576 }' /proc/meminfo; }
@@ -85,7 +85,7 @@ same_running() {   # another live process is producing the same JSON target
   ps -eo args | grep -v "sh -c" | grep -v mx_run_job | grep -q -- "--tag $tag --out $d\( \|$\)" && return 0
   ps -eo args | grep -v "sh -c" | grep -v mx_run_job | grep -q -- "--out $JSON\( \|$\)"
 }
-skipped() { [ -n "$JSON" ] && [ -f /tmp/mx/skip.txt ] && grep -qxF "$JSON" /tmp/mx/skip.txt; }
+skipped() { [ -n "$JSON" ] && [ -f ${RECAL_QUEUE_DIR:-/tmp/mx}/skip.txt ] && grep -qxF "$JSON" ${RECAL_QUEUE_DIR:-/tmp/mx}/skip.txt; }
 register() {   # record python descendants of $1 (two levels: sh -c -> python, sh -c -> sh -> python)
   for c in $(pgrep -P $1) $(for g in $(pgrep -P $1); do pgrep -P $g; done); do
     [ -f $REG/$c ] && continue
@@ -108,7 +108,7 @@ while :; do
   exec 9> $LOCK
   if flock -w 30 9; then
     g=$(growth); u=$(mem used); a=$(mem avail)
-    if [ ! -f /tmp/mx/HOLD ] && [ $(( u + g + EST )) -le $CAP ] && [ $(( a - g - EST )) -ge $HEADROOM ]; then
+    if [ ! -f ${RECAL_QUEUE_DIR:-/tmp/mx}/HOLD ] && [ $(( u + g + EST )) -le $CAP ] && [ $(( a - g - EST )) -ge $HEADROOM ]; then
       sh -c "$LINE" &
       job=$!
       for i in 1 2 3 4 5 6 7 8 9 10; do      # until its python process is registered (counted)
@@ -139,15 +139,15 @@ while :; do
     exit 0
   fi
   if [ -n "$LOG" ] && grep -q "Traceback" "$LOG" 2>/dev/null; then
-    echo "$(date +%T) FAILED (traceback) ${JSON:-$KEY}" >> /tmp/mx/failures.log; exit 1
+    echo "$(date +%T) FAILED (traceback) ${JSON:-$KEY}" >> ${RECAL_QUEUE_DIR:-/tmp/mx}/failures.log; exit 1
   fi
   if [ -z "$JSON" ] && [ $rc -le 128 ]; then
-    echo "$(date +%T) FAILED (exit $rc) $KEY" >> /tmp/mx/failures.log; exit 1
+    echo "$(date +%T) FAILED (exit $rc) $KEY" >> ${RECAL_QUEUE_DIR:-/tmp/mx}/failures.log; exit 1
   fi
   [ "$peak" -gt 0 ] && printf '%s\t%s\tkilled\n' "$KEY" "$peak" >> $PEAKS
   try=$((try + 1))
-  echo "$(date +%T) died without output (try $try, $PRIO, peak ${peak} GB, next estimate $(est_of "$LINE") GB) ${JSON:-$KEY}" >> /tmp/mx/failures.log
-  [ $try -ge 20 ] && { echo "$(date +%T) GAVE UP after $try attempts ${JSON:-$KEY}" >> /tmp/mx/failures.log; exit 1; }
+  echo "$(date +%T) died without output (try $try, $PRIO, peak ${peak} GB, next estimate $(est_of "$LINE") GB) ${JSON:-$KEY}" >> ${RECAL_QUEUE_DIR:-/tmp/mx}/failures.log
+  [ $try -ge 20 ] && { echo "$(date +%T) GAVE UP after $try attempts ${JSON:-$KEY}" >> ${RECAL_QUEUE_DIR:-/tmp/mx}/failures.log; exit 1; }
   b=$try; [ $b -gt 5 ] && b=5
   sleep $(( 60 * (1 << b) ))
 done

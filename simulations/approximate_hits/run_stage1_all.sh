@@ -11,4 +11,4 @@ for f in $R/timing_v4/*/state_b*.npz; do
   mkdir -p $R/timing_v4/$P/logs
   echo ".venv-ann/bin/python -u $S/stage1_tune.py --prep $R/online/$P --state $f --stream $S2 --threads 4 --precisions fp32 --target-recall $TR --out $O > $R/timing_v4/$P/logs/stage1_b$B.txt 2>&1"
 done | xargs -P 8 -I{} sh -c "{}"
-touch /tmp/mx/STAGE1_ALL.DONE
+touch ${RECAL_QUEUE_DIR:-/tmp/mx}/STAGE1_ALL.DONE

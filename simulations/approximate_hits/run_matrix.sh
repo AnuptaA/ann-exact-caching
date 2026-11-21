@@ -11,10 +11,10 @@
 # Phase 1-2 lists (/tmp/mx/{H,L,A}_{1,2}.txt, D_jobs.txt, AD_jobs.txt) were written by
 # the earlier driver; TriviaQA waits for its re-embedded queries (separate launcher).
 # At the end: fresh-seed re-runs of the best seed-0 baseline settings (new grids).
-cd /local/home/jialind/ann-exact-caching || exit 1
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
-export LD_LIBRARY_PATH=/home/jialind/third_party/aker/build/lib:/home/jialind/third_party/boost-install/lib:/home/jialind/third_party/faiss-install/lib64:$LD_LIBRARY_PATH PYTHONPATH=.
-M=/tmp/mx
+export LD_LIBRARY_PATH=${RECAL_THIRD_PARTY:-$HOME/third_party}/aker/build/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/boost-install/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/faiss-install/lib64:$LD_LIBRARY_PATH PYTHONPATH=.
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 W=$S/mx_run_job.sh
 PY=.venv/bin/python

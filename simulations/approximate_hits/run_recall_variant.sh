@@ -3,9 +3,9 @@
 # recall target: answers, base node cache (the source's), choice.json, warm-up states, stage-1 tuning,
 # quiet arm, composed runs, plot. Usage:
 #   sh run_recall_variant.sh <source prep> <alias> <target> <search list> <beam> <stream> "<budgets>"
-cd /local/home/jialind/ann-exact-caching || exit 1
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
 SRC=$1; P=$2; TGT=$3; L=$4; W=$5; STREAM=$6; BUDGETS=$7
-M=/tmp/mx; S=simulations/approximate_hits; R=$S/results; B=$R/backends/$P; O=$R/timing_v4/$P
+M=${RECAL_QUEUE_DIR:-/tmp/mx}; S=simulations/approximate_hits; R=$S/results; B=$R/backends/$P; O=$R/timing_v4/$P
 export PYTHONPATH=.
 ln -sfn $SRC $R/online/$P
 [ -d $R/aker_real/$SRC ] && ln -sfn $SRC $R/aker_real/$P

@@ -12,4 +12,4 @@ for P in spacev-aker-0.6 triviaqa-ip-0.6 esci1m; do
   done
 done
 wait
-touch /tmp/mx/STAGE1_REDO.DONE
+touch ${RECAL_QUEUE_DIR:-/tmp/mx}/STAGE1_REDO.DONE

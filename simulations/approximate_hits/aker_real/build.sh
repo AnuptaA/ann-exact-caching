@@ -11,7 +11,7 @@
 # Aker is built in Standard mode (the adaptive per-entry threshold).
 # Usage: sh build.sh   (then run with the LD_LIBRARY_PATH printed at the end)
 set -e
-TP=${TP:-$HOME/third_party}
+TP=${TP:-${RECAL_THIRD_PARTY:-$HOME/third_party}}
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 # One bug fix (aker_stackbuffer_fix.patch): StackFloatBuffer called alloca() in its

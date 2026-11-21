@@ -3,8 +3,8 @@
 #   1. DiskANN-only arms (10 ms gap), one at a time on a quiet machine (the s50 ones; spacev-aker-0.99 exists);
 #   2. every remaining technique job, composed, 12 at once (run_timing_composed.py).
 # Restartable: finished JSONs are skipped.
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
 REG=$M/registry; mkdir -p $REG

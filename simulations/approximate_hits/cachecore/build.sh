@@ -4,8 +4,10 @@
 set -e
 cd "$(dirname "$0")"
 PY=${PY:-../../../.venv-core/bin/python}
+# CORE_ARCH: set to a portable value (for example -march=x86-64-v3) when the .so is built on one machine and run on another
+CORE_ARCH=${CORE_ARCH:--march=native}
 EXT=$($PY -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
 INC=$($PY -m pybind11 --includes)
-c++ -O3 -march=native -DNDEBUG -std=c++17 -shared -fPIC -pthread -fopenmp-simd -Wall -Wno-sign-compare $INC \
+c++ -O3 $CORE_ARCH -DNDEBUG -std=c++17 -shared -fPIC -pthread -fopenmp-simd -Wall -Wno-sign-compare $INC \
     cachecore.cpp -o _cachecore$EXT.tmp && mv -f _cachecore$EXT.tmp _cachecore$EXT   # atomic: running jobs keep the old file
 echo "built $(pwd)/_cachecore$EXT"

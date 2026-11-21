@@ -3,8 +3,8 @@
 # spacev-real95 (doc 9af): same data (online/spacev-real95 -> spacev-real), own answers / states / runs.
 # Waits for the answers (eval_real_backend --out-name spacev-real95), then: node cache (spacev-real's
 # choice, same index), choice.json, warm-up states, stage-1 tuning, quiet arm, composed runs, plot.
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx; S=simulations/approximate_hits; R=$S/results; P=spacev-real95; B=$R/backends/$P; O=$R/timing_v4/$P
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}; S=simulations/approximate_hits; R=$S/results; P=spacev-real95; B=$R/backends/$P; O=$R/timing_v4/$P
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
 while [ ! -f $B/diskann.json ]; do sleep 120; done
 echo "$(date +%T) answers ready"

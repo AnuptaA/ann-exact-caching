@@ -11,6 +11,7 @@ twice: cache maintenance on the request path (sync) and as background work.
   PYTHONPATH=. .venv/bin/python simulations/approximate_hits/timing_jobs.py > /tmp/mx/timing.txt
 """
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -20,9 +21,10 @@ from simulations.approximate_hits.plot_headline import collect  # noqa: E402
 
 S = "simulations/approximate_hits"
 R = f"{S}/results"
-AKER_LIB = ("/home/jialind/third_party/aker/build/lib:/home/jialind/third_party/boost-install/lib:"
-            "/home/jialind/third_party/faiss-install/lib64")
-AKER_PROX_LIB = "/home/jialind/third_party/aker_prox/build/lib:" + AKER_LIB
+THIRD_PARTY = os.environ.get("RECAL_THIRD_PARTY", os.path.expanduser("~/third_party"))
+AKER_LIB = (f"{THIRD_PARTY}/aker/build/lib:{THIRD_PARTY}/boost-install/lib:"
+            f"{THIRD_PARTY}/faiss-install/lib64")
+AKER_PROX_LIB = f"{THIRD_PARTY}/aker_prox/build/lib:" + AKER_LIB
 
 
 def aker_args(name):

@@ -10,8 +10,8 @@
 #    and waits until no simulator / Aker / prep / index-build process is left;
 # 4. runs the jobs one at a time, each under the quiet-machine guard (--wait-quiet 30);
 # 5. releases HOLD and the prep lock.
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
 

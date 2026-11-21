@@ -4,8 +4,8 @@
 #   2. seq       composed (--compose-backend), one at a time, quiet guard on
 #   3. parallel  composed, all 12 jobs (2 cells x 6 techniques) at once, each pinned to 4 cores, guard off
 # Outputs: timing_v4/<prep>/ (live), timing_compose/seq/<prep>/, timing_compose/par/<prep>/.
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 R=$S/results
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.

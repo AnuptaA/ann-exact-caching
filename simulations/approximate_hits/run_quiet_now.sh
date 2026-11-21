@@ -1,8 +1,8 @@
 #!/bin/sh
 # doc 9ai: pause the headline / pool jobs (SIGSTOP; not timing-sensitive), run the timing-sensitive checks on
 # a quiet machine, resume them (SIGCONT, also on any exit).
-cd /local/home/jialind/ann-exact-caching || exit 1
-M=/tmp/mx; S=simulations/approximate_hits
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
+M=${RECAL_QUEUE_DIR:-/tmp/mx}; S=simulations/approximate_hits
 resume() { for p in $(cat $M/paused_pids.txt); do kill -CONT $p 2>/dev/null; done; echo "$(date +%T) resumed"; }
 trap resume EXIT INT TERM
 for p in $(cat $M/paused_pids.txt); do kill -STOP $p 2>/dev/null; done

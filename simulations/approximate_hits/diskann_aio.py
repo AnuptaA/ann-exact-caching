@@ -18,7 +18,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 EVENTS_PER_THREAD = 1024
-LOCK = "/tmp/mx/aio.lock" if os.path.isdir("/tmp/mx") else "/tmp/diskann_aio.lock"
+QUEUE_DIR = os.environ.get("RECAL_QUEUE_DIR", "/tmp/mx")
+TMP_DIR = os.environ.get("RECAL_TMP", "/tmp")
+LOCK = (f"{QUEUE_DIR}/aio.lock" if os.path.isdir(QUEUE_DIR)
+        else f"{TMP_DIR}/diskann_aio.lock")
 
 
 def _read(p):

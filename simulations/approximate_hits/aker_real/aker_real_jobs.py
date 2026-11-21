@@ -59,8 +59,9 @@ def main():
                          "global threshold at 0.01-0.3 x the median squared NN distance; reserve 5")
     args = ap.parse_args()
     if args.tuned:
-        prox_lib = ("LD_LIBRARY_PATH=$HOME/third_party/aker_prox/build/lib:$HOME/third_party/boost-install/lib:"
-                    "$HOME/third_party/faiss-install/lib64")
+        prox_lib = ("LD_LIBRARY_PATH=${RECAL_THIRD_PARTY:-$HOME/third_party}/aker_prox/build/lib:"
+                    "${RECAL_THIRD_PARTY:-$HOME/third_party}/boost-install/lib:"
+                    "${RECAL_THIRD_PARTY:-$HOME/third_party}/faiss-install/lib64")
         for prep, b in itertools.product(args.preps, args.budgets):
             out = f"{RES}/aker_real/{prep}/trace_b{b:g}"
             confs = [(f"at{at:g}_al{al:g}_d5", f"--alpha-tighten {at} --alpha-loosen {al} --delta 5", "")

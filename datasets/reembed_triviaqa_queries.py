@@ -26,6 +26,7 @@ The DPR_web encoders converted to Hugging Face format live in
   .venv/bin/python datasets/reembed_triviaqa_queries.py [--threads 24]
 """
 
+import os
 import json
 import argparse
 import logging
@@ -37,7 +38,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 AKER = Path("datasets/aker")
-DPR_Q = Path.home() / "third_party" / "sphere" / "dpr_web_question_encoder"
+THIRD_PARTY = Path(os.environ.get("RECAL_THIRD_PARTY", Path.home() / "third_party"))
+DPR_Q = THIRD_PARTY / "sphere" / "dpr_web_question_encoder"
 
 
 def encode(model_path, texts, threads, batch=128):

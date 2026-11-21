@@ -4,10 +4,11 @@
 continuous greedy, Aker, QVCache) and measure DiskANN with the cache's memory as node cache (throughput_backend.py,
 equal-memory vs base node cache). Sequential, on a quiet machine. Skips finished cells.
   PYTHONPATH=. .venv-ann/bin/python simulations/approximate_hits/throughput_all.py"""
-import sys, json, glob, subprocess, re
+import os, sys, json, glob, subprocess, re
 from pathlib import Path
 RES = Path("simulations/approximate_hits/results")
-cells = json.loads(Path("/tmp/mx/tp_all_cells.json").read_text())
+QUEUE_DIR = os.environ.get("RECAL_QUEUE_DIR", "/tmp/mx")
+cells = json.loads(Path(f"{QUEUE_DIR}/tp_all_cells.json").read_text())
 py = ".venv-ann/bin/python"
 for c in cells:
     w, b = c["workload"], c["budget"]

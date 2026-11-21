@@ -2,9 +2,9 @@
 # MedRAG-Zipf timing at its small cache sizes (doc 9y): warm-up states for 0.01 / 0.03 / 0.1% after
 # the timing chain's own states (TSTATES_medrag-ip.DONE); the "new" timing batch waits on
 # /tmp/mx/TIMING_GATE_new meanwhile. Opens the gate and stops if the chain is gone without states.
-cd /local/home/jialind/ann-exact-caching || exit 1
+cd "${RECAL_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 1
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=. MX_PRIORITY=plot
-M=/tmp/mx
+M=${RECAL_QUEUE_DIR:-/tmp/mx}
 S=simulations/approximate_hits
 R=$S/results
 P=medrag-ip
