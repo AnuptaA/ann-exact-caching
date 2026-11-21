@@ -4216,3 +4216,27 @@ Entries hold their k result vectors, as Aker's cache returns vectors (k vectors 
   entries' vectors (TripClick 10%: 10.4 ball + 24.1 shell-sample vectors per request, ~0.2 searches' worth of reads if re-read).
 - Queued: timed recordings (ours with the mini cache, and the best alternative) for TriviaQA 0.6 10%, SPACEV 0.6 10%, MedRAG 0.3%,
   then their replays and node-cache arms, one at a time (run_replay_io2.sh).
+
+#### 9as (cont.). Replays on the other workloads (11-21 00:15 - 08:15)
+First 20,000 requests after warm-up (MedRAG: all 8,000), 16 clients, 8 DiskANN processes, base node cache; ours = continuous
+greedy, top-128 lists, mini cache (TriviaQA / SPACEV 10% share, MedRAG none: no exact repeats), I/O-complete; QPS ratio to
+DiskANN alone in the same run:
+| cell | DiskANN QPS | ours (hit %) | best alternative (hit %) | node cache (nodes) | ours / best other |
+|---|---|---|---|---|---|
+| TripClick 10% | 87.9 | 1.27x (25.1) | Aker 1.20x (17.2) | 1.33x (154,753) | 0.96x (node cache) |
+| TriviaQA 0.6 10% | 14.1 | 1.65x (43.6) | Aker 1.23x (19.0) | 1.10x (887,421) | 1.34x |
+| SPACEV 0.6 10% | 99.4 | 1.11x (25.7) | Aker 1.09x (8.7) | 1.67x (1,650,054) | 0.66x (node cache) |
+| MedRAG 0.3% | 75.0 | 5.00x (89.2) | QVCache 1.85x (46.4) | 1.05x (43,008) | 2.70x |
+- The disk model ((1 - h) x miss cost + audits) predicts every ours / Aker / QVCache ratio within ~0.01-0.02.
+- SPACEV: DiskANN's tuned search list is 100, so top-128 misses needed L = 128: each miss cost ~1.17 searches, eating the gain.
+  Rule R = min(500, L): SPACEV with R = 100 (balls up to K 50) reaches 32.9% (vs 37.5% at R = 128) with no extra cost: disk
+  model 1.42x vs 1.31x (replay queued). The node cache is strong on SPACEV because its memory is matched in bytes to our cache,
+  which stores SPACEV's int8 vectors as float32 (4x the bytes; 1.65M nodes of 360 bytes). Storing them as int8 would quarter
+  our cache's bytes (or let it hold ~4x more vectors).
+- The 20k window is early (our hit rate still rising: TriviaQA 43.6% vs 60.7% over the stream). Whole-stream replays (none /
+  ours / alternative; node-cache ratios reused) queued: run_replay_full.sh.
+- Single-thread latency estimate over the whole stream from the same recordings (mean cache-path time + miss share x DiskANN-alone
+  mean): TripClick 10% ours 1.27x / Aker 1.21x / node cache 0.93x; TriviaQA 0.6 10% 2.12x / 1.37x / 1.00x; SPACEV 0.6 10% (R 128)
+  1.45x / 1.14x / 1.11x; MedRAG 0.3% 6.85x / QVCache 1.83x / 1.01x. (Misses charged DiskANN's mean, not their own measured time.)
+- TriviaQA hit path: 8.8 ms per hit (stage-2 serve at ef 2048 over 1M cached vectors), 1.2 ms per miss; the replay's single cache
+  thread does not bind there (~4.5 ms per request at 23 QPS).
