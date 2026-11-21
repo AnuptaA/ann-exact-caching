@@ -211,6 +211,7 @@ class Core {
         }
         index_ready_ = true;
         built_ = true;
+        built_slots_ = (int)rev_.size();
     }
 
     // ---- serving -------------------------------------------------------------------------------
@@ -349,8 +350,186 @@ class Core {
                               py::array_t<float>(r.dists.size(), r.dists.data()));
     }
 
+    // the mini cache survives a construction: dump (oldest first) and load by hash
+    py::list mini_dump() const {
+        py::list out;
+        for (auto it = mini_lru_.rbegin(); it != mini_lru_.rend(); ++it)
+            out.append(py::make_tuple(it->first, py::array_t<int64_t>(it->second.ids.size(), it->second.ids.data()),
+                                      py::array_t<float>(it->second.dists.size(), it->second.dists.data())));
+        return out;
+    }
+
+    void mini_put_hash(uint64_t h, py::array_t<int64_t, py::array::c_style | py::array::forcecast> ids,
+                       py::array_t<float, py::array::c_style | py::array::forcecast> dists) {
+        if (mini_capacity_ == 0) return;
+        MiniEntry e;
+        e.ids.assign(ids.data(), ids.data() + ids.shape(0));
+        e.dists.assign(dists.data(), dists.data() + dists.shape(0));
+        auto it = mini_map_.find(h);
+        if (it != mini_map_.end()) {
+            it->second->second = std::move(e);
+            mini_lru_.splice(mini_lru_.begin(), mini_lru_, it->second);
+            return;
+        }
+        if (mini_lru_.size() >= mini_capacity_) mini_evict();
+        mini_lru_.emplace_front(h, std::move(e));
+        mini_map_[h] = mini_lru_.begin();
+    }
+
+    // hit by hash (no query vector needed): used when a stored response is looked up by key
+    py::object mini_get_hash(uint64_t h, int K) {
+        Result r;
+        if (!mini_get(h, K, r)) return py::none();
+        return py::make_tuple(py::array_t<int64_t>(r.ids.size(), r.ids.data()),
+                              py::array_t<float>(r.dists.size(), r.dists.data()));
+    }
+
     size_t mini_size() const { return mini_lru_.size(); }
     size_t mini_capacity() const { return mini_capacity_; }
+
+    // ---- updates (U2 to U5) --------------------------------------------------------------------
+
+    // U2: remove stale pointers and free the dead slots (called once 5% of the pool has been deleted)
+    int sweep() {
+        size_t n = data_id_.size();
+        std::vector<int32_t> remap(n, -1);
+        int32_t next = 0;
+        for (size_t s = 0; s < n; s++)
+            if (data_alive_[s]) remap[s] = next++;
+        int removed = (int)n - next;
+        if (removed == 0) return 0;
+        std::vector<float> vec;
+        std::vector<int64_t> id;
+        vec.reserve((size_t)next * d);
+        for (size_t s = 0; s < n; s++) {
+            if (!data_alive_[s]) continue;
+            vec.insert(vec.end(), data_vec_.begin() + s * d, data_vec_.begin() + (s + 1) * d);
+            id.push_back(data_id_[s]);
+        }
+        data_vec_.swap(vec);
+        data_id_.swap(id);
+        data_count_.assign(next, 0);
+        data_alive_.assign(next, 1);
+        for (auto& kv : rev_) kv.second = remap[kv.second];
+        for (Entry& e : entries_) {
+            std::vector<int32_t> keep;
+            for (int32_t s : e.resp)
+                if (remap[s] >= 0) keep.push_back(remap[s]);
+            e.resp.swap(keep);
+            for (int32_t s : e.resp) data_count_[s]++;
+        }
+        dstamp_.assign(next, 0);
+        depoch_ = 0;
+        inv_ready_ = false;
+        return removed;
+    }
+
+    int n_built_slots() const { return built_slots_; }
+
+    // distance from an entry's center to its farthest live member
+    double farthest_live(const Entry& e) const {
+        for (size_t t = e.resp.size(); t-- > 0;)
+            if (data_alive_[e.resp[t]]) return l2(e.center.data(), &data_vec_[(size_t)e.resp[t] * d], d);
+        return 0.0;
+    }
+
+    int live_len(const Entry& e) const {
+        int c = 0;
+        for (int32_t s : e.resp) c += data_alive_[s] ? 1 : 0;
+        return c;
+    }
+
+    // U3 to U5: lazy batched inserts. Returns (admitted, frozen, ignored, headroom_left)
+    py::tuple insert_batch(py::array_t<int64_t, py::array::c_style | py::array::forcecast> ids,
+                           py::array_t<float, py::array::c_style | py::array::forcecast> vecs,
+                           double headroom_left, int rounds, int per_round) {
+        if (ids.ndim() != 1 || vecs.ndim() != 2 || vecs.shape(0) != ids.shape(0) || vecs.shape(1) != d)
+            throw std::invalid_argument("insert ids and vectors do not match");
+        int admitted = 0, frozen = 0, ignored = 0;
+        for (py::ssize_t t = 0; t < ids.shape(0); t++) {
+            const float* v = vecs.data() + (size_t)t * d;
+            int64_t id = ids.data()[t];
+            if (rev_.count(id)) {
+                ignored++;
+                continue;
+            }
+            std::vector<int> joins = containing_entries(v, rounds, per_round);
+            if (joins.empty()) {
+                ignored++;
+                continue;
+            }
+            // lists that deletes shortened below their built length take the insert directly (U4)
+            std::vector<char> direct(joins.size());
+            for (size_t i = 0; i < joins.size(); i++) direct[i] = live_len(entries_[joins[i]]) < entries_[joins[i]].built_len;
+            double added = data_slot_bytes(d) + reverse_map_bytes() + 4.0 * joins.size();
+            if (added <= headroom_left) {
+                int32_t slot = new_slot(id, v);
+                for (int e : joins) join_list(e, slot, v);
+                headroom_left -= added;
+                admitted++;
+                continue;
+            }
+            // headroom used: admit only if displacing the farthest member of each list frees as many slots
+            std::unordered_map<int32_t, int> drops;
+            std::vector<int32_t> farthest(joins.size(), -1);
+            for (size_t i = 0; i < joins.size(); i++) {
+                if (direct[i]) continue;
+                const Entry& e = entries_[joins[i]];
+                for (size_t k = e.resp.size(); k-- > 0;)
+                    if (data_alive_[e.resp[k]]) {
+                        farthest[i] = e.resp[k];
+                        break;
+                    }
+                if (farthest[i] >= 0) drops[farthest[i]]++;
+            }
+            int freed = 0;
+            for (const auto& kv : drops)
+                if (data_count_[kv.first] - kv.second <= 0) freed++;
+            bool all_direct = true;
+            for (size_t i = 0; i < joins.size(); i++) all_direct = all_direct && direct[i];
+            if (freed < 1 && !all_direct) {   // U4: lists shortened by deletes take the insert directly
+                frozen++;
+                continue;
+            }
+            int32_t reuse = -1;
+            for (size_t i = 0; i < joins.size(); i++) {
+                if (farthest[i] < 0) continue;
+                Entry& e = entries_[joins[i]];
+                auto pos = std::find(e.resp.begin(), e.resp.end(), farthest[i]);
+                if (pos != e.resp.end()) e.resp.erase(pos);
+                data_count_[farthest[i]]--;
+            }
+            for (const auto& kv : drops)
+                if (data_count_[kv.first] <= 0 && reuse < 0) reuse = kv.first;
+            int32_t slot;
+            if (reuse >= 0) {
+                rev_.erase(data_id_[reuse]);
+                std::copy(v, v + d, data_vec_.begin() + (size_t)reuse * d);
+                data_id_[reuse] = id;
+                data_alive_[reuse] = 1;
+                data_count_[reuse] = 0;
+                rev_[id] = reuse;
+                slot = reuse;
+            } else {
+                slot = new_slot(id, v);
+            }
+            for (int e : joins) join_list(e, slot, v);
+            for (const auto& kv : drops)
+                if (data_count_[kv.first] <= 0 && kv.first != slot) {
+                    data_alive_[kv.first] = 0;
+                    rev_.erase(data_id_[kv.first]);
+                }
+            for (int e : joins) {
+                Entry& en = entries_[e];
+                // the radius shrinks to the new last member of a list that lost its farthest member
+                for (size_t i = 0; i < joins.size(); i++)
+                    if (joins[i] == e && farthest[i] >= 0) en.radius = (float)farthest_live(en);
+            }
+            admitted++;
+        }
+        inv_ready_ = false;
+        return py::make_tuple(admitted, frozen, ignored, headroom_left);
+    }
 
     // ---- accounting and inspection -------------------------------------------------------------
 
@@ -435,6 +614,7 @@ class Core {
     int code_bytes_;
     bool built_ = false, index_ready_ = false, inv_ready_ = false, quantizer_set_ = false, has_model_ = false;
     int ef_search_ = 64;
+    int built_slots_ = 0;
     double budget_ = 0;
     std::unordered_map<std::string, double> external_;
 
@@ -459,6 +639,67 @@ class Core {
     size_t mini_capacity_ = 0;
     std::list<std::pair<uint64_t, MiniEntry>> mini_lru_;
     std::unordered_map<uint64_t, std::list<std::pair<uint64_t, MiniEntry>>::iterator> mini_map_;
+
+    int32_t new_slot(int64_t id, const float* v) {
+        int32_t slot = (int32_t)data_id_.size();
+        data_vec_.insert(data_vec_.end(), v, v + d);
+        data_id_.push_back(id);
+        data_count_.push_back(0);
+        data_alive_.push_back(1);
+        rev_[id] = slot;
+        return slot;
+    }
+
+    // keep the list ranked by distance to the center
+    void join_list(int e, int32_t slot, const float* v) {
+        Entry& en = entries_[e];
+        double dn = l2(en.center.data(), v, d);
+        size_t pos = en.resp.size();
+        while (pos > 0) {
+            int32_t s = en.resp[pos - 1];
+            if (data_alive_[s] && l2(en.center.data(), &data_vec_[(size_t)s * d], d) <= dn) break;
+            pos--;
+        }
+        en.resp.insert(en.resp.begin() + pos, slot);
+        data_count_[slot]++;
+    }
+
+    // U3: entries whose sphere holds v, found through the center index: per_round centers per round,
+    // up to `rounds` rounds, stopping after a round that adds no entry
+    std::vector<int> containing_entries(const float* v, int rounds, int per_round) {
+        std::vector<int> found;
+        size_t ne = entries_.size();
+        if (ne == 0) return found;
+        std::vector<char> seen(ne, 0);
+        for (int r = 1; r <= rounds; r++) {
+            size_t k = std::min<size_t>((size_t)r * per_round, ne);
+            std::vector<std::pair<double, int>> near;
+            if (index_) {
+                index_->setEf(std::max<size_t>(ef_search_, k));
+                auto pq = index_->searchKnn(v, k);
+                while (!pq.empty()) {
+                    near.emplace_back(0.0, (int)pq.top().second);
+                    pq.pop();
+                }
+            } else {
+                for (size_t e = 0; e < ne; e++) near.emplace_back(l2(v, entries_[e].center.data(), d), (int)e);
+                std::sort(near.begin(), near.end());
+                near.resize(k);
+            }
+            bool changed = false;
+            for (const auto& pr : near) {
+                int e = pr.second;
+                if (seen[e]) continue;
+                seen[e] = 1;
+                if (l2(v, entries_[e].center.data(), d) <= (double)entries_[e].radius) {
+                    found.push_back(e);
+                    changed = true;
+                }
+            }
+            if (!changed || k >= ne) break;
+        }
+        return found;
+    }
 
     void check_query(const py::array_t<float, py::array::c_style | py::array::forcecast>& q) const {
         if (q.ndim() != 1 || q.shape(0) != d) throw std::invalid_argument("query has wrong shape");
@@ -665,6 +906,9 @@ PYBIND11_MODULE(_recal_core, mod) {
         .def("mini_set_capacity", &Core::mini_set_capacity)
         .def("mini_put", &Core::mini_put)
         .def("mini_get", &Core::mini_get_py)
+        .def("mini_dump", &Core::mini_dump)
+        .def("mini_put_hash", &Core::mini_put_hash)
+        .def("mini_get_hash", &Core::mini_get_hash)
         .def("mini_size", &Core::mini_size)
         .def("mini_capacity", &Core::mini_capacity)
         .def("bytes_by_structure", &Core::bytes_by_structure)
@@ -673,6 +917,10 @@ PYBIND11_MODULE(_recal_core, mod) {
         .def("n_data_slots", &Core::n_data_slots)
         .def("n_dead_slots", &Core::n_dead_slots)
         .def("delete_id", &Core::delete_id)
+        .def("sweep", &Core::sweep)
+        .def("n_built_slots", &Core::n_built_slots)
+        .def("insert_batch", &Core::insert_batch, py::arg("ids"), py::arg("vecs"), py::arg("headroom_left"),
+             py::arg("rounds") = 5, py::arg("per_round") = 16)
         .def("n_shell_slots", &Core::n_shell_slots)
         .def_property_readonly("dim", &Core::dim)
         .def_property_readonly("k_max", &Core::k_max)

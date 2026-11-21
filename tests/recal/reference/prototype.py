@@ -3,10 +3,13 @@
 They are the test oracle for the ReCal core and policy and are not imported by recal/."""
 
 from collections import OrderedDict
+from statistics import NormalDist
 
 import numpy as np
 
 EPS = 1e-12
+Z_CAL = NormalDist().inv_cdf(0.95)
+FLOOR = 100.0
 
 
 def fit_balls(nr, de, radius, n, fill):
@@ -159,3 +162,71 @@ class MiniCache:
 
     def bump_epoch(self):
         self.epoch += 1
+
+
+class BinnedDeque:
+    def __init__(self, thr_desc, size, target, floor=FLOOR, z=Z_CAL, skew=False):
+        self.skew = skew
+        self.last = None
+        self.s3 = np.zeros(len(thr_desc) + 1)
+        self.thr = np.asarray(thr_desc, dtype=np.float64)
+        self.nb = len(self.thr)
+        self.size, self.target, self.floor, self.z = size, target, floor, z
+        self.b = np.zeros(size, dtype=np.int64)
+        self.y = np.zeros(size)
+        self.w = np.zeros(size)
+        self.head, self.n = 0, 0
+        self.sums = np.zeros((4, self.nb + 1))   # W, sum w y, sum w y^2, sum w^2
+
+    def bin_of(self, s):
+        """First threshold (strict to lenient) the score clears; nb = below all."""
+        return np.searchsorted(-self.thr, -np.asarray(s), side="left")
+
+    def _add(self, b, y, w, sign):
+        self.sums[0, b] += sign * w
+        self.sums[1, b] += sign * w * y
+        self.sums[2, b] += sign * w * y * y
+        self.sums[3, b] += sign * w * w
+        self.s3[b] += sign * w * y * y * y
+
+    def push(self, b, y, w):
+        i = (self.head + self.n) % self.size
+        if self.n == self.size:
+            self._add(self.b[self.head], self.y[self.head], self.w[self.head], -1.0)
+            self.head = (self.head + 1) % self.size
+            i = (self.head + self.n - 1) % self.size
+        else:
+            self.n += 1
+        self.b[i], self.y[i], self.w[i] = b, y, w
+        self._add(b, y, w, 1.0)
+
+    def lam(self):
+        """(threshold or None, effective sample size at it)."""
+        c = np.cumsum(self.sums[:, :self.nb], axis=1)
+        W, S1, S2, SW2 = c
+        best, best_ess = None, 0.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ess = W * W / SW2
+            mean = S1 / W
+            denom = W - SW2 / W
+            sd = np.sqrt(np.maximum(S2 - W * mean ** 2, 0.0) / denom)
+            mu3 = (np.cumsum(self.s3[:self.nb]) - 3 * mean * S2 + 3 * mean ** 2 * S1
+                   - mean ** 3 * W) / W
+            gamma = mu3 / np.maximum(S2 / W - mean ** 2, 1e-12) ** 1.5
+            mult = self.z
+            if self.skew:
+                mult = self.z + np.maximum(0.0, -gamma) * (2 * self.z ** 2 + 1) / (
+                    6 * np.sqrt(ess))
+            lcb = mean - mult * sd / np.sqrt(ess)
+        best_i = None
+        for i in range(self.nb):
+            if not np.isfinite(ess[i]) or ess[i] < self.floor:
+                continue
+            if lcb[i] >= self.target:
+                best, best_ess, best_i = float(self.thr[i]), float(ess[i]), i
+            else:
+                break
+        self.last = None if best_i is None else {
+            "ess": best_ess, "sd": float(sd[best_i]), "gamma": float(gamma[best_i]),
+            "mean": float(mean[best_i]), "lcb": float(lcb[best_i])}
+        return best, best_ess
