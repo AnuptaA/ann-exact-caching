@@ -72,7 +72,7 @@ All paths are relative to the repository root and gitignored.
 
 Backends:
 - DiskANN (advisor's pipeline): `eval_real_backend.py --index diskann --build-only`, `latency_probe.py`, `select_backend.py`, then `eval_real_backend.py --fixed <target>:<L> --beam <W>`; the chain is `run_backend_redo.sh` (see `simulations/approximate_hits/README.md`, "Timing plot"). Search list and beam are chosen per workload for recall 0.95.
-- pgvector (main's harness): `make q1-pg-start`, `make q1-generate DATASET=<name>` (loads, indexes, tunes `ef_search` for recall 0.9, writes the answer table); `make q1-smoke` runs the stack on a tiny dataset.
+- pgvector (main's harness): `make q1-pg-start`, `make q1-generate DATASET=<name>` (loads, indexes, tunes `ef_search` for recall 0.95, writes the answer table); `make q1-smoke` runs the stack on a tiny dataset.
 
 Baselines:
 - Aker (real library through the shim): `aker_real/aker_real_jobs.py --preps <prep> --only stable|--tuned --budgets ...`, evaluated by `aker_real/eval_aker_real.py`.
@@ -87,7 +87,7 @@ Workloads and experiments (advisor's pipeline):
 
 Job runner: job generators print one shell command per line and each command skips itself when its result JSON exists. `run_jobs.py <file> --workers N --cores-per-job C --first-core F` runs the lines with `taskset` pinning (rewriting `.venv-core/bin/python`). `mx_run_job.sh` admits a job only when free memory allows it (learned per-class peaks in `$RECAL_QUEUE_DIR/peaks.tsv`, retries after out-of-memory kills, `HOLD` and `skip.txt` files); `mx_complete.sh`, `mx_requeue.sh` and `mx_watchdog4.sh` re-run missing jobs and supervise. Timing runs go through `run_timing_batch2.sh`, which suspends other jobs and checks that the machine is quiet. The runner assumes a large Linux host with `/proc`.
 
-Tests (no data or services): `.venv/bin/python -m pytest tests/approximate_hits tests/base tests/cache tests/utils tests/workloads tests/harness`. `make test-q1` runs the harness and workload tests. The results of the last run are in `INTEGRATION.md`.
+Tests (no data or services): `.venv/bin/python -m pytest tests/approximate_hits tests/base tests/cache tests/utils tests/workloads tests/harness`. `make test-q1` runs the harness and workload tests. The old exact-cache suites `tests/esci`, `tests/sift` and `tests/synthetic` are the advisor's older suites; they are excluded from the default collection (`pytest.ini`) and also fail on `origin/jd`. Run them explicitly by path. The results of the last run are in `INTEGRATION.md`.
 
 ## ReCal implementation (`recal/`)
 
