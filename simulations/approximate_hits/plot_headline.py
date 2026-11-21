@@ -146,9 +146,10 @@ def collect(prep, stream, budget, real_aker):
     # until the hit ratio stops improving meaningfully, here: < 5% relative gain to the next D)
     # doc 9at: the final-config sweep (results/final/<prep>/b<size>/headline, one seed); shown only where it ran
     out["ours_final"] = None
-    r = sim_stats(RES / "final" / prep / f"b{budget:g}" / "headline" / "ogreedy.json")
-    if r and SHOW_FINAL:
-        out["ours_final"] = pick([candidate("final", [r])])
+    runs_f = [sim_stats(RES / "final" / prep / f"b{budget:g}" / d / "ogreedy.json") for d in ("headline", "headline_s1")]
+    runs_f = [x for x in runs_f if x]
+    if runs_f and SHOW_FINAL:
+        out["ours_final"] = pick([candidate("final", runs_f)])
     out["aker_paper"] = None
     f = RES / "aker_real" / prep / f"trace_b{budget:g}" / "at0.25_d0.json"
     if real_aker and f.exists():
