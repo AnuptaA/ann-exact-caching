@@ -413,6 +413,16 @@ def run_timing(args, db, q, top, stream):
     return res
 
 
+def write_result(out, res, **dump_kwargs):
+    try:
+        from recal.measure.jobs_util import atomic_write_json, stamp_result
+    except ImportError:
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_text(json.dumps(res, **dump_kwargs))
+        return
+    atomic_write_json(out, stamp_result(res), **dump_kwargs)
+
+
 def main():
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--prep", type=str, default=str(RES / "online" / "spacev-aker-0.99"))
@@ -469,9 +479,8 @@ def main():
     if args.timing:
         res = run_timing(args, db, q, top, stream)
         if args.out:
-            Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-            Path(args.out).write_text(json.dumps(res, indent=1))
-        return
+            write_result(args.out, res, indent=1)
+        return 0
     res = run_quality(args, db, q, World(args, prep, top), stream)
     phase_key = f"phase_{args.stream}" if args.stream != "trace" else None
     streams = np.load(prep / "streams.npz")
@@ -487,9 +496,9 @@ def main():
                 f"vs backend {s['retention_vs_backend']:.4f}; mean ms {s['mean_ms']}; "
                 f"{s['seconds']:.0f} s")
     if args.out:
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.out).write_text(json.dumps(res))
+        write_result(args.out, res)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

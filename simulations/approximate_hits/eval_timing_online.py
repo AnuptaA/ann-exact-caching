@@ -917,8 +917,12 @@ class QVCacheFast:
         self.dk = diskannpy
         self.db, self.q, self.k, self.dim = db, q, args.k, db.shape[1]
         self.miss_k = args.k
-        self.n_mini, self.D, self.alpha = args.qv_mini, args.qv_D, 0.9
-        self.cap = int(args.budget * len(db) / self.n_mini)
+        self.n_mini, self.D, self.alpha = args.qv_mini, args.qv_D, args.qv_alpha
+        if args.qv_legacy_cap:        # old rule: the budget counts vectors only, the graph links are free
+            self.cap = int(args.budget * len(db) / self.n_mini)
+        else:                         # capacity in bytes: vector, id and the graph links all count against M
+            per_vector = self.dim * 4 + 8 + 32 * 4
+            self.cap = int(args.budget * len(db) * self.dim * 4 / per_vector / self.n_mini)
         w = np.asarray(q[warm_q], dtype=np.float64)                    # PCA on the warm-up queries
         self.mu = w.mean(axis=0)
         _, _, vt = np.linalg.svd(w - self.mu, full_matrices=False)
@@ -1051,7 +1055,9 @@ def main():
     ap.add_argument("--prox-frac", type=float, default=None,
                     help="Aker Proximity mode: threshold = this fraction of the median squared NN distance "
                          "(as eval_aker_real.py --prox-frac)")
-    ap.add_argument("--qv-D", type=float, default=0.0)
+    ap.add_argument("--qv-D", type=float, default=0.075)      # the paper's value (online_sim uses the same)
+    ap.add_argument("--qv-alpha", type=float, default=0.9)
+    ap.add_argument("--qv-legacy-cap", action="store_true", help="capacity in vectors only (old rule)")
     ap.add_argument("--qv-mini", type=int, default=4)
     ap.add_argument("--qv-dims", type=int, default=16)
     ap.add_argument("--qv-buckets", type=int, default=8)
@@ -1072,8 +1078,12 @@ def main():
     ap.add_argument("--no-backend-arms", action="store_true",
                     help="skip DiskANN alone / equal memory (measured once per workload by "
                          "eval_timing_backend.py, doc 9ad); speedups are then computed by plot_timing")
+    ap.add_argument("--legacy-charge", action="store_true",
+                    help="composed timing: charge only backend calls of depth k (old behaviour; "
+                         "deeper misses can be charged nothing)")
     ap.add_argument("--out", required=True)
-    from simulations.approximate_hits.timing_env import add_args, make_guard
+    from simulations.approximate_hits.timing_env import (
+        add_args, make_guard, backend_charge, summarize_charges)
     add_args(ap)
     args = ap.parse_args()
     if os.environ.get("NO_GC"):           # diagnostic (doc 9ag): no cyclic GC pauses inside timed requests
@@ -1197,6 +1207,7 @@ def main():
     maint = 0.0
     audit_s, n_audit_timed = 0.0, 0
     trace = []
+    miss_charges, n_timed_misses, approx_depths = [], 0, set()
     t0 = time.time()
     for i, qi in enumerate(req.tolist()):
         t_req = args.warmup + i
@@ -1205,8 +1216,11 @@ def main():
         chg = [0.0, False]                   # composed timing: charge of the request's backend call
         if compose is not None:
             def backend(qi_, kk, _timed=timed, _i=i):
-                if _timed and kk == args.k and not chg[1]:
-                    chg[0], chg[1] = float(compose[tj_of[_i]]), True
+                if _timed and not chg[1] and (kk == args.k or not args.legacy_charge):
+                    chg[0], approx = backend_charge(float(compose[tj_of[_i]]), kk, args.k)
+                    chg[1] = True
+                    if approx:
+                        approx_depths.add(kk)
                 return stored(qi_, kk)
         else:
             backend = live if timed else stored
@@ -1250,6 +1264,10 @@ def main():
             m.on_miss(t_req, qi, x, ids, ix)
             answer = ids[:args.k]
         m.after(t_req)
+        if timed and not hit and compose is not None:
+            n_timed_misses += 1
+            if chg[1]:
+                miss_charges.append(chg[0])
         if timed:
             total.append(time.perf_counter() - a - (getattr(m, "background", 0.0) + maint - bg0) + chg[0]
                          - total_excl)
@@ -1268,6 +1286,12 @@ def main():
                         f"{hits[:i + 1].mean():.3f}")
     total = np.array(total)
     th = hits[timed_mask]
+    charges = None
+    if compose is not None:
+        charges = summarize_charges(miss_charges, n_timed_misses, approx_depths)
+        charges["legacy_charge"] = bool(args.legacy_charge)
+        if not args.legacy_charge:
+            assert charges["n_charged"] == charges["n_misses"], f"uncharged misses: {charges}"
     has_sim = not np.all(np.isnan(ret_sim))
     res = {"args": vars(args), "search_list": L, "n": n, "n_timed": int(timed_mask.sum()),
            "hit_rate": float(hits.mean()), "hit_rate_timed": float(th.mean()),
@@ -1278,6 +1302,7 @@ def main():
            # the simulator's (and the guarantee's) retention: share of DiskANN's answer cached
            "retention_sim_hits": float(np.nanmean(ret_sim[hits])) if has_sim and hits.any() else None,
            "cache_memory_bytes": int(mem0),
+           "charges": charges,
            "background_rebuild_s": float(getattr(m, "rebuild_s", 0.0)),
            "background_maintenance_s_timed": float(maint),
            # audits (doc 9af): not in any request's latency; their own cost, over the timed requests
@@ -1301,7 +1326,7 @@ def main():
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(str(Path(args.out).with_suffix("")) + "_lat.npz", idx=np.flatnonzero(timed_mask),
                             cache=total, hit=th)
-        Path(args.out).write_text(json.dumps(res, indent=1))
+        write_json_atomic(Path(args.out), res)
         logger.info(f"environment {res['environment']['verdict']} (backend arms skipped)")
         return
     req_all = req
@@ -1333,7 +1358,13 @@ def main():
     np.savez_compressed(str(Path(args.out).with_suffix("")) + "_lat.npz", idx=np.flatnonzero(timed_mask),
                         cache=total, hit=th, backend=lat,
                         backend_mem=lat_mem if lat_mem is not None else np.empty(0))
-    Path(args.out).write_text(json.dumps(res, indent=1))
+    write_json_atomic(Path(args.out), res)
+
+
+def write_json_atomic(path: Path, obj) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(obj, indent=1))
+    os.replace(tmp, path)
 
 
 if __name__ == "__main__":

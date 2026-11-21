@@ -42,6 +42,10 @@ suspend_all() {   # every python process of ours except the timing runs (registr
   # downloads); their clients and download loops retry after the resume
   for p in $(ps -u "$(id -u)" -o pid=,comm= | awk '$2 ~ /^(python|llama-server|curl)/ {print $1}'); do
     [ -f $REG/$p ] && [ "$(awk '{print $2}' $REG/$p)" = timing ] && continue
+    # the guard registers the timing python and its monitor for the whole run; also skip
+    # any child of a registered timing process
+    pp=$(ps -o ppid= -p $p 2>/dev/null | tr -d ' ')
+    [ -n "$pp" ] && [ -f $REG/$pp ] && [ "$(awk '{print $2}' $REG/$pp)" = timing ] && continue
     grep -qx "$p" $M/$NAME.stopped || { kill -STOP $p 2>/dev/null && echo $p >> $M/$NAME.stopped; }
   done
 }

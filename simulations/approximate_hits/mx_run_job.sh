@@ -19,9 +19,15 @@
 #    max(prior, 1.2 x largest finished peak, 1.1 x largest killed peak) (a killed run's peak is a
 #    lower bound on its need, not evidence of more: kills follow the machine being full; 1.6 x
 #    ratcheted estimates up under pressure);
-#  - retries: a JSON job that ends without its JSON and without a traceback (killed) is retried
-#    with back-off 2-32 min, up to 20 attempts; a job without a JSON succeeds on exit status 0 and
-#    is retried the same way on a kill signal (exit > 128).
+#  - freshness (M5): an existing JSON counts as done only if its config_hash matches the job line
+#    (recal.measure.jobs_util check); a stale or unreadable JSON is moved to <json>.stale and the
+#    job reruns; results without a hash are accepted (MX_STRICT_HASH=1: stale; MX_TRUST_EXISTING=1:
+#    old existence-only check). The check, the skip list and same_running run inside the admission
+#    lock, so two launchers cannot both start a job;
+#  - retries: only known transient failures (exit 137 / killed, or "machine not quiet" in the log)
+#    are retried, with back-off 2-32 min, up to 20 attempts; a Python traceback or any other non-zero
+#    exit is a hard failure. The job's log is truncated before every attempt. Decisions are logged
+#    to decisions.log in the queue dir.
 LINE=$2
 PRIO=${MX_PRIORITY:-plot}
 CAP=345
@@ -32,6 +38,31 @@ mkdir -p $REG
 JSON=$(printf '%s' "$LINE" | grep -o "\[ -f [^ ]*json" | cut -d' ' -f3)
 LOG=$(printf '%s' "$LINE" | grep -oE "> [^ ]*logs/[^ ]*\.txt" | cut -c3-)
 LOCK=${RECAL_QUEUE_DIR:-/tmp/mx}/admit.lock
+REPO=$(cd "$(dirname "$0")/../.." && pwd)
+PYBIN=${MX_PY:-$REPO/.venv-core/bin/python}
+[ -x "$PYBIN" ] || PYBIN=python3
+DECISIONS=${RECAL_QUEUE_DIR:-/tmp/mx}/decisions.log
+CHECK_FLAGS=""
+[ -n "$MX_STRICT_HASH" ] && CHECK_FLAGS="$CHECK_FLAGS --strict-hash"
+[ -n "$MX_TRUST_EXISTING" ] && CHECK_FLAGS="$CHECK_FLAGS --trust-existing"
+
+note() { echo "$(date +%T) ${JSON:-$KEY}: $*" >> $DECISIONS; }
+ju() { PYTHONPATH=$REPO${PYTHONPATH:+:$PYTHONPATH} "$PYBIN" -m recal.measure.jobs_util "$@"; }
+freshness() {   # 0 fresh, 1 missing, 2 stale; falls back to existence if the checker cannot run
+  [ -n "$JSON" ] && [ -f "$JSON" ] || return 1
+  ju check "$JSON" "$LINE" $CHECK_FLAGS 2>/dev/null; r=$?
+  case $r in 0|1|2) return $r;; esac
+  note "checker failed (rc $r), using existence"
+  return 0
+}
+classify() {   # ok, retry or fatal for exit code $1 and the current log
+  c=$(ju classify "$1" "${LOG:-/dev/null}" 2>/dev/null)
+  case "$c" in ok|retry|fatal) echo $c; return;; esac
+  if [ "$1" -eq 0 ]; then echo ok
+  elif [ -n "$LOG" ] && grep -q Traceback "$LOG" 2>/dev/null; then echo fatal
+  elif [ "$1" -eq 137 ]; then echo retry
+  else echo fatal; fi
+}
 
 jkey() {   # job class: prep folder, budget, method / script (from a command line)
   printf '%s' "$1" | awk '{
@@ -95,32 +126,44 @@ register() {   # record python descendants of $1 (two levels: sh -c -> python, s
   done
 }
 
-[ -n "$JSON" ] && [ -f "$JSON" ] && exit 0
-skipped && exit 0
-while [ -n "$JSON" ] && same_running; do sleep 60; done
-[ -n "$JSON" ] && [ -f "$JSON" ] && exit 0
 KEY=$(jkey "$LINE")
 try=0
 while :; do
-  skipped && exit 0
   EST=$(est_of "$LINE")
   admitted=0
+  finished=0
   exec 9> $LOCK
   if flock -w 30 9; then
-    g=$(growth); u=$(mem used); a=$(mem avail)
-    if [ ! -f ${RECAL_QUEUE_DIR:-/tmp/mx}/HOLD ] && [ $(( u + g + EST )) -le $CAP ] && [ $(( a - g - EST )) -ge $HEADROOM ]; then
-      sh -c "$LINE" &
-      job=$!
-      for i in 1 2 3 4 5 6 7 8 9 10; do      # until its python process is registered (counted)
-        register $job
-        grep -lx "$KEY $PRIO $EST" $REG/* 2>/dev/null | while read f; do [ -d /proc/${f##*/} ] && echo y; done | grep -q y && break
-        sleep 1
-      done
-      admitted=1
+    freshness; fr=$?
+    if [ $fr -eq 2 ]; then
+      note "stale result, moved to .stale and rerun"
+      mv -f "$JSON" "$JSON.stale"
+    fi
+    if [ $fr -eq 0 ]; then
+      note "fresh result exists, skip"; finished=1
+    elif skipped; then
+      note "listed in skip.txt, skip"; finished=1
+    elif [ -n "$JSON" ] && same_running; then
+      note "same job running elsewhere, wait"
+    else
+      g=$(growth); u=$(mem used); a=$(mem avail)
+      if [ ! -f ${RECAL_QUEUE_DIR:-/tmp/mx}/HOLD ] && [ $(( u + g + EST )) -le $CAP ] && [ $(( a - g - EST )) -ge $HEADROOM ]; then
+        [ -n "$LOG" ] && : > "$LOG"
+        sh -c "$LINE" &
+        job=$!
+        for i in 1 2 3 4 5 6 7 8 9 10; do      # until its python process is registered (counted)
+          register $job
+          grep -lx "$KEY $PRIO $EST" $REG/* 2>/dev/null | while read f; do [ -d /proc/${f##*/} ] && echo y; done | grep -q y && break
+          sleep 1
+        done
+        admitted=1
+        note "admitted (try $try, estimate $EST GB)"
+      fi
     fi
     flock -u 9
   fi
   exec 9>&-
+  [ $finished -eq 1 ] && exit 0
   if [ $admitted -eq 0 ]; then
     sleep $((20 + $(od -An -N1 -tu1 /dev/urandom) % 40))
     continue
@@ -134,18 +177,27 @@ while :; do
     sleep 20
   done
   wait $job; rc=$?
-  if { [ -n "$JSON" ] && [ -f "$JSON" ]; } || { [ -z "$JSON" ] && [ $rc -eq 0 ]; }; then
+  cls=$(classify $rc)
+  if [ -n "$JSON" ]; then
+    freshness; fr=$?
+    if [ $fr -eq 0 ]; then
+      [ $rc -ne 0 ] && note "exit $rc but a fresh result exists, accepted"
+      [ "$peak" -gt 0 ] && printf '%s\t%s\tok\n' "$KEY" "$peak" >> $PEAKS
+      exit 0
+    fi
+    [ $fr -eq 2 ] && cls=fatal
+  elif [ "$cls" = ok ]; then
     [ "$peak" -gt 0 ] && printf '%s\t%s\tok\n' "$KEY" "$peak" >> $PEAKS
     exit 0
   fi
-  if [ -n "$LOG" ] && grep -q "Traceback" "$LOG" 2>/dev/null; then
-    echo "$(date +%T) FAILED (traceback) ${JSON:-$KEY}" >> ${RECAL_QUEUE_DIR:-/tmp/mx}/failures.log; exit 1
-  fi
-  if [ -z "$JSON" ] && [ $rc -le 128 ]; then
-    echo "$(date +%T) FAILED (exit $rc) $KEY" >> ${RECAL_QUEUE_DIR:-/tmp/mx}/failures.log; exit 1
+  if [ "$cls" = ok ]; then cls=fatal; fi
+  if [ "$cls" = fatal ]; then
+    note "FAILED (exit $rc, no retry)"
+    echo "$(date +%T) FAILED (exit $rc) ${JSON:-$KEY}" >> ${RECAL_QUEUE_DIR:-/tmp/mx}/failures.log; exit 1
   fi
   [ "$peak" -gt 0 ] && printf '%s\t%s\tkilled\n' "$KEY" "$peak" >> $PEAKS
   try=$((try + 1))
+  note "transient failure (exit $rc), retry $try"
   echo "$(date +%T) died without output (try $try, $PRIO, peak ${peak} GB, next estimate $(est_of "$LINE") GB) ${JSON:-$KEY}" >> ${RECAL_QUEUE_DIR:-/tmp/mx}/failures.log
   [ $try -ge 20 ] && { echo "$(date +%T) GAVE UP after $try attempts ${JSON:-$KEY}" >> ${RECAL_QUEUE_DIR:-/tmp/mx}/failures.log; exit 1; }
   b=$try; [ $b -gt 5 ] && b=5

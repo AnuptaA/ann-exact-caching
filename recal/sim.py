@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from recal.backend import ExactBackend
+from recal.measure.jobs_util import stamp_result
 from recal.params import Params
 from recal.stored import StoredAnswers
 from recal.system import ReCal
@@ -141,7 +142,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = parser().parse_args()
-    result = run(args)
+    result = stamp_result(run(args))
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     tmp = out / f".recal{args.tag}.json.tmp"

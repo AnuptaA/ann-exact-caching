@@ -1894,7 +1894,11 @@ def main():
         ph = phase[:len(stream)]
         res["phase_starts"] = [0] + (np.flatnonzero(np.diff(ph)) + 1).tolist()
     name = f"{args.method}{args.tag}.json"
-    (out / name).write_text(json.dumps(res))
+    try:
+        from recal.measure.jobs_util import atomic_write_json, stamp_result
+        atomic_write_json(out / name, stamp_result(res))
+    except ImportError:
+        (out / name).write_text(json.dumps(res))
     logger.info(f"wrote {out / name}")
 
 

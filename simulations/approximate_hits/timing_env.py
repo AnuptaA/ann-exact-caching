@@ -161,12 +161,81 @@ def _pct(xs, q):
     return xs[min(int(q * len(xs)), len(xs) - 1)] if xs else 0.0
 
 
+MIN_SAMPLE_SHARE = 0.8
+
+
+def expected_samples(duration_s, every_s):
+    return max(int(duration_s / every_s), 1) if every_s > 0 else 1
+
+
+def compute_verdict(samples, duration_s, every_s, max_cores, max_io, start_ok,
+                    allow_unsampled=False, min_share=MIN_SAMPLE_SHARE):
+    """(verdict, reason) from monitor samples [(t, cores, mbps), ...].
+    quiet needs a quiet start check, enough samples and all samples within the limits;
+    too few samples give unknown (allow_unsampled: judge by what exists, as before)."""
+    cores = [s[1] for s in samples]
+    io = [s[2] for s in samples]
+    expected = expected_samples(duration_s, every_s)
+    if not start_ok:
+        return "contended", "start check not quiet"
+    if cores and _pct(cores, 0.95) > max_cores:
+        return "contended", f"other CPU p95 {_pct(cores, 0.95):.2f} cores > {max_cores}"
+    if io and max(io) > max_io:
+        return "contended", f"other disk max {max(io):.1f} MB/s > {max_io}"
+    if len(samples) < min_share * expected and not allow_unsampled:
+        return "unknown", f"{len(samples)} of {expected} expected samples (need {min_share:.0%})"
+    return "quiet", "ok"
+
+
+def backend_charge(base_s, depth, k):
+    """Charge (s) for one backend call of `depth` neighbors, given the measured
+    depth-k latency base_s. Deeper calls are charged at least base_s (lower bound).
+    Returns (charge_s, approximated)."""
+    if base_s is None or base_s <= 0:
+        raise ValueError(f"no backend latency for the charge (base_s={base_s})")
+    return float(base_s), depth != k
+
+
+def summarize_charges(charges, n_misses, approx_depths):
+    """charges: list of charges of the timed misses that were charged."""
+    return {"n_misses": int(n_misses), "n_charged": len(charges),
+            "min_charge_s": min(charges) if charges else None,
+            "approximated_depths": sorted(approx_depths)}
+
+
+def _registry_dir():
+    root = os.environ.get("RECAL_QUEUE_DIR", "/tmp/mx")
+    return os.path.join(root, "registry")
+
+
+def register_exempt(pid):
+    """Mark pid as a timing process so the batch's suspend loop skips it."""
+    d = _registry_dir()
+    if not os.path.isdir(d):
+        return None
+    path = os.path.join(d, str(pid))
+    try:
+        with open(path, "w") as f:
+            f.write("timing timing 0\n")
+    except OSError:
+        return None
+    return path
+
+
+def unregister_exempt(pid):
+    try:
+        os.remove(os.path.join(_registry_dir(), str(pid)))
+    except OSError:
+        pass
+
+
 class QuietGuard:
     """Refuse (or wait) at start unless the machine is quiet; sample the load of
     other processes during the run; summarize in report()."""
 
     def __init__(self, require=True, wait_min=0, max_other_cores=1.0, max_other_io_mbps=50.0,
-                 check_s=10, sample_s=2.0):
+                 check_s=10, sample_s=2.0, allow_unsampled=False):
+        self.allow_unsampled = allow_unsampled
         self.require, self.wait_min = require, wait_min
         self.max_cores, self.max_io = max_other_cores, max_other_io_mbps
         self.check_s, self.sample_s = check_s, sample_s
@@ -174,6 +243,7 @@ class QuietGuard:
         self._proc, self._t0, self._path = None, None, None
 
     def start(self):
+        register_exempt(os.getpid())
         deadline = time.time() + self.wait_min * 60
         while True:
             chk = check_quiet(self.check_s, self.max_cores, self.max_io)
@@ -196,6 +266,7 @@ class QuietGuard:
         self._proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "monitor",
                                        "--pid", str(os.getpid()), "--every", str(self.sample_s),
                                        "--out", self._path], stdin=subprocess.DEVNULL)
+        register_exempt(self._proc.pid)
         return chk
 
     def stop(self):
@@ -205,6 +276,8 @@ class QuietGuard:
                 self._proc.wait(timeout=10)
             except Exception:
                 self._proc.kill()
+            unregister_exempt(self._proc.pid)
+        unregister_exempt(os.getpid())
         self.samples = []
         try:
             with open(self._path) as f:
@@ -222,12 +295,16 @@ class QuietGuard:
         io = [s[2] for s in self.samples]
         n = max(len(cores), 1)
         above = sum(1 for c, m in zip(cores, io) if c > self.max_cores or m > self.max_io)
-        quiet = bool(self.start_check and self.start_check["ok"] and _pct(cores, 0.95) <= self.max_cores
-                     and max(io, default=0.0) <= self.max_io)
-        return {"verdict": "quiet" if quiet else "contended",
+        duration = getattr(self, "duration_s", 0.0)
+        start_ok = bool(self.start_check and self.start_check["ok"])
+        verdict, reason = compute_verdict(self.samples, duration, self.sample_s, self.max_cores,
+                                          self.max_io, start_ok, self.allow_unsampled)
+        return {"verdict": verdict, "reason": reason,
                 "limits": {"other_cores": self.max_cores, "other_io_mbps": self.max_io},
                 "start_check": self.start_check,
                 "during": {"samples": len(cores), "every_s": self.sample_s,
+                           "expected_samples": expected_samples(duration, self.sample_s),
+                           "verdict": verdict, "reason": reason,
                            "other_cores_mean": round(sum(cores) / n, 2),
                            "other_cores_p95": round(_pct(cores, 0.95), 2),
                            "other_cores_max": round(max(cores, default=0.0), 2),
@@ -247,6 +324,9 @@ def add_args(ap):
     ap.add_argument("--allow-busy", action="store_true",
                     help="run even if other processes are busy; the contention is recorded "
                          "(environment.verdict = contended)")
+    ap.add_argument("--allow-unsampled", action="store_true",
+                    help="do not require 80%% of the expected monitor samples for a quiet verdict "
+                         "(old behaviour: no samples counts as quiet)")
     ap.add_argument("--wait-quiet", type=float, default=0.0,
                     help="minutes to wait for the machine to become quiet before refusing")
     ap.add_argument("--max-other-cores", type=float, default=1.0,
@@ -255,7 +335,8 @@ def add_args(ap):
 
 def make_guard(args):
     return QuietGuard(require=not args.allow_busy, wait_min=args.wait_quiet,
-                      max_other_cores=args.max_other_cores)
+                      max_other_cores=args.max_other_cores,
+                      allow_unsampled=getattr(args, "allow_unsampled", False))
 
 
 def main():

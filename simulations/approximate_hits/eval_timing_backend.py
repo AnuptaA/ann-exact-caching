@@ -10,6 +10,8 @@ technique's run (eval_timing_online.py --no-backend-arms): the arms do not depen
                 cache at that size (FastHitPath bytes of the warm-up state; every technique has the
                 same vector budget), same requests.
 One query at a time, single thread, quiet-machine guard (timing_env.py), as eval_timing_online.py.
+The index files are evicted from the page cache before every pass (--no-evict disables), the order of the arms is
+shuffled per repetition (--seed, --repetitions) and the page cache residency before and after each pass is stored.
 
   .venv-ann/bin/python simulations/approximate_hits/eval_timing_backend.py --prep .../spacev-aker-0.6 \
       --states .../timing_v4/spacev-aker-0.6/state_b0.01.npz ... --sample-every 50 --out .../backend_s50.json
@@ -23,6 +25,8 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 import numpy as np
+
+from recal.measure import pagecache
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
@@ -44,6 +48,9 @@ def main():
     ap.add_argument("--node-cache", default="0",
                     help="base DiskANN node cache in both arms (doc 9af): a node count or 'auto' (the workload's "
                          "choice, eval_timing.base_node_cache); the equal-memory arm adds the cache's memory to it")
+    ap.add_argument("--no-evict", action="store_true", help="old behaviour: no page cache eviction between passes")
+    ap.add_argument("--repetitions", type=int, default=1)
+    ap.add_argument("--seed", type=int, default=0, help="arm order")
     ap.add_argument("--out", required=True)
     from simulations.approximate_hits.timing_env import add_args, make_guard
     add_args(ap)
@@ -73,25 +80,33 @@ def main():
     warm = np.ascontiguousarray(xs[np.asarray(stream[max(0, w - args.warm):w], dtype=np.int64)])
     logger.info(f"{prep.name}: {len(timed)} timed requests (1 in {args.sample_every}), search list {L}, beam {beam}")
     nodes0, nodes0_from = base_node_cache(prep.name) if args.node_cache == "auto" else (int(args.node_cache), None)
-    ix = open_diskann(index, nodes0)
-    time_backend(ix, warm, args.k, L, beam, args.gap_ms)
-    lat = time_backend(ix, xq, args.k, L, beam, args.gap_ms)
-    res = {"prep": prep.name, "search_list": L, "beam": beam, "index": index, "sample_every": args.sample_every, "gap_ms": args.gap_ms,
-           "node_cache": {"nodes": nodes0, "chosen_for": nodes0_from}, "warmup": w, "n_timed": int(len(timed)), "backend": dict(summary(lat)), "per_budget": {}}
-    logger.info(f"DiskANN alone ({nodes0} nodes cached): {res['backend']['mean_ms']:.2f} ms")
-    del ix
     node_bytes = db_native.shape[1] * np.dtype(db_native.dtype).itemsize + 4 + 64 * 4
+    arms = [("alone", nodes0, None)]
+    mems = {}
     for b, st in sorted(sts.items()):
         hp = FastHitPath(db, q, st, f"hnsw{KNN_EF}", "balls10")
-        mem0 = int(sum(hp.bytes.values()) + hp.extra_bytes)
+        mems[b] = int(sum(hp.bytes.values()) + hp.extra_bytes)
         del hp
-        nodes = int(mem0 // node_bytes) + nodes0
-        ix2 = open_diskann(index, nodes)
-        time_backend(ix2, warm, args.k, L, beam, args.gap_ms)
-        lat_m = time_backend(ix2, xq, args.k, L, beam, args.gap_ms)
-        res["per_budget"][f"{b:g}"] = dict(summary(lat_m), nodes_cached=nodes, cache_memory_bytes=mem0)
-        logger.info(f"budget {b:g}: equal memory ({nodes} nodes) {res['per_budget'][f'{b:g}']['mean_ms']:.2f} ms")
-        del ix2
+        arms.append((f"{b:g}", int(mems[b] // node_bytes) + nodes0, b))
+    lats = {name: [] for name, _, _ in arms}
+    runs = []
+    for rep in range(args.repetitions):
+        for name, nodes, _ in (arms if args.no_evict else pagecache.shuffled_arms(arms, args.seed, rep)):
+            state = {} if args.no_evict else {"evict": pagecache.evict([index])}
+            before = dict(pagecache.residency([index]), **state)
+            ix = open_diskann(index, nodes)
+            time_backend(ix, warm, args.k, L, beam, args.gap_ms)
+            lats[name].append(time_backend(ix, xq, args.k, L, beam, args.gap_ms))
+            runs.append({"arm": name, "nodes": nodes, "repetition": rep, "order_seed": args.seed,
+                         "page_cache": pagecache.record(before, pagecache.residency([index]))})
+            logger.info(f"{name}: {nodes} nodes cached, rep {rep}: {np.mean(lats[name][-1]) * 1e3:.2f} ms")
+            del ix
+    lat = np.concatenate(lats["alone"])
+    res["backend"] = dict(summary(lat))
+    res["runs"] = runs
+    for name, nodes, b in arms[1:]:
+        res["per_budget"][name] = dict(summary(np.concatenate(lats[name])), nodes_cached=nodes, cache_memory_bytes=mems[b])
+        logger.info(f"budget {name}: equal memory ({nodes} nodes) {res['per_budget'][name]['mean_ms']:.2f} ms")
     guard.stop()
     res["environment"] = guard.report()
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

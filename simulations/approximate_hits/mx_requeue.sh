@@ -9,6 +9,17 @@ M=${RECAL_QUEUE_DIR:-/tmp/mx}
 W=simulations/approximate_hits/mx_run_job.sh
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=.
 export LD_LIBRARY_PATH=${RECAL_THIRD_PARTY:-$HOME/third_party}/aker/build/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/boost-install/lib:${RECAL_THIRD_PARTY:-$HOME/third_party}/faiss-install/lib64:$LD_LIBRARY_PATH
+PYBIN=${MX_PY:-$PWD/.venv-core/bin/python}
+[ -x "$PYBIN" ] || PYBIN=python3
+CHECK_FLAGS=""
+[ -n "$MX_STRICT_HASH" ] && CHECK_FLAGS="$CHECK_FLAGS --strict-hash"
+[ -n "$MX_TRUST_EXISTING" ] && CHECK_FLAGS="$CHECK_FLAGS --trust-existing"
+fresh() {   # fresh <json> <line>: 0 when the result exists and matches the line's config_hash
+  [ -f "$1" ] || return 1
+  PYTHONPATH=$PWD${PYTHONPATH:+:$PYTHONPATH} "$PYBIN" -m recal.measure.jobs_util check "$1" "$2" $CHECK_FLAGS 2>/dev/null; r=$?
+  case $r in 0) return 0;; 2) return 1;; esac
+  return 0   # checker could not run: existence only
+}
 touch $M/requeued.log
 OUT=$M/requeue_$(date +%H%M%S).txt
 : > $OUT
@@ -18,7 +29,7 @@ RUNNING=$(ps -eo args | grep -E "^[^ ]*python[^ ]* -u [^ ]*(online_sim|eval_aker
 cat $LISTS 2>/dev/null | awk '!seen[$0]++' | while IFS= read -r line; do
   j=$(printf '%s' "$line" | grep -o "\[ -f [^ ]*json" | cut -d' ' -f3)
   l=$(printf '%s' "$line" | grep -oE "> [^ ]*logs/[^ ]*\.txt" | cut -c3-)
-  [ -n "$j" ] && [ ! -f "$j" ] && [ -n "$l" ] && [ -f "$l" ] || continue
+  [ -n "$j" ] && ! fresh "$j" "$line" && [ -n "$l" ] && [ -f "$l" ] || continue
   grep -q "Traceback" "$l" 2>/dev/null && continue                 # real failures are not retried
   case "$RUNNING" in *"--out $j"*|*"--out $(dirname $j)"*"--tag _${j##*/}"*) continue;; esac
   t=$(basename "$j" .json); tag=_${t#*_}

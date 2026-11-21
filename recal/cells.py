@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 
 from recal import accounting, sim
+from recal.measure.jobs_util import stamp_result
 
 SIM = "simulations/approximate_hits/online_sim.py"
 SIM_METHOD = {"prototype": "static", "aker": "aker", "qvcache": "qvcache"}
@@ -97,6 +98,7 @@ def main() -> None:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     result = sim.run(a) if a.method == "recal" else run_baseline(a.method, a)
+    stamp_result(result)
     tmp = out / f".{a.method}{a.tag}.json.tmp"
     tmp.write_text(json.dumps(result, default=str))
     tmp.replace(out / f"{a.method}{a.tag}.json")
