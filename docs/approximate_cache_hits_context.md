@@ -1,3 +1,8 @@
+> **This file is the advisor's running decision log** (sections numbered 1 to 9 and lettered 9a onward, newest at the end).
+> It is kept as written: some earlier sections are superseded by later ones and some headers are stale. For the repository map,
+> environments and how to run things, see the root `README.md`; for what was merged, see `INTEGRATION.md`; for open questions about the code,
+> see `REVIEW.md`. The system called ReCal in those files appears here as "ours".
+
 # Approximate Cache Hits via Radius Estimation: Problem Context
 
 Working notes that capture the current problem framing, what has been learned
