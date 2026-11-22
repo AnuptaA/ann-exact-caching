@@ -19,7 +19,8 @@ RES = Path("simulations/approximate_hits/results")
 T = RES / "throughput"
 PANELS = [("SPACEV, Zipf 0.6", "spacev-aker-0.6"), ("SPACEV, Zipf 0.99", "spacev-aker-0.99"),
           ("TriviaQA, Zipf 0.6", "triviaqa-ip-0.6"), ("TriviaQA, Zipf 0.99", "triviaqa-ip-0.99"),
-          ("MedRAG-Zipf (Proximity)", "medrag-ip"), ("TripClick real health-search log", "tripclick-ip")]
+          ("MedRAG-Zipf (Proximity)", "medrag-ip"), ("TripClick real health-search log", "tripclick-ip"),
+          ("ESCI (no repeated queries)", "esci1m")]
 
 
 def arms(path):
@@ -60,7 +61,7 @@ def cell(w, b):
 
 
 def main():
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8.5), squeeze=False)
+    fig, axes = plt.subplots(2, 4, figsize=(19, 8.5), squeeze=False)
     rows = []
     for ax, (title, w) in zip(axes.ravel(), PANELS):
         sizes = [0.0001, 0.0003, 0.001, 0.003] if w == "medrag-ip" else [0.003, 0.01, 0.03, 0.1, 0.3]
@@ -89,6 +90,8 @@ def main():
         ax.set_title(title, fontsize=10, loc="left", fontweight="bold")
         ax.set_ylabel("throughput / DiskANN alone")
         ax.grid(alpha=0.3)
+    for ax in axes.ravel()[len(PANELS):]:
+        ax.axis("off")
     axes[0][0].legend(fontsize=8)
     fig.suptitle("Throughput, 16 clients, real DiskANN (disk-bound), relative to DiskANN alone", fontsize=11)
     fig.tight_layout()
