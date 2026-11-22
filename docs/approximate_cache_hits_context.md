@@ -4278,3 +4278,23 @@ SPACEV 0.99 10%, SPACEV 0.6 1%, TriviaQA 0.99 10%, TriviaQA 0.6 1%, MedRAG 0.1%,
   0.99 58.7 vs 66.1, TriviaQA 0.99 79.0 vs 91.4, TriviaQA 0.6 61.9 vs 68.4, ESCI 29.4 vs 33.1). TriviaQA's search list is 1,000, so
   its rule is R = min(500, L) = 500 at no extra I/O: TriviaQA rerun with R 500 (results/final; the R 128 runs in final_R128).
   SPACEV / ESCI (L 100) and TripClick / MedRAG (L 128) keep R = L.
+
+#### 9at (cont.). Throughput at more sizes (11-21 22:00 - 11-22 10:30)
+Whole-stream replays, I/O-complete with re-reads (corrected counter), QPS / DiskANN alone in the same run; node cache from a
+separate 20k replay (TripClick 30% node count ~3x the 10% one, SPACEV counts at native int8 bytes):
+| cell | ours (hit %, re-reads per request) | best alternative | node cache | ours / best other |
+|---|---|---|---|---|
+| TripClick 1% | 1.05x (13.1, 8.1) | Aker 1.12x | 1.10x | 0.94x |
+| TripClick 30% | 1.51x (47.7, 13.6) | Aker 1.31x | 1.82x | 0.83x |
+| SPACEV 0.99 10% | 1.94x (58.1, 4.9) | Aker 1.80x | 1.40x | 1.08x |
+| SPACEV 0.6 1% | 0.99x (18.1, 23.4) | Aker 1.04x | pending | <= 0.95x |
+| TriviaQA 0.99 10% | 4.52x (88.3, 15.9) | QVCache 2.48x | - | 1.82x |
+| MedRAG 0.1% | 3.50x (86.2, 11.6) | QVCache 1.85x | - | 1.89x |
+- Re-reads are what costs us where hit rates are low: SPACEV 0.6 1% re-reads 23 vectors per request (continuous greedy churns
+  entries at small caches) and falls to 0.99x despite 18% hits vs Aker's 3.8%. Most re-read vectors are shell samples.
+  The lever worth testing: count intruders with DiskANN's in-memory PQ codes (no reads, no shell memory), and/or charge churn
+  in greedy's exchange rule (a candidate's gain must beat its re-read cost).
+- Single-thread latency (timing plot, final config): above every alternative in most cells; losses: TripClick 10% (1.15x vs
+  Aker 1.20x), ESCI 10% (1.20x vs node cache 1.26x), SPACEV 0.99 3% (1.59x vs Aker 1.75x).
+- Headline (final config, 2 seeds): above the best of Aker / QVCache in every cell but TripClick 0.3% (8.9 vs 9.2); ratios
+  1.09x (TriviaQA 0.99 1%) to 27x (MedRAG 0.01%); retention 0.909-0.937.
