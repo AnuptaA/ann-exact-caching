@@ -26,7 +26,7 @@ def prep(tmp_path):
 @pytest.mark.parametrize("backend", ["exact", "stored"])
 def test_cell_writes_the_result_shape_and_bytes(prep, tmp_path, backend):
     args = sim.parser().parse_args(["--prep", str(prep), "--stream", "random", "--budget", "0.6", "--k", "5",
-                                    "--backend", backend, "--batch", "500", "--timing", "--log-served",
+                                    "--backend", backend, "--batch", "500", "--timing", "--log-served", "--history-frac", "0",
                                     "--cold-start", "1500", "--history", "3000", "--min-ess", "30",
                                     "--out", str(tmp_path / "out")])
     r = sim.run(args)
@@ -86,7 +86,7 @@ def test_history_mode_builds_from_history_and_scores_the_rest(prep, tmp_path):
 
 def test_history_zero_keeps_the_cold_start_behaviour(prep, tmp_path):
     args = sim.parser().parse_args(["--prep", str(prep), "--stream", "random", "--budget", "0.6", "--k", "5",
-                                    "--backend", "exact", "--cold-start", "1500", "--history", "3000",
+                                    "--backend", "exact", "--cold-start", "1500", "--history", "3000", "--history-frac", "0",
                                     "--min-ess", "30", "--out", str(tmp_path / "o")])
     r = sim.run(args)
     assert r["history_len"] == 0 and r["first_scored"] == 0 and r["n_scored"] == 4200
@@ -202,3 +202,31 @@ def test_job_lines_cover_real_aker_and_both_proximity_settings():
     assert "--method aker " in out[0] and "aker.json" in out[0]
     assert "--method proximity --prox-percentile 0.1 --tag _p0.1" in out[1] and "proximity_p0.1.json" in out[1]
     assert "--prox-percentile 1 --tag _p1" in out[2]
+
+
+def test_default_history_is_thirty_percent_without_the_flag(prep, tmp_path):
+    args = sim.parser().parse_args(["--prep", str(prep), "--stream", "random", "--budget", "0.6", "--k", "5",
+                                    "--backend", "exact", "--history", "3000", "--min-ess", "30",
+                                    "--out", str(tmp_path / "o")])
+    assert args.history_frac == 0.3
+    r = sim.run(args)
+    assert r["history_len"] == int(0.3 * 4200) and r["first_scored"] == r["history_len"]
+    assert r["n_scored"] == 4200 - r["history_len"]
+
+
+def test_baseline_cell_and_real_aker_commands_default_to_thirty_percent(prep, tmp_path, monkeypatch):
+    from recal import cells
+    seen = {}
+
+    def fake_run(cmd, check, env):
+        seen["cmd"] = cmd
+        out = tmp_path / "o"
+        out.mkdir(exist_ok=True)
+        tag = cmd[cmd.index("--tag") + 1]
+        (out / f"static{tag}.json").write_text(json.dumps({"args": {}, "log": [{"cached": 1, "entries": 1, "memory": 1.0}]}))
+
+    monkeypatch.setattr(cells.subprocess, "run", fake_run)
+    a = sim.parser().parse_args(["--prep", str(prep), "--stream", "random", "--budget", "0.6", "--k", "5",
+                                 "--out", str(tmp_path / "o")])
+    res = cells.run_baseline("prototype", a, attempts=1)
+    assert res["history_len"] == 1260 and seen["cmd"][seen["cmd"].index("--warmup") + 1] == "1260"

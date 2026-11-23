@@ -185,8 +185,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cold-start", type=int, default=10_000)
     ap.add_argument("--history", type=int, default=30_000, help="H, main-path requests")
-    ap.add_argument("--history-frac", type=float, default=0.0,
-                    help="first fraction of the stream is history; only the rest is scored")
+    ap.add_argument("--history-frac", type=float, default=history_mode.HISTORY_FRACTION,
+                    help="first fraction of the stream is history; only the rest is scored (0: tests only)")
     ap.add_argument("--min-ess", type=float, default=100.0)
     ap.add_argument("--split-by-query", action="store_true", help="roles by distinct query (default: by position)")
     ap.add_argument("--idealized", action="store_true", help="exact labels, candidates from all entries (no m cap)")

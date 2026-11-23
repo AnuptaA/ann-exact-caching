@@ -1,6 +1,9 @@
 """Common history split: the first part of a stream is history, the rest is scored."""
 
 
+HISTORY_FRACTION = 0.3   # every experiment: the first 30% of a stream is history
+
+
 def history_length(n_requests: int, frac: float) -> int:
     if not 0.0 <= frac < 1.0:
         raise ValueError(f"history fraction {frac} is not in [0, 1)")

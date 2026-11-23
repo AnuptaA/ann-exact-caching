@@ -161,3 +161,24 @@ def test_equal_bytes_mode_reports_bytes_and_within_m(monkeypatch):
     assert res["M"] == M and res["pool_slots"] == mod.pool_size(args, db)
     assert res["bytes"]["total"] > 0 and res["within_M"] == (res["bytes"]["total"] <= M)
     assert res["bytes"]["neighbor_pool"] >= 0 and "pool_vectors" in res["bytes"]
+
+
+def test_real_driver_parser_defaults_to_thirty_percent():
+    import re
+    text = (ROOT / "simulations/approximate_hits/aker_real/eval_aker_real.py").read_text()
+    assert re.search(r'"--history-frac", type=float, default=0\.3', text)
+    sim_text = (ROOT / "simulations/approximate_hits/online_sim.py").read_text()
+    assert re.search(r'"--history-frac", type=float, default=0\.3', sim_text)
+
+
+def test_online_simulator_warms_up_on_thirty_percent_by_default(tmp_path, monkeypatch):
+    import sys
+    from simulations.approximate_hits import online_sim
+    prep, esci, n = make_esci_prep(tmp_path)
+    monkeypatch.setattr(online_sim, "ESCI", esci)
+    out = tmp_path / "o"
+    monkeypatch.setattr(sys, "argv", ["x", "--prep", str(prep), "--stream", "random", "--method", "aker", "--budget",
+                                      "0.3", "--k", "5", "--batch", "400", "--records", "--out", str(out)])
+    online_sim.main()
+    cols, _, meta = rec.load(out / "aker_records.npz")
+    assert cols["index"][0] == int(0.3 * n) and meta["history_len"] == int(0.3 * n)

@@ -22,7 +22,7 @@ def split_cell_lines(prep: str, stream: str, total_fraction: float, name: str, s
             continue
         d = f"simulations/approximate_hits/results/q3/{name}/recal_s{pct(s)}"
         out.append(f"[ -f {d}/recal.json ] || {{ mkdir -p {d} && PYTHONPATH=. {PY} -u -m recal.cells --method recal "
-                   f"--prep {prep} --stream {stream} --budget {s * total_fraction:.6g} --history-frac 0.3 --timing "
+                   f"--prep {prep} --stream {stream} --budget {s * total_fraction:.6g} --timing "
                    f"{extra} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
     return out
 

@@ -1874,6 +1874,8 @@ def make_parser():
     ap.add_argument("--save-state", type=str, default=None,
                     help="save the cache state after warm-up (for eval_timing.py)")
     ap.add_argument("--tag", type=str, default="", help="suffix of the output file name")
+    ap.add_argument("--history-frac", type=float, default=0.3,
+                    help="warm-up = this fraction of the stream (0.3 for every experiment; 0 and --warmup for tests)")
     ap.add_argument("--records", action="store_true",
                     help="write per-request records next to the result (recal/records.py)")
     ap.add_argument("--log-served", action="store_true",
@@ -1898,8 +1900,9 @@ def main():
     _register_args(args)
     K_LIMIT[0] = args.max_ball_k
     D, streams = load(args.prep, args)
-    if args.warmup is None:         # from the FULL stream (--max-queries truncates it for the states)
-        args.warmup = min(20000, len(streams[args.stream]) // 5)
+    if args.warmup is None:
+        n_used = len(streams[args.stream][:args.max_queries])
+        args.warmup = int(args.history_frac * n_used) if args.history_frac else min(20000, n_used // 5)
     stream = streams[args.stream][:args.max_queries]
     out = Path(args.out or Path(args.prep) / f"sim_{args.stream}_b{args.budget:g}")
     out.mkdir(parents=True, exist_ok=True)

@@ -506,8 +506,8 @@ def main():
                     help="bytes per coordinate of the stored vectors (SPACEV: 1)")
     ap.add_argument("--pool-scale", type=float, default=1.0,
                     help="multiplier on the --equal-bytes pool (rerun with less when within_M is false)")
-    ap.add_argument("--history-frac", type=float, default=0.0,
-                    help="first fraction of the requests is the warm-up (sets --warmup); only the rest is scored")
+    ap.add_argument("--history-frac", type=float, default=0.3,
+                    help="first fraction of the requests is the warm-up; only the rest is scored (0: tests only)")
     ap.add_argument("--batch", type=int, default=1000)
     ap.add_argument("--max-requests", type=int, default=None)
     ap.add_argument("--progress", type=int, default=5000, help="log every this many requests")
@@ -552,7 +552,7 @@ def main():
     prep = Path(args.prep)
     db, q, top, stream = load(prep, args.stream, native=args.timing)
     n_stream = len(stream) if args.max_requests is None else min(args.max_requests, len(stream))
-    if args.history_frac:
+    if args.warmup is None and args.history_frac:
         from recal import history_mode
         args.warmup = history_mode.history_length(n_stream, args.history_frac)
     if args.warmup is None:
@@ -585,7 +585,7 @@ def main():
         from recal.records import Records
         records = Records({"method": "aker_real", "K": args.k, "history_len": args.warmup})
     res = run_quality(args, db, q, World(args, prep, top), stream, records)
-    if args.history_frac:
+    if args.history_frac and args.warmup == int(args.history_frac * n_stream):
         from recal import history_mode
         history_mode.stamp(res, n_stream, args.warmup)
     phase_key = f"phase_{args.stream}" if args.stream != "trace" else None

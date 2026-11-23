@@ -34,11 +34,12 @@ def grid_lines(prep: str, stream: str, name: str, budgets=BUDGETS, histories=HIS
     out = []
     for b, h in cells:
         frac = h / STREAM_LENGTH
+        hist = "" if h == 30_000 else f"--history {h} --history-frac {frac:g} "
         for seed in seeds:
             d = f"simulations/approximate_hits/results/q4/{name}/{method}_b{b:g}_h{h}_s{seed}"
             out.append(f"[ -f {d}/{method}.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u -m "
                        f"recal.cells --method {method} --prep {prep} --stream {stream} --budget {b:g} "
-                       f"--history {h} --history-frac {frac:g} --seed {seed} {extra} --out {d} "
+                       f"{hist}--seed {seed} {extra} --out {d} "
                        f"> {d}/log.txt 2>&1; }}  # recal.cells")
     return out
 
@@ -52,7 +53,7 @@ def k_lines(prep: str, stream: str, name: str, budget: float = 0.05, seeds=(0, 1
             d = f"simulations/approximate_hits/results/q4/{name}/{label}_s{seed}"
             out.append(f"[ -f {d}/recal.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u -m "
                        f"recal.cells --method recal --prep {prep} --stream {stream} --budget {budget:g} {flags} "
-                       f"--history-frac 0.3 --seed {seed} {extra} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
+                       f"--seed {seed} {extra} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
     return out
 
 
@@ -68,7 +69,7 @@ def shift_lines(prep: str, name: str, shifts=("abrupt", "gradual", "correlated")
                 flag = "" if on else "--no-rebuild-signals"
                 out.append(f"[ -f {d}/recal.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u -m "
                            f"recal.cells --method recal --prep {prep} --stream {kind} --budget {budget:g} "
-                           f"--history-frac 0.3 --seed {seed} {flag} {extra} --out {d} > {d}/log.txt 2>&1; }}"
+                           f"--seed {seed} {flag} {extra} --out {d} > {d}/log.txt 2>&1; }}"
                            "  # recal.cells")
     return out
 
@@ -81,7 +82,7 @@ def burst_lines(prep: str, stream: str, name: str, budget: float = 0.05, seeds=(
             d = f"simulations/approximate_hits/results/q4/{name}/burst_{label}_s{seed}"
             out.append(f"[ -f {d}/recal.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u -m "
                        f"recal.cells --method recal --prep {prep} --stream {stream} --budget {budget:g} "
-                       f"--history-frac 0.3 --seed {seed} {flag} {extra} --out {d} > {d}/log.txt 2>&1; }}"
+                       f"--seed {seed} {flag} {extra} --out {d} > {d}/log.txt 2>&1; }}"
                        "  # recal.cells")
     return out
 
@@ -96,6 +97,6 @@ def update_lines(prep: str, stream: str, name: str, schedules: dict, budget: flo
                 d = f"simulations/approximate_hits/results/q4/{name}/updates_{label}_{method}_s{seed}"
                 out.append(f"[ -f {d}/{method}.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u -m "
                            f"recal.cells --method {method} --prep {prep} --stream {stream} --budget {budget:g} "
-                           f"--backend exact --history-frac 0.3 --seed {seed} --updates {path} {extra} --out {d} "
+                           f"--backend exact --seed {seed} --updates {path} {extra} --out {d} "
                            f"> {d}/log.txt 2>&1; }}  # recal.cells")
     return out

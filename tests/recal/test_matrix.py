@@ -25,7 +25,7 @@ def test_q1_cells_cover_targets_modes_and_baselines():
     assert len(first) == 11
     assert sum("--idealized" in x for x in first) == 4 and sum("--method aker " in x for x in first) == 1
     assert any("--prox-percentile 0.1 --tag _p0.1" in x and "proximity_p0.1.json" in x for x in first)
-    assert all("--history-frac 0.3" in x and "--coord-bytes 1" in x for x in first)
+    assert all("--history-frac" not in x and "--coord-bytes 1" in x for x in first)
     assert {f"--target {t}" for t in ("0.8", "0.85", "0.9", "0.95")} <= {
         f"--target {t}" for x in first for t in ("0.8", "0.85", "0.9", "0.95") if f"--target {t} " in x}
 

@@ -23,7 +23,7 @@ def cell(d: str, stem: str, method: str, prep: str, stream: str, budget: float, 
 def q1_lines(cfg: dict) -> list[str]:
     q1, out = cfg["q1"], []
     for name, ds in cfg["datasets"].items():
-        base = f"--history-frac {cfg['history_frac']:g} --coord-bytes {ds['coord_bytes']:g}"
+        base = f"--coord-bytes {ds['coord_bytes']:g}"
         for stream in ds["streams"]:
             for budget in ds["budgets"]:
                 for seed in q1["seeds"]:
@@ -46,7 +46,7 @@ def q2_lines(cfg: dict) -> list[str]:
     q2, out = cfg["q2"], []
     for c in q2["cells"]:
         ds = cfg["datasets"][c["dataset"]]
-        base = (f"--history-frac {cfg['history_frac']:g} --coord-bytes {ds['coord_bytes']:g} "
+        base = (f"--coord-bytes {ds['coord_bytes']:g} "
                 f"--target {q2['target']:g}")
         for label, flag in [("default", "")] + [(f.lstrip("-"), f) for f in ABLATIONS]:
             for seed in q2["seeds"]:

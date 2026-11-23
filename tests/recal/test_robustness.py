@@ -26,7 +26,7 @@ def test_burst_block_boundaries_are_independent():
 def test_grid_lines_cover_the_budgets_histories_and_seeds():
     lines = robustness.grid_lines("prep", "random", "w")
     assert len(lines) == (6 + 2) * 2
-    assert any("--budget 0.005 --history 30000 --history-frac 0.3 --seed 0" in line for line in lines)
+    assert any("--budget 0.005 --seed 0" in line and "--history" not in line for line in lines)
     assert any("--budget 0.05 --history 10000 --history-frac 0.1" in line for line in lines)
 
 
