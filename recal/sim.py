@@ -118,7 +118,7 @@ def run(args, records: Records | None = None) -> dict:
             b = system.bytes_by_structure()
             log.append({"t": pos + 1, "n": batch["n"], "served": batch["served"], "served_retention_sum": batch["ret"],
                         "audited_served": batch["audited"], "lambda": system.lam, "memory": b["total"] / (4 * d),
-                        "cached": system.core.n_data_slots(), "entries": system.core.n_entries(),
+                        "cached": system.n_cached(), "entries": system.n_entries(),
                         "events": len(system.signals.events), "mini": system.core.mini_size()})
             batch = {"n": 0, "served": 0, "ret": 0.0, "audited": 0}
     bytes_ = system.bytes_by_structure()

@@ -88,3 +88,37 @@ def test_ablation_flags_reach_params_from_the_command_line():
     flags = sim.ablations(args)
     assert flags["no_union"] and flags["lru"] and flags["no_mini_cache"] and not flags["no_shells"]
     assert dataclasses.replace(Params(), **flags).no_union
+
+
+def test_lru_admits_on_misses_holds_2k_entries_and_stays_within_m(tmp_path):
+    system, responses = run(tmp_path, n=3600, lru=True, T=0.5)
+    assert system.lru is not None and system.built is not None
+    assert set(system.lru.entry_sizes().tolist()) == {10}
+    assert system.counts["misses"] > 0 and system.lru.n_entries() > 0
+    assert system.bytes_by_structure()["total"] <= system.M
+    assert system.counts["main_hits"] > 0
+    depths = {d for r in responses for _, d in r.background if _ == "miss"}
+    assert 20 in depths
+
+
+def test_lru_touch_keeps_used_entries_and_evicts_the_oldest():
+    from recal.lru import LruCache
+    cache = LruCache(2, budget=3000.0, coord_bytes=4.0)
+    rng = np.random.default_rng(0)
+    first = None
+    for i in range(40):
+        ids = np.arange(i * 20, i * 20 + 20)
+        vecs = rng.normal(size=(20, 2)).astype(np.float32)
+        dists = np.sort(rng.random(20)).astype(np.float32)
+        cache.admit(rng.normal(size=2).astype(np.float32), 5, ids, dists, vecs)
+        if i == 0:
+            first = next(iter(cache.entries))
+        else:
+            cache.touch([first])
+    assert first in cache.entries and cache.total_bytes() <= 3000.0 and cache.n_entries() < 40
+
+
+def test_lru_leaves_default_path_and_refresh_is_a_noop(tmp_path):
+    system, _ = run(tmp_path, n=3200, lru=True)
+    built = system.built
+    assert system.construct() is built and system.constructions == 1

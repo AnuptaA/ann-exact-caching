@@ -9,6 +9,7 @@ import numpy as np
 
 from recal import build as builder
 from recal import policy
+from recal import lru_build
 from recal.core import MAIN_HIT, MINI_HIT, MISS_K_MAX, Core
 from recal.history import AUDITED, HIT, MISS, HistoryLog
 from recal.params import Params
@@ -57,6 +58,7 @@ class ReCal:
         self.rebuild_requested: str | None = None
         self.first_construction_bytes: dict | None = None
         self.construction_log: list[dict] = []
+        self.lru = None
         self.rereads = RereadSchedule(params.reread_spread)
         self._pool_ids = np.zeros(0, np.int64)
         self._zone_ids = np.zeros(0, np.int64)
@@ -94,6 +96,8 @@ class ReCal:
         t0 = time.perf_counter()
         lam_used = self.lam
         res = self.core.lookup(q, K, lam_used, m, not self.p.no_mini_cache)
+        if self.lru is not None and res.path not in (MINI_HIT, MISS_K_MAX):
+            res = self.lru.lookup(q, K, lam_used, m)
         cache_ms = (time.perf_counter() - t0) * 1e3
         if res.path == MINI_HIT:                      # a mini hit touches nothing else
             self.counts["mini_hits"] += 1
@@ -122,19 +126,25 @@ class ReCal:
     def _main_path(self, q, K, res) -> Response:
         if res.path == MAIN_HIT:
             self.counts["main_hits"] += 1
+            if self.lru is not None:
+                self.lru.touch(res.contrib)
             if self.rng.random() < self.p.a:
                 return self._audit(q, K, res)
             self.log.append(q, K, HIT, version=self.backend.version)
             return Response(res.ids, res.dists, "main", float(res.score), res.path)
         self.counts["misses"] += 1
-        ids, dists = self.backend.search(q, K, kind="miss")
+        depth = 4 * K if self.lru is not None else K
+        ids, dists = self.backend.search(q, depth, kind="miss")
+        if self.lru is not None:
+            self.rereads.add(self.lru.admit(q, K, ids, dists, self.backend.vectors_of(ids)))
+            ids, dists = ids[:K], dists[:K]
         self.log.append(q, K, MISS, ids, dists, self.backend.version)
         self._mini_put(q, ids, dists)
         if res.has_score and len(res.ids) == K and self.window is not None:
             y = float(np.isin(ids, res.ids).mean())
             self._label(res.score, y, 1.0)
         return Response(ids, dists, "backend", float(res.score) if res.has_score else None, res.path,
-                        [("miss", K)])
+                        [("miss", depth)])
 
     def _audit(self, q, K, res) -> Response:
         self.counts["audits"] += 1
@@ -183,6 +193,8 @@ class ReCal:
         """Label, build, then swap everything at once."""
         snap = self.log.snapshot()
         labels = builder.fetch_labels(snap, self.log, self.backend, self.backend.version)
+        if self.p.lru:
+            return self._construct_lru(snap, labels)
         old = self.built
         built = builder.build(
             snap, self.backend, self.p, self.M, np.random.default_rng(self.p.seed + 1 + self.constructions),
@@ -209,6 +221,34 @@ class ReCal:
         new_pool, new_zone = self._admitted(built)
         self.rereads.add(new_pool + new_zone)
         self._log_construction(built, new_pool, new_zone)
+        return built
+
+    def _construct_lru(self, snap: dict, labels: dict) -> builder.Built:
+        """The LRU ablation trains once on the history; later refresh requests only reset the signals."""
+        if self.built is not None:
+            self.last_construction = self.t
+            self.signals.after_construction(self)
+            return self.built
+        built, self.lru = lru_build.build_lru(snap, self.backend, self.p, self.M, self.t, self.log.hash_snapshot(),
+                                              self.core)
+        built.info["labels"] = labels
+        self.core.mini_set_capacity(0 if self.p.no_mini_cache else built.R)
+        self.built = built
+        self.window, self.lam, self.certified, self.h0 = built.window, built.lam, built.certified, max(built.h0, 1e-3)
+        if self.p.no_calibration:
+            self.lam = self.p.T
+        self.status = policy.Status(int(self.p.drop_window * self.p.H))
+        self.status.margin_unreachable = built.margin_unreachable
+        self.constructions += 1
+        self.last_construction = self.t
+        self.signals.after_construction(self)
+        self.first_construction_bytes = dict(self.bytes_by_structure())
+        self.construction_log.append({"request": self.requests, "t": self.t, "m": built.m, "R": built.R,
+                                      "h0": float(built.h0), "W": built.W, "lambda": self.lam,
+                                      "entries": built.n_entries, "new_pool_vectors": 0, "new_shell_vectors": 0,
+                                      "entries_by_size": {2 * self.p.K: built.n_entries},
+                                      "bytes": {k: float(v) for k, v in self.bytes_by_structure().items()},
+                                      "background": {k: dict(v) for k, v in self.backend.stats.items()}})
         return built
 
     def _admitted(self, built: builder.Built) -> tuple[int, int]:
@@ -245,6 +285,11 @@ class ReCal:
     def bytes_by_structure(self) -> dict:
         """Bytes per structure; inserts consume the headroom, so the total does not grow past M."""
         b = dict(self.core.bytes_by_structure())
+        if self.lru is not None:
+            b.update(self.lru.bytes_by_structure())
+            b["recall_estimator"] = 80.0
+            b["total"] = sum(v for k, v in b.items() if k not in ("total", "budget"))
+            return b
         if self.built is not None:
             grown = self.updater._structure_bytes() - self.updater.base_bytes
             b["headroom"] = max(0.0, self.p.headroom * self.M - grown)
@@ -253,8 +298,18 @@ class ReCal:
 
     # ---- data updates ----------------------------------------------------------------------------
 
+    def n_cached(self) -> int:
+        return self.lru.n_data_slots() if self.lru is not None else self.core.n_data_slots()
+
+    def n_entries(self) -> int:
+        return self.lru.n_entries() if self.lru is not None else self.core.n_entries()
+
     def delete(self, ids) -> int:
+        if self.lru is not None:
+            raise NotImplementedError("data updates are not supported in the LRU ablation")
         return self.updater.delete(ids)
 
     def insert(self, ids, vectors) -> None:
+        if self.lru is not None:
+            raise NotImplementedError("data updates are not supported in the LRU ablation")
         self.updater.insert(ids, vectors)
