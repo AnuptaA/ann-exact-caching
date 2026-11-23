@@ -244,7 +244,10 @@ class World:
 
 
 def pool_size(args, db) -> int:
-    """Pool slots: --budget x N, or with --equal-bytes the pool that keeps Aker's bytes within M."""
+    """Pool slots without calibration: --pool-capacity, --budget x N, or with --equal-bytes the worst case
+    (k distinct vectors per entry); the calibrated rule is choose_pool."""
+    if args.pool_capacity:
+        return int(args.pool_capacity)
     if not args.equal_bytes:
         return int(args.budget * len(db))
     from recal import accounting
@@ -253,11 +256,39 @@ def pool_size(args, db) -> int:
     return max(1, int(pool * args.pool_scale))
 
 
+def choose_pool(args, db, q, world, stream) -> tuple[int, dict]:
+    """The pool capacity (neighbor objects). With --equal-bytes it is calibrated on the history: the pooled
+    objects per entry the library ends with set the capacity at which a full cache costs M."""
+    if args.pool_capacity or not args.equal_bytes:
+        return pool_size(args, db), {"source": "given" if args.pool_capacity else "budget_fraction"}
+    from recal import accounting
+    d, k, delta = db.shape[1], args.k, args.delta
+    M = accounting.budget_bytes(len(db), d, args.budget, args.coord_bytes)
+
+    def measure_ratio(capacity):
+        ak = Aker(q.shape[1], capacity, k, delta, args.risk, args.alpha_tighten, args.alpha_loosen)
+        for i in range(args.warmup):
+            qi = int(stream[i])
+            kind, _, _, _ = ak.lookup(qi + 1, q[qi])
+            if kind in (0, 3):
+                nid = world.answer(qi, k + delta)
+                ak.insert(qi + 1, q[qi], nid + 1, np.ascontiguousarray(db[nid], dtype=np.float32))
+        used = accounting.aker_bytes_from_status(ak.status(), d, args.coord_bytes)
+        parsed = accounting.parse_aker_status(ak.status())
+        ak.close()
+        return used["pool_vectors"] / max(parsed["physical_entries"], 1)
+
+    start = accounting.aker_pool_for_budget(M, d, k + delta, args.coord_bytes)
+    capacity, info = accounting.calibrate_capacity(M, d, args.coord_bytes, measure_ratio, start)
+    info["source"] = "calibrated_on_history"
+    return max(1, int(capacity * args.pool_scale)), info
+
+
 def run_quality(args, db, q, world, stream, records=None):
     """Replay the stream against World (truth, backend answers, data changes)."""
     k, delta = args.k, args.delta
     n_neigh = k + delta
-    pool = pool_size(args, db)
+    pool, calibration = choose_pool(args, db, q, world, stream)
     ak = Aker(q.shape[1], pool, k, delta, args.risk, args.alpha_tighten, args.alpha_loosen)
     changing = world.ev is not None
     KIND = {1: "exact", 2: "approx", 4: "linked"}
@@ -273,6 +304,8 @@ def run_quality(args, db, q, world, stream, records=None):
         if args.equal_bytes:
             from recal import accounting
             used = accounting.aker_bytes_from_status(ak.status(), db.shape[1], args.coord_bytes)
+            last.clear()
+            last.update(used)
             if used["total"] >= peak["total"]:
                 peak.clear()
                 peak.update(used)
@@ -287,7 +320,7 @@ def run_quality(args, db, q, world, stream, records=None):
                     **{f"retention_sum_{nm}": cur["ret_" + nm] for nm in KIND.values()}})
 
     log, cur = [], fresh()
-    peak = {"total": 0.0}
+    peak, last = {"total": 0.0}, {"total": 0.0}
     lat = {"lookup_hit": [], "lookup_miss": [], "link": [], "insert": [], "write": [],
            "delete": [], "process": []}
     stats = {"miss": 0, "hit_exact": 0, "hit_approx": 0, "hit_linked": 0, "invalid": 0,
@@ -381,7 +414,9 @@ def run_quality(args, db, q, world, stream, records=None):
         from recal import accounting
         M = accounting.budget_bytes(len(db), db.shape[1], args.budget, args.coord_bytes)
         out.update({"bytes": {k_: float(v) for k_, v in peak.items()}, "M": M,
-                    "within_M": bool(peak["total"] <= M)})
+                    "within_M": bool(peak["total"] <= M), "configured_capacity": pool,
+                    "bytes_used_end": float(last["total"]), "calibration": calibration,
+                    "bytes_at_full_capacity": calibration.get("bytes_at_full_capacity")})
     return out
 
 
@@ -504,6 +539,9 @@ def main():
                          "pool is sized so Aker's bytes (library counts at stored precision) stay within it")
     ap.add_argument("--coord-bytes", type=float, default=4.0,
                     help="bytes per coordinate of the stored vectors (SPACEV: 1)")
+    ap.add_argument("--pool-capacity", type=int, default=None,
+                    help="pool capacity in neighbor objects, skipping the calibration (timing runs pass the one "
+                         "calibrated by the quality run)")
     ap.add_argument("--pool-scale", type=float, default=1.0,
                     help="multiplier on the --equal-bytes pool (rerun with less when within_M is false)")
     ap.add_argument("--history-frac", type=float, default=0.3,

@@ -89,3 +89,42 @@ def test_coord_bytes_changes_every_vector_charge():
     assert one["neighbor_pool"] == 100 * (8 + 8) and four["neighbor_pool"] == 100 * (32 + 8)
     assert accounting.qvcache_bytes(10, 8, coord_bytes=1)["vectors"] == 10 * 16
     assert accounting.prototype_bytes(10, 0, 2, 5.0, 8, coord_bytes=1)["vectors"] == 10 * 16
+
+
+def test_capacity_makes_a_full_cache_cost_m_for_both_precisions():
+    for coord in (1, 4):
+        for ratio in (1.5, 4.0, 10.0):
+            cap = accounting.aker_capacity_for_budget(5.0e6, 100, coord, ratio)
+            full = accounting.aker_full_capacity_bytes(cap, 100, coord, ratio)
+            assert full <= 5.0e6 and full > 0.999 * 5.0e6
+
+
+def test_sharing_between_entries_raises_the_capacity():
+    few = accounting.aker_capacity_for_budget(1e6, 100, 1, 10.0)
+    many = accounting.aker_capacity_for_budget(1e6, 100, 1, 2.0)
+    assert few > many
+
+
+def test_calibration_sets_capacity_from_the_measured_ratio_and_checks_it_once():
+    calls = []
+
+    def stable(capacity):
+        calls.append(capacity)
+        return 6.0
+
+    cap, info = accounting.calibrate_capacity(1e6, 100, 4, stable, start=1000)
+    assert abs(info["bytes_at_full_capacity"] - 1e6) <= 0.01 * 1e6 and len(calls) == 2 and "refined" not in str(info)
+    assert cap == accounting.aker_capacity_for_budget(1e6, 100, 4, 6.0)
+
+
+def test_calibration_refines_once_when_the_ratio_moves_with_capacity():
+    def drifting(capacity):
+        return 3.0 if capacity <= 1000 else 8.0       # sharing differs once the pool is larger
+
+    cap, info = accounting.calibrate_capacity(1e6, 100, 1, drifting, start=1000)
+    assert info["steps"][-1].get("refined") and info["objects_per_entry"] == 8.0
+    assert abs(info["bytes_at_full_capacity"] - 1e6) <= 0.01 * 1e6
+    assert accounting.capacity_for_budget("aker", 1e6, 100, 1, objects_per_entry=8.0) == cap
+    import pytest
+    with pytest.raises(ValueError):
+        accounting.capacity_for_budget("unknown", 1e6, 100, 1)

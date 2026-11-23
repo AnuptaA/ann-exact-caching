@@ -113,3 +113,50 @@ def aker_pool_for_budget(M: float, d: int, k: int, coord_bytes: int = FLOAT_BYTE
     per_vector = AKER_POOL_META_BYTES + coord_bytes * d
     per_entry = AKER_ENTRY_BYTES + coord_bytes * d + AKER_FILTER_LINK_BYTES
     return max(1, int(M / (per_vector + per_entry / share)))
+
+
+def aker_unit_costs(d: int, coord_bytes: float = FLOAT_BYTES) -> dict:
+    """Aker bytes per pooled neighbor object and per entry (with its filter vector and links)."""
+    return {"per_object": AKER_POOL_META_BYTES + coord_bytes * d,
+            "per_entry": AKER_ENTRY_BYTES + coord_bytes * d + AKER_FILTER_LINK_BYTES}
+
+
+def aker_full_capacity_bytes(capacity: int, d: int, coord_bytes: float, objects_per_entry: float) -> float:
+    """Bytes of a full cache: `capacity` pooled objects held by capacity / objects_per_entry entries."""
+    c = aker_unit_costs(d, coord_bytes)
+    return capacity * c["per_object"] + capacity / objects_per_entry * c["per_entry"]
+
+
+def aker_capacity_for_budget(M: float, d: int, coord_bytes: float, objects_per_entry: float) -> int:
+    """Pool capacity (neighbor objects) whose full cache costs M, given the pooled objects each entry holds."""
+    c = aker_unit_costs(d, coord_bytes)
+    return max(1, int(M / (c["per_object"] + c["per_entry"] / objects_per_entry)))
+
+
+def calibrate_capacity(M: float, d: int, coord_bytes: float, measure_ratio, start: int, tol: float = 0.01) -> tuple:
+    """Capacity so that a full cache costs M.
+
+    measure_ratio(capacity) runs the library on the history with that pool capacity and returns the pooled
+    objects per entry it ended with. The first measurement (at `start`) sets the capacity; one run at that
+    capacity checks it and the capacity is set again from the new ratio when the full-cache bytes miss M by
+    more than tol. Returns (capacity, info).
+    """
+    ratio = measure_ratio(start)
+    capacity = aker_capacity_for_budget(M, d, coord_bytes, ratio)
+    steps = [{"probe_capacity": start, "objects_per_entry": ratio, "capacity": capacity}]
+    check = measure_ratio(capacity)
+    full = aker_full_capacity_bytes(capacity, d, coord_bytes, check)
+    if abs(full - M) > tol * M:
+        capacity = aker_capacity_for_budget(M, d, coord_bytes, check)
+        full = aker_full_capacity_bytes(capacity, d, coord_bytes, check)
+        steps.append({"probe_capacity": steps[0]["capacity"], "objects_per_entry": check, "capacity": capacity,
+                      "refined": True})
+    return capacity, {"steps": steps, "objects_per_entry": check, "bytes_at_full_capacity": full,
+                      "configured_capacity": capacity, "M": M}
+
+
+def capacity_for_budget(system: str, M: float, d: int, coord_bytes: float, **kwargs) -> int:
+    """The capacity knob of a system so that its full capacity costs M (aker: objects per entry required)."""
+    if system in ("aker", "proximity"):
+        return aker_capacity_for_budget(M, d, coord_bytes, kwargs["objects_per_entry"])
+    raise ValueError(f"no capacity rule for {system}")

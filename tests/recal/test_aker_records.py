@@ -74,7 +74,7 @@ def test_baseline_records_match_the_quality_log(monkeypatch):
     stream = rng.integers(0, 20, 400)
     args = argparse.Namespace(k=5, delta=2, budget=0.2, risk=0.1, alpha_tighten=0.25, alpha_loosen=1.1,
                               warmup=100, batch=100, progress=10**9, max_requests=None,
-                              equal_bytes=False, coord_bytes=4.0, pool_scale=1.0)
+                              equal_bytes=False, coord_bytes=4.0, pool_scale=1.0, pool_capacity=None)
     db = np.zeros((50, 3), np.float32)
     q = np.zeros((20, 3), np.float32)
     records = rec.Records()
@@ -144,7 +144,7 @@ def test_sim_record_batch_marks_mini_hits_and_misses():
     assert np.allclose(cols["recall"], [1.0, 0.8, 0.9]) and cols["rereads"].sum() == 0
 
 
-def test_equal_bytes_mode_reports_bytes_and_within_m(monkeypatch):
+def test_equal_bytes_mode_calibrates_capacity_and_reports_it(monkeypatch):
     mod = load_driver()
     monkeypatch.setattr(mod, "Aker", FakeAker)
     rng = np.random.default_rng(1)
@@ -152,15 +152,49 @@ def test_equal_bytes_mode_reports_bytes_and_within_m(monkeypatch):
     stream = rng.integers(0, 20, 300)
     args = argparse.Namespace(k=5, delta=0, budget=0.5, risk=0.1, alpha_tighten=0.25, alpha_loosen=1.1,
                               warmup=50, batch=100, progress=10**9, max_requests=None,
-                              equal_bytes=True, coord_bytes=1.0, pool_scale=1.0)
-    db = np.zeros((50, 3), np.float32)
+                              equal_bytes=True, coord_bytes=1.0, pool_scale=1.0, pool_capacity=None)
+    db = np.zeros((100_000, 3), np.float32)
     q = np.zeros((20, 3), np.float32)
     res = mod.run_quality(args, db, q, FakeWorld(rows), stream)
     from recal import accounting
-    M = accounting.budget_bytes(50, 3, 0.5, 1.0)
-    assert res["M"] == M and res["pool_slots"] == mod.pool_size(args, db)
-    assert res["bytes"]["total"] > 0 and res["within_M"] == (res["bytes"]["total"] <= M)
-    assert res["bytes"]["neighbor_pool"] >= 0 and "pool_vectors" in res["bytes"]
+    M = accounting.budget_bytes(100_000, 3, 0.5, 1.0)
+    # the fake holds 5 pooled objects per entry
+    expected = accounting.aker_capacity_for_budget(M, 3, 1.0, 5.0)
+    assert res["M"] == M and res["configured_capacity"] == res["pool_slots"] == expected
+    assert abs(res["bytes_at_full_capacity"] - M) <= 0.01 * M
+    assert res["calibration"]["source"] == "calibrated_on_history" and res["calibration"]["objects_per_entry"] == 5.0
+    assert res["bytes_used_end"] > 0 and res["bytes"]["total"] >= res["bytes_used_end"]
+    assert res["within_M"] == (res["bytes"]["total"] <= M) and "pool_vectors" in res["bytes"]
+
+
+def test_explicit_pool_capacity_skips_the_calibration(monkeypatch):
+    mod = load_driver()
+    monkeypatch.setattr(mod, "Aker", FakeAker)
+    rows = np.tile(np.arange(10), (5, 1)).astype(np.int64)
+    args = argparse.Namespace(k=5, delta=0, budget=0.5, risk=0.1, alpha_tighten=0.25, alpha_loosen=1.1,
+                              warmup=5, batch=50, progress=10**9, max_requests=None,
+                              equal_bytes=True, coord_bytes=1.0, pool_scale=1.0, pool_capacity=77)
+    res = mod.run_quality(args, np.zeros((50, 3), np.float32), np.zeros((5, 3), np.float32), FakeWorld(rows),
+                          np.arange(100) % 5)
+    assert res["configured_capacity"] == 77 and res["calibration"]["source"] == "given"
+
+def make_esci_prep(tmp_path):
+    from recal.backend import ExactBackend
+    from tests.recal.test_system import make_stream, make_world
+    rng, data, centers = make_world(seed=5, n=1500)
+    stream = make_stream(rng, centers, 2400, repeat_share=0.3)
+    uniq, inverse = np.unique(np.stack(stream), axis=0, return_inverse=True)
+    uniq = uniq.astype(np.float32)
+    esci = tmp_path / "esci"
+    esci.mkdir()
+    np.save(esci / "esci_db1500_s42.npy", data)
+    np.save(esci / "esci_queries.npy", uniq)
+    prep = tmp_path / "prep"
+    prep.mkdir()
+    np.save(prep / "top500.npy", ExactBackend(data).search(uniq, 100)[0].astype(np.int32))
+    np.savez(prep / "streams.npz", random=inverse.astype(np.int64).ravel())
+    (prep / "meta.json").write_text('{"kind": "esci", "n_db": 1500}')
+    return prep, esci, len(inverse)
 
 
 def test_real_driver_parser_defaults_to_thirty_percent():
