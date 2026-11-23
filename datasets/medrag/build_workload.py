@@ -25,6 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
+import os as _os
+TAG = _os.environ.get("MEDRAG_TAG", "")      # e.g. "_100k": a larger workload beside the 10k one (11-23)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 D = Path("datasets/medrag")
@@ -49,7 +51,7 @@ def draw(args):
         seed += 1
     info = {"zipf": args.zipf, "n": args.n, "seed": seed, "pubmedqa_ids": keys, "questions": qs,
             "counts": counts.tolist(), "seq": seq.tolist(), "max_count": int(counts.max())}
-    (D / "zipf_draw.json").write_text(json.dumps(info))
+    (D / f"zipf_draw{TAG}.json").write_text(json.dumps(info))
     logger.info(f"seed {seed}: {args.n} draws over {len(qs)} questions, max count {counts.max()}, "
                 f"median {int(np.median(counts))}, min {counts.min()}")
 
@@ -111,8 +113,8 @@ def queries(args):
     encode = tc.encode                                          # MedCPT, bf16, sorted batches
     import torch
     torch.set_num_threads(args.threads)
-    draw_ = json.loads((D / "zipf_draw.json").read_text())
-    par = {int(k): v for k, v in json.loads((D / "paraphrases.json").read_text()).items()}
+    draw_ = json.loads((D / f"zipf_draw{TAG}.json").read_text())
+    par = {int(k): v for k, v in json.loads((D / f"paraphrases{TAG}.json").read_text()).items()}
     rng = np.random.default_rng(draw_["seed"] + 1)
     for i in par:                                               # rewordings in random order per question
         rng.shuffle(par[i])
@@ -124,8 +126,8 @@ def queries(args):
     assert len(set(texts)) == len(texts), "rewordings must be unique"
     v = encode("ncbi/MedCPT-Query-Encoder", texts, 64, 256, pad_multiple=16)
     v = np.hstack([v, np.zeros((len(v), 1), np.float32)]).astype(np.float32)
-    np.save(AKER / "medrag-ip-requests.npy", v)
-    (D / "requests.json").write_text(json.dumps({"texts": texts, "question": draw_["seq"]}))
+    np.save(AKER / f"medrag-ip{TAG}-requests.npy", v)
+    (D / f"requests{TAG}.json").write_text(json.dumps({"texts": texts, "question": draw_["seq"]}))
     # how close are rewordings of one question compared with different questions (MedCPT space)
     u = v[:, :768] / np.linalg.norm(v[:, :768], axis=1, keepdims=True)
     q = np.asarray(draw_["seq"])
