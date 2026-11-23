@@ -307,6 +307,8 @@ class Built:
     center_K: np.ndarray
     n_entries: int
     info: dict
+    pool_ids: np.ndarray | None = None
+    zone_ids: np.ndarray | None = None
 
 
 def build(snap: dict, backend, p, M: float, rng, request: int, old_centers: np.ndarray | None = None,
@@ -420,7 +422,7 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
             "m": m, "n_train": int(len(y)), "n_cal": int(len(cscore)), "roles": {k: len(v) for k, v in roles.items()},
             "candidates": int(len(prop.centers)), "proposed_entries": int(len(prop.entry_cand))}
     return Built(core, model, m, R, edges, window, cert.lam, cert, h0, W, unreachable, train_scores, sel_centers,
-                 sel_K, n_entries, info)
+                 sel_K, n_entries, info, pool_ids, zone_ids)
 
 
 def _recall(cand_ids: np.ndarray, truth_ids: np.ndarray) -> np.ndarray:

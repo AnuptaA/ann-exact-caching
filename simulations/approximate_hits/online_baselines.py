@@ -155,7 +155,7 @@ class Base:
                                      float(ret_x[served & keep].sum()),
                                  "ret_hist": np.bincount(counts[keep],
                                                          minlength=self.k + 1).tolist(),
-                                 "audited_served": 0, "lambda": None,
+                                 "audited_served": 0, "lambda": None, "fetched": self.fetched,
                                  "memory": self.n_cached(), "cached": self.n_cached(),
                                  "entries": self.n_entries(), "events": n_ev})
                 if "initial" in self.D:

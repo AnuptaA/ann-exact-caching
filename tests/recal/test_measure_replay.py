@@ -398,3 +398,22 @@ def test_shared_backend_serves_rereads_with_one_index_and_a_reader_per_thread():
     assert sum(sum(r.reads) for r in CountingReader.made) == 120
     assert 1 <= len(CountingReader.made) <= 3
     assert backend.index.calls == []                           # re-reads do not search the index
+
+
+def test_per_request_rereads_land_on_replayed_positions():
+    pos = np.array([100, 101, 102, 103])
+    counts = np.array([0, 5, 0, 3])
+    plan = tr.reread_plan_each(pos, counts, pos)
+    assert plan.tolist() == [0, 5, 0, 3]
+    sparse = np.array([100, 102])
+    plan = tr.reread_plan_each(pos, counts, sparse)
+    assert plan.tolist() == [0, 3]
+
+
+def test_load_arm_carries_recorded_rereads():
+    run = {"args": {"warmup": 2}, "timing": {"request_ids": [0, 1, 2, 3, 4], "hit": [1, 0, 1, 0, 1],
+                                              "dt_ms": [1.0] * 5, "rereads": [9, 9, 0, 4, 0]}}
+    arm = tr.load_arm(run)
+    assert arm["reread_each"].tolist() == [0, 4, 0] and arm["pos"].tolist() == [2, 3, 4]
+    assert tr.arm_rereads(True, arm, arm["pos"]).tolist() == [0, 4, 0]
+    assert tr.arm_rereads(False, arm, arm["pos"]) is None

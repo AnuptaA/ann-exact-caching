@@ -107,4 +107,5 @@ def add_response(records: Records, index: int, K: int, response, truth) -> None:
     records.add(index, K, path_from_response(response), recall,
                 score=response.score, lam=response.lam_used, n_read=response.n_read,
                 n_contrib=response.n_contrib, cand_recall=cand_recall,
-                backend_kind=kind, backend_depth=depth, cache_ms=response.cache_ms)
+                backend_kind=kind, backend_depth=depth, rereads=response.rereads,
+                cache_ms=response.cache_ms)

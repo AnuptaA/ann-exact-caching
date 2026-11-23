@@ -228,13 +228,15 @@ def load_arm(r):
             raise SystemExit(f"recorded request_ids ({len(ids)}) and hit ({len(hit)}) differ in length")
         keep = ids >= warmup
         pos, hit, dt = ids[keep], hit[keep], dt[keep]
+        per_request = np.asarray(t["rereads"], dtype=np.int64)[keep] if "rereads" in t else None
         total = len(ids)
     else:
         pos = warmup + np.arange(len(hit), dtype=np.int64)
         total = warmup + len(hit)
+        per_request = np.asarray(t["rereads"], dtype=np.int64) if "rereads" in t else None
     return {"pos": pos, "hit": hit, "dt_ms": dt, "warmup": warmup, "total": total, "background": r.get("background"),
             "audit_pos": np.asarray(r["audit_pos"], dtype=np.int64) if "audit_pos" in r else None,
-            "reread": reread_batches(r)}
+            "reread": reread_batches(r), "reread_each": per_request}
 
 
 def reread_batches(r):
@@ -261,6 +263,20 @@ def reread_plan(reread, positions):
     keep = (end >= positions[0]) & (end <= positions[-1])
     acc = np.zeros(n)
     np.add.at(acc, np.searchsorted(positions, end[keep]), count[keep] * scale)
+    return np.diff(np.floor(np.cumsum(acc)), prepend=0).astype(np.int64)
+
+
+def reread_plan_each(rec_pos, counts, positions):
+    """Per-request re-read counts of a recorded run, on the replayed positions: counts of recorded requests
+    between two replayed ones go to the later one; a sparse sample gets its share."""
+    n = len(positions)
+    if n == 0:
+        return np.zeros(0, np.int64)
+    span = int(positions[-1] - positions[0] + 1)
+    scale = min(1.0, n / span)
+    keep = (rec_pos >= positions[0]) & (rec_pos <= positions[-1])
+    acc = np.zeros(n)
+    np.add.at(acc, np.searchsorted(positions, rec_pos[keep]), counts[keep] * scale)
     return np.diff(np.floor(np.cumsum(acc)), prepend=0).astype(np.int64)
 
 
@@ -326,7 +342,11 @@ def get_message(done, procs, deadline, block):
 
 def arm_rereads(enabled, t, positions):
     """Vectors to re-read after each replayed request of an arm, None when disabled or not recorded."""
-    if not enabled or t.get("reread") is None:
+    if not enabled:
+        return None
+    if t.get("reread_each") is not None:
+        return reread_plan_each(t["pos"], t["reread_each"], positions)
+    if t.get("reread") is None:
         return None
     return reread_plan(t["reread"], positions)
 

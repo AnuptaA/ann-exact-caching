@@ -12,6 +12,7 @@ from recal import policy
 from recal.core import MAIN_HIT, MINI_HIT, MISS_K_MAX, Core
 from recal.history import AUDITED, HIT, MISS, HistoryLog
 from recal.params import Params
+from recal.rereads import RereadSchedule
 from recal.signals import Signals
 from recal.updates import Updater
 
@@ -30,6 +31,7 @@ class Response:
     n_read: int = -1                   # entries read on the main path
     n_contrib: int = -1                # entries read that list a vector of the candidate answer
     lam_used: float | None = None      # threshold in force when the request arrived
+    rereads: int = 0                   # vectors re-read from disk as background work at this request
 
 
 class ReCal:
@@ -55,6 +57,9 @@ class ReCal:
         self.rebuild_requested: str | None = None
         self.first_construction_bytes: dict | None = None
         self.construction_log: list[dict] = []
+        self.rereads = RereadSchedule(params.reread_spread)
+        self._pool_ids = np.zeros(0, np.int64)
+        self._zone_ids = np.zeros(0, np.int64)
         self.track_contributing = False
 
     def _bare_core(self) -> Core:
@@ -74,6 +79,11 @@ class ReCal:
     # ---- serving ---------------------------------------------------------------------------------
 
     def serve(self, q: np.ndarray, K: int) -> Response:
+        response = self._serve(q, K)
+        response.rereads = self.rereads.take()
+        return response
+
+    def _serve(self, q: np.ndarray, K: int) -> Response:
         q = np.ascontiguousarray(q, dtype=np.float32)
         self.requests += 1
         self.log.append_hash(self.core.hash_vector(q))
@@ -186,13 +196,25 @@ class ReCal:
         self.signals.after_construction(self)
         if self.first_construction_bytes is None:
             self.first_construction_bytes = dict(self.bytes_by_structure())
-        self._log_construction(built)
+        new_pool, new_zone = self._admitted(built)
+        self.rereads.add(new_pool + new_zone)
+        self._log_construction(built, new_pool, new_zone)
         return built
 
-    def _log_construction(self, built: builder.Built) -> None:
+    def _admitted(self, built: builder.Built) -> tuple[int, int]:
+        """Pool and shell vectors this construction reads that the previous one did not hold."""
+        pool = np.asarray(built.pool_ids, dtype=np.int64)
+        zone = np.asarray(built.zone_ids, dtype=np.int64)
+        new_pool = int(len(np.setdiff1d(pool, self._pool_ids, assume_unique=True)))
+        new_zone = int(len(np.setdiff1d(zone, self._zone_ids, assume_unique=True)))
+        self._pool_ids, self._zone_ids = pool, zone
+        return new_pool, new_zone
+
+    def _log_construction(self, built: builder.Built, new_pool: int, new_zone: int) -> None:
         sizes, counts = np.unique(self.core.entry_sizes(), return_counts=True)
         self.construction_log.append({
-            "request": self.requests, "t": self.t, "m": built.m, "R": built.R, "h0": float(built.h0),
+            "request": self.requests, "t": self.t, "new_pool_vectors": new_pool, "new_shell_vectors": new_zone,
+            "m": built.m, "R": built.R, "h0": float(built.h0),
             "W": built.W, "lambda": self.lam, "entries": built.n_entries,
             "entries_by_size": {int(s): int(c) for s, c in zip(sizes, counts)},
             "bytes": {k: float(v) for k, v in self.bytes_by_structure().items()},

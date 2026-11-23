@@ -36,6 +36,7 @@ def test_cell_writes_the_result_shape_and_bytes(prep, tmp_path, backend):
                                 "cached", "entries"}
     assert sum(b["n"] for b in r["log"]) == 4000 or sum(b["n"] for b in r["log"]) > 3000
     assert r["timing"]["n_timed"] == len(r["timing"]["hit"]) == len(r["timing"]["dt_ms"]) == 4200
+    assert len(r["timing"]["rereads"]) == 4200 and sum(r["timing"]["rereads"]) > 0
     assert r["constructions"] >= 1 and r["args"]["warmup"] > 0
     assert {"miss", "audit", "candidate", "label"} >= set(r["background"]) - {"eval", "serve"}
     assert len(r["audit_pos"]) == r["counts"]["audits"]

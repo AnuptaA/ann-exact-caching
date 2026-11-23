@@ -72,7 +72,7 @@ def run(args, records: Records | None = None) -> dict:
     system = ReCal(backend, params, M, work)
     if records is not None:
         system.enable_records()
-    log, ev_pos, audit_pos, timing = [], [], [], {"request_ids": [], "hit": [], "dt_ms": []}
+    log, ev_pos, audit_pos, timing = [], [], [], {"request_ids": [], "hit": [], "dt_ms": [], "rereads": []}
     batch = {"n": 0, "served": 0, "ret": 0.0, "audited": 0}
     first_construction, t0 = None, time.time()
     if history_len:
@@ -104,6 +104,7 @@ def run(args, records: Records | None = None) -> dict:
             timing["request_ids"].append(pos)
             timing["hit"].append(bool(served))
             timing["dt_ms"].append(r.cache_ms)
+            timing["rereads"].append(r.rereads)
         if batch["n"] == args.batch:
             b = system.bytes_by_structure()
             log.append({"t": pos + 1, "n": batch["n"], "served": batch["served"], "served_retention_sum": batch["ret"],

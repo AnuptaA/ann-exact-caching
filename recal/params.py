@@ -43,6 +43,7 @@ class Params:
     idealized: bool = False         # exact labels and candidates from all entries (no m cap)
     seed: int = 0
     coord_bytes: float = 4.0        # bytes charged per vector coordinate (stored precision)
+    reread_spread: int = 1000       # requests over which a construction's vector re-reads are spread (0: at once)
     item_bytes: int = 8             # window item: bin, recall count, weight code, request index
 
     @property
