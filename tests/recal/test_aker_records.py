@@ -50,6 +50,7 @@ class FakeAker:
 class FakeWorld:
     ev = None
     present = None
+    live = None
     recall_measured = 1.0
 
     def __init__(self, rows):
