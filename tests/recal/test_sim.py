@@ -68,3 +68,47 @@ def test_next_fraction_stays_inside_the_bracket():
     f = next_fraction(0.05, 1.2e6, 1.0e6, 0.045, 0.05)
     assert 0.045 < f < 0.05
     assert 0.05 < next_fraction(0.05, 0.5e6, 1.0e6, 0.05, 0.08) < 0.08
+
+
+def test_history_mode_builds_from_history_and_scores_the_rest(prep, tmp_path):
+    args = sim.parser().parse_args(["--prep", str(prep), "--stream", "random", "--budget", "0.6", "--k", "5",
+                                    "--backend", "exact", "--batch", "500", "--timing", "--history-frac", "0.3",
+                                    "--history", "3000", "--min-ess", "30", "--out", str(tmp_path / "o")])
+    r = sim.run(args)
+    n = 4200
+    assert r["history_len"] == int(0.3 * n) == r["first_scored"] == r["args"]["warmup"]
+    assert r["n_scored"] == n - r["history_len"]
+    assert sum(b["n"] for b in r["log"]) <= r["n_scored"]
+    assert r["timing"]["request_ids"][0] == r["first_scored"] and r["timing"]["n_timed"] == r["n_scored"]
+    assert r["constructions"] >= 1 and r["within_M"]
+
+
+def test_history_zero_keeps_the_cold_start_behaviour(prep, tmp_path):
+    args = sim.parser().parse_args(["--prep", str(prep), "--stream", "random", "--budget", "0.6", "--k", "5",
+                                    "--backend", "exact", "--cold-start", "1500", "--history", "3000",
+                                    "--min-ess", "30", "--out", str(tmp_path / "o")])
+    r = sim.run(args)
+    assert r["history_len"] == 0 and r["first_scored"] == 0 and r["n_scored"] == 4200
+    assert r["args"]["warmup"] >= 1500
+
+
+def test_baseline_gets_the_same_history_as_warmup(prep, tmp_path, monkeypatch):
+    from recal import cells, history_mode
+    seen = {}
+
+    def fake_run(cmd, check, env):
+        seen["cmd"] = cmd
+        out = tmp_path / "o"
+        out.mkdir(exist_ok=True)
+        tag = cmd[cmd.index("--tag") + 1]
+        res = {"args": {}, "log": [{"cached": 10, "entries": 2, "memory": 10.0}]}
+        (out / f"static{tag}.json").write_text(json.dumps(res))
+
+    monkeypatch.setattr(cells.subprocess, "run", fake_run)
+    a = sim.parser().parse_args(["--prep", str(prep), "--stream", "random", "--budget", "0.6", "--k", "5",
+                                 "--history-frac", "0.3", "--out", str(tmp_path / "o")])
+    res = cells.run_baseline("prototype", a, attempts=1)
+    n = 4200
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--warmup") + 1] == str(history_mode.history_length(n, 0.3))
+    assert (res["history_len"], res["first_scored"], res["n_scored"]) == (1260, 1260, n - 1260)

@@ -24,7 +24,7 @@ from recal.measure.jobs_util import add_hash_flag, register_args, stamp_result
 from recal.params import Params
 from recal.stored import StoredAnswers
 from recal.system import ReCal
-from recal import accounting
+from recal import accounting, history_mode
 
 
 def load_prep(prep: Path):
@@ -62,6 +62,7 @@ def run(args) -> dict:
     if args.max_requests:
         idx = idx[:args.max_requests]
     d, K = db.shape[1], args.k
+    history_len = history_mode.history_length(len(idx), args.history_frac)
     backend = make_backend(args.backend, db, q, top, idx, args)
     M = accounting.budget_bytes(len(db), d, args.budget)
     params = Params(K=K, seed=args.seed, split_by_query=args.split_by_query, idealized=args.idealized,
@@ -71,7 +72,12 @@ def run(args) -> dict:
     log, ev_pos, audit_pos, timing = [], [], [], {"request_ids": [], "hit": [], "dt_ms": []}
     batch = {"n": 0, "served": 0, "ret": 0.0, "audited": 0}
     first_construction, t0 = None, time.time()
-    for pos, qi in enumerate(idx):
+    if history_len:
+        system.ingest_history(np.asarray(q[idx[:history_len]], dtype=np.float32),
+                              [K] * history_len)
+        first_construction = history_len
+    for pos in range(history_len, len(idx)):
+        qi = idx[pos]
         vec = np.asarray(q[qi], dtype=np.float32)
         r = system.serve(vec, K)
         served = r.source in ("mini", "main")
@@ -109,6 +115,7 @@ def run(args) -> dict:
         "bytes_first_construction": system.first_construction_bytes, "M": M, "within_M": bool(bytes_["total"] <= M),
         "info": [getattr(system.built, "info", None)] if system.built else [], "seconds": time.time() - t0,
     }
+    history_mode.stamp(out, len(idx), history_len)
     if args.log_served:
         out["served_pos"], out["audit_pos"] = ev_pos, audit_pos
     if args.timing:
@@ -131,6 +138,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cold-start", type=int, default=10_000)
     ap.add_argument("--history", type=int, default=30_000, help="H, main-path requests")
+    ap.add_argument("--history-frac", type=float, default=0.0,
+                    help="first fraction of the stream is history; only the rest is scored")
     ap.add_argument("--min-ess", type=float, default=100.0)
     ap.add_argument("--split-by-query", action="store_true", help="roles by distinct query (default: by position)")
     ap.add_argument("--idealized", action="store_true", help="exact labels, candidates from all entries (no m cap)")

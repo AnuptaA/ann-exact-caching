@@ -461,6 +461,8 @@ def main():
     ap.add_argument("--alpha-loosen", type=float, default=1.1)
     ap.add_argument("--warmup", type=int, default=None,
                     help="warm-up requests (default: min(20000, a fifth of the full stream); 11-13: MedRAG-Zipf has 10k)")
+    ap.add_argument("--history-frac", type=float, default=0.0,
+                    help="first fraction of the requests is the warm-up (sets --warmup); only the rest is scored")
     ap.add_argument("--batch", type=int, default=1000)
     ap.add_argument("--max-requests", type=int, default=None)
     ap.add_argument("--progress", type=int, default=5000, help="log every this many requests")
@@ -504,6 +506,10 @@ def main():
                        "AKER_ALLOW_UNVERIFIED_FILTER": "1" if args.allow_unverified_filter else "0"})
     prep = Path(args.prep)
     db, q, top, stream = load(prep, args.stream, native=args.timing)
+    n_stream = len(stream) if args.max_requests is None else min(args.max_requests, len(stream))
+    if args.history_frac:
+        from recal import history_mode
+        args.warmup = history_mode.history_length(n_stream, args.history_frac)
     if args.warmup is None:
         args.warmup = min(20000, len(stream) // 5)
     if args.prox_percentile is not None:
@@ -530,6 +536,9 @@ def main():
             write_result(args.out, res, indent=1)
         return 0
     res = run_quality(args, db, q, World(args, prep, top), stream)
+    if args.history_frac:
+        from recal import history_mode
+        history_mode.stamp(res, n_stream, args.warmup)
     phase_key = f"phase_{args.stream}" if args.stream != "trace" else None
     streams = np.load(prep / "streams.npz")
     if phase_key in streams.files or (args.stream == "shift" and "phase" in streams.files):

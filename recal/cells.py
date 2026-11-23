@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recal import accounting, sim
+from recal import accounting, history_mode, sim
 from recal.measure.jobs_util import register_args, stamp_result
 
 SIM = "simulations/approximate_hits/online_sim.py"
@@ -40,11 +40,19 @@ def counters(method: str, log: dict, d: int, args: dict) -> dict:
                                       args.get("bits", 4))
 
 
+def stream_length(a) -> int:
+    streams = sim.load_prep(Path(a.prep))[3]
+    n = len(streams[a.stream])
+    return min(n, a.max_requests) if a.max_requests else n
+
+
 def run_simulator(method: str, a, fraction: float, tag: str) -> Path:
     cmd = [sys.executable, SIM, "--prep", a.prep, "--stream", a.stream, "--method", SIM_METHOD[method],
            "--budget", f"{fraction:.6g}", "--k", str(a.k), "--out", a.out, "--tag", tag]
     if a.max_requests:
         cmd += ["--max-queries", str(a.max_requests)]
+    if a.history_frac:
+        cmd += ["--warmup", str(history_mode.history_length(stream_length(a), a.history_frac))]
     subprocess.run(cmd, check=True, env={**os.environ, "PYTHONPATH": "."})
     return Path(a.out) / f"{SIM_METHOD[method]}{tag}.json"
 
@@ -81,6 +89,8 @@ def run_baseline(method: str, a, attempts: int = 6) -> dict:
             hi = fraction if hi is None else min(hi, fraction)
         fraction = next_fraction(fraction, used["total"], M, lo, hi)
     used, res, fraction = best if best is not None else (used, res, fraction)
+    n = stream_length(a)
+    history_mode.stamp(res, n, history_mode.history_length(n, a.history_frac))
     res.update({"bytes": used, "M": M, "within_M": bool(used["total"] <= M), "byte_runs": runs,
                 "vector_fraction": fraction, "method": method})
     for p in Path(a.out).glob(f"*{a.tag}_try*.json"):

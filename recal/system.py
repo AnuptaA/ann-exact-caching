@@ -124,6 +124,22 @@ class ReCal:
 
     # ---- construction ----------------------------------------------------------------------------
 
+    def ingest_history(self, vectors, ks) -> None:
+        """Take a stream prefix as history and build the first cache from it.
+
+        Every history request is labeled with the backend's answer at construction. Requests
+        above k_max stay out of the history, as they do when served.
+        """
+        for vec, K in zip(vectors, ks):
+            q = np.ascontiguousarray(vec, dtype=np.float32)
+            self.requests += 1
+            self.log.append_hash(self.core.hash_vector(q))
+            if K <= self.p.k_max:
+                self.t += 1
+                self.log.append(q, int(K), MISS)
+        if len(self.log):
+            self.construct()
+
     def _maybe_construct(self) -> None:
         if self.built is None and len(self.log) >= self.p.cold_start:
             self.construct()
