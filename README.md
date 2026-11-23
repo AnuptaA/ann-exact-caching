@@ -93,21 +93,38 @@ Tests (no data or services): `.venv/bin/python -m pytest tests/approximate_hits 
 `recal/` implements ReCal (C++ core `recal/core/`, Python construction, hit policy, updates and rebuild signals); `recal/README.md` maps each component to its code and test. The earlier cache implementation and drivers in `simulations/approximate_hits/` are kept for comparison (`--method prototype` selects it).
 
 - Build and test: `sh recal/core/build.sh` and `.venv-core/bin/python -m pytest tests/recal` (Python 3.11; `envs/core.txt`).
-- Run a cell: `PYTHONPATH=. .venv-core/bin/python -m recal.cells --method recal|prototype|aker|qvcache --prep <prep> --stream <name> --budget 0.05 --out <dir>`; `python -m recal.jobs` prints job lines for `simulations/approximate_hits/run_jobs.py`.
+- Run a cell: `PYTHONPATH=. .venv-core/bin/python -m recal.cells --method recal|prototype|aker|aker_sim|qvcache|proximity --prep <prep> --stream <name> --budget 0.05 --out <dir>`; `python -m recal.jobs` prints job lines for `simulations/approximate_hits/run_jobs.py`.
 - Budget rule: every system gets the same byte budget M, a percentage of the dataset's stored bytes (N x d x bytes per coordinate), and is charged for everything it keeps in RAM to serve: vectors at their stored precision, ids, graphs and indexes, entry metadata, models and its own caches. Every result JSON carries `bytes` by structure, `M` and `within_M`.
 - Baseline settings: Aker at the paper's settings (alpha_T 0.25, alpha_L 1.1, delta 0, FIFO, query-filter HNSW m 4, efConstruction 8, efSearch 16; the filter values need the shim built against the vendored library, which is the default of `sh simulations/approximate_hits/aker_real/build.sh`; a run whose FILTER line differs fails unless `--allow-unverified-filter`; `--legacy-defaults` restores the authors' bootstrap 0.9 and delta 5); Proximity is Aker's fixed-threshold mode with the 0.1 and 1 percentiles of the squared distances between distinct history queries (`--prox-percentile`); QVCache with D 0.075, alpha 0.9 and four mini-indexes, lookup and insertion per request.
 - Measurement options (each behind a flag that restores the old behaviour): throughput replay aligned to recorded request ids and failing on dead workers; page cache evicted between arms (`posix_fadvise`) with randomized arm order; every composed-timing miss charged a backend latency; the quiet guard fails closed; result files written atomically and stamped with a config hash so stale results are not reused; core ranges from the machine; cache-core crash paths fixed.
 - Parts that need the Linux cluster (DiskANN, the real Aker library and Proximity mode, `mincore` and `fadvise`, `/proc`-based queue and guard, MedRAG, SPACEV and TriviaQA at 10M) are implemented and mock-tested.
 
-## Fetching the precomputed TripClick and MedRAG vectors
+## Fetching data
 
-The vectors are on a shared Google Drive folder (ask the maintainers for access). Use only the TripClick and MedRAG files and do not re-share them.
+SPACEV and Aker's request streams (Zipf 0.3, 0.6, 0.99) come from Aker's Hugging Face release (`sjoon-oh/aker`). The TriviaQA and SPHERE inner-product files, MedRAG and TripClick come from a shared Google Drive folder (ask the maintainers for access; use only these files and do not re-share them; TripClick's terms forbid sharing it).
 
 ```sh
 python3 -m venv .venv-fetch && .venv-fetch/bin/pip install gdown
-sh scripts/fetch_drive_data.sh --local --dry-run   # list what would happen (add --listing file.json to stay offline)
-sh scripts/fetch_drive_data.sh --local             # TripClick and MedRAG's small files: needs about 0.5 GB and 10 GB free
-sh scripts/fetch_drive_data.sh --cluster           # adds the MedRAG corpus: about 74 GB more (Linux cluster only)
+sh scripts/fetch_data.sh --list                     # what each mode fetches, no network
+sh scripts/fetch_data.sh --spacev --dry-run         # actions and the free-space check, nothing downloaded
+sh scripts/fetch_data.sh --spacev --triviaqa --sphere --medrag --tripclick   # or --all
+sh scripts/fetch_data.sh --medrag --no-corpus       # MedRAG without the 74 GB corpus
+sh scripts/fetch_data.sh --esci                     # ESCI for local checks (never part of --all)
 ```
 
-The script downloads by file id (never the whole folder), refuses to start if fewer than 10 GB would remain free, places files where the workload registry expects them (`datasets/aker/`, `datasets/medrag/`, `datasets/tripclick/`) and runs `scripts/verify_data.py`. `datasets/MANIFEST.md` records name, size, shape, dtype and SHA-256.
+One mode per dataset. Files are placed where the workload registry expects them (`datasets/aker/`, `datasets/medrag/`, `datasets/tripclick/`), the free space is checked before every download (a 10 GB floor), and each dataset is verified afterwards (`scripts/verify_data.py`: shape, dtype, no NaN in a sample, document norms equal M and request last coordinate 0 for the inner-product files). `datasets/MANIFEST.md` lists the expected files. `scripts/fetch_drive_data.sh` is the earlier TripClick and MedRAG fetcher.
+
+## Setting up an instance
+
+`sudo bash scripts/ec2_bootstrap.sh` sets up a fresh Ubuntu 24.04 x86_64 instance in steps (`--dry-run` prints them; `--only` and `--skip` select steps): the harness toolchain and PostgreSQL 16 with pgvector 0.8.0 (`harness/deploy/setup_instance.sh`), the AIO limit, `.venv-core` (Python 3.11) and `.venv-ann` from `envs/`, the ReCal and cache cores, the vendored Aker library in standard and Proximity modes against the pinned Boost and FAISS, links from `datasets/` and `simulations/approximate_hits/results` to the data volume, the data fetch and a smoke test (`scripts/smoke_cells.py`). Set `DATA_DIR` (default `/data`), `RESULTS_DIR` and `TP` to keep data, results and builds off the root disk.
+
+## Running the evaluation
+
+- Experiment matrix: `.venv-core/bin/python -m scripts.gen_matrix --config experiments/matrix.json --dry-run` counts the cells per experiment (`experiments/matrix.example.json` shows the configuration); without `--dry-run` and with `--out jobs/` it writes `jobs/q1.txt` to `q4.txt` and a manifest (`--hashes` adds the config hash of every line). Run a file with `simulations/approximate_hits/run_jobs.py jobs/q1.txt --workers N`. Q1: hit rate at matched recall against the baselines. Q2: ablations of ReCal. Q3: memory split and throughput. Q4: robustness.
+- History: `--history-frac 0.3` (all systems): the first 30% of a stream is history, every system builds from it and only the rest is scored. Results record `history_len`, `first_scored` and `n_scored`.
+- Per-request records: every run writes `<method><tag>_records.npz` next to its result JSON (path, recall, score, lambda, entries read and contributing, candidate recall, backend searches, vector re-reads, cache-path time) and ReCal adds a per-construction table. `recal/analysis/` derives every figure input from the records only: `rates`, `guarantee_table`, `hit_composition`, `oracle`, `hit_rate_at_recall`.
+- Equal bytes: `--coord-bytes` is the stored precision (1 for SPACEV); real Aker and Proximity are sized from the library's own counts (`--equal-bytes` on `eval_aker_real.py`) and every result carries `bytes`, `M` and `within_M`.
+- Backend answers and ground truth: `python -m scripts.precompute_answers --backend pgvector|diskann|exact ...` (answers to depth 7 x K_max, exact ground truth to depth 200 with `--gt-out`).
+- Q3: `recal/system_benefit/` has the split budgets, node cache sizing, the split choice from history runs and the job lines; `scripts/node_cache_curve.py` and `scripts/depth_latency_pgvector.py` measure the backend (DiskANN depth tables come from `latency_probe.py --depths`). Throughput is `throughput_replay.py` at 1 to 64 clients.
+- Q4: `recal/robustness.py` (grids, K streams, bursts, update lines), `scripts/make_shift_streams.py` (abrupt, gradual and correlated shifts over 64 k-means clusters), `scripts/make_update_schedule.py` and `--updates` (inserts and deletes with live ground truth).
+

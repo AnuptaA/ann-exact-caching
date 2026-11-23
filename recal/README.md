@@ -51,6 +51,9 @@ K 10, k_max 100, T 0.9, delta 0.05, audit rate a 0.1, history H 30,000 main-path
 - Deployable mode (default): candidates from the m nearest entries. Idealized mode: `Params(idealized=True)` or `--idealized`, candidates from all entries, no m cap.
 - Cells: `PYTHONPATH=. .venv-core/bin/python -m recal.cells --method recal --prep <prep> --stream random --budget 0.05 --out <dir>`; methods `recal`, `prototype`, `aker`, `qvcache` (simulators), `proximity` (needs the cluster); `prototype` is the earlier cache implementation. `python -m recal.jobs` prints job lines for `simulations/approximate_hits/run_jobs.py`.
 - Local checks on ESCI 50K: `scripts/recal_esci_static.py` (one construction against the earlier implementation), `scripts/recal_stream.py` (end to end with per-window recall of the hits), `scripts/recal_updates_stream.py` (inserts and deletes through rebuilds), `scripts/make_local_prep.py` (prep folder).
+- Ablations (flags of `recal.sim` and `recal.cells`, recorded in the result): `--no-union` (answer from the best-fit entry only), `--no-expansion` (entries hold only their query's top-K, shells at ranks K+1 to 3K), `--no-shells`, `--lru` (no greedy: every miss admits a 2K entry with its shell and least recently used entries are evicted; `lru.py`, `lru_build.py`), `--no-calibration` (serve when the estimate is at least T), `--no-recalibration` (lambda fixed between constructions), `--no-mini-cache`, `--no-rebuild-signals` (rebuild only at the periodic refresh). With every switch off a run equals the default.
+- Options: `--target T`, `--history-frac`, `--coord-bytes`, `--k-mixed --k-set 5 10 50 100`, `--updates <schedule.npz>`, `--timing`, `--log-served`.
+- Records and analysis: `records.py`, `analysis/`. Vector re-reads: `rereads.py` (a construction's new pool and shell vectors are spread over the next `reread_spread` requests).
 - Tests: `.venv-core/bin/python -m pytest tests/recal`.
 
 ## Budget rule
