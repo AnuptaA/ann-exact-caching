@@ -216,6 +216,11 @@ def main():
         for name, t in arms:
             hit = np.zeros(n, bool) if t is None else np.asarray(t["hit"][:n], bool)
             dt = np.zeros(n) if t is None else np.asarray(t["dt_ms"][:n]) / 1e3
+            if t is not None and (dt > 1.0).any():
+                # a recording paused (SIGSTOP by quiet_tp.sh) inside a timed lookup records the pause: replace any
+                # cache-path time above 1 s by the median (11-23: MedRAG 0.03% QVCache, one request of 8,709 s)
+                logger.info(f"{name}: {int((dt > 1.0).sum())} cache-path times > 1 s replaced by the median")
+                dt = np.where(dt > 1.0, np.median(dt), dt)
             aud = None
             if t is not None and "audit_post" in t:
                 aud = np.zeros(n, bool)
