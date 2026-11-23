@@ -56,6 +56,14 @@ def make_backend(kind: str, db, q, top, stream_idx, args):
     return StoredAnswers(db, q[u], z[f"deep_{args.backend_target}"][u], shallow=z[f"answer_{args.backend_target}"][u])
 
 
+ABLATIONS = ("no_union", "no_expansion", "no_shells", "lru", "no_calibration", "no_recalibration",
+             "no_mini_cache")
+
+
+def ablations(args) -> dict:
+    return {name: bool(getattr(args, name, False)) for name in ABLATIONS}
+
+
 def run(args, records: Records | None = None) -> dict:
     prep = Path(args.prep)
     db, q, top, streams = load_prep(prep)
@@ -67,7 +75,8 @@ def run(args, records: Records | None = None) -> dict:
     backend = make_backend(args.backend, db, q, top, idx, args)
     M = accounting.budget_bytes(len(db), d, args.budget, args.coord_bytes)
     params = Params(K=K, coord_bytes=args.coord_bytes, seed=args.seed, split_by_query=args.split_by_query, idealized=args.idealized,
-                    cold_start=args.cold_start, H=args.history, min_ess=args.min_ess)
+                    cold_start=args.cold_start, H=args.history, min_ess=args.min_ess,
+                    **ablations(args))
     work = tempfile.mkdtemp(prefix="recal_sim_")
     system = ReCal(backend, params, M, work)
     if records is not None:
@@ -157,6 +166,9 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--min-ess", type=float, default=100.0)
     ap.add_argument("--split-by-query", action="store_true", help="roles by distinct query (default: by position)")
     ap.add_argument("--idealized", action="store_true", help="exact labels, candidates from all entries (no m cap)")
+    for name in ABLATIONS:
+        ap.add_argument("--" + name.replace("_", "-"), dest=name, action="store_true",
+                        help="ReCal ablation (see recal/README.md)")
     ap.add_argument("--timing", action="store_true", help="record hit and cache-path time per request")
     ap.add_argument("--log-served", action="store_true")
     ap.add_argument("--tag", default="")

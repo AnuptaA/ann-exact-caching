@@ -65,10 +65,13 @@ class ReCal:
     def _bare_core(self) -> Core:
         core = Core(self.backend.dim, self.p.k_max)
         core.set_coord_bytes(self.p.coord_bytes)
+        core.set_union(not self.p.no_union)
         core.set_budget(self.M)
         core.finish_build()
         entry = 40.0 + 8.0 * self.p.K
-        core.mini_set_capacity(max(self.p.mini_floor, int(self.p.mini_cap * self.M // entry)))   # at its cap until the first construction
+        # at its cap until the first construction
+        cap = max(self.p.mini_floor, int(self.p.mini_cap * self.M // entry))
+        core.mini_set_capacity(0 if self.p.no_mini_cache else cap)
         return core
 
     def enable_records(self) -> None:
@@ -90,7 +93,7 @@ class ReCal:
         m = 0 if self.p.idealized else (self.built.m if self.built else 0)
         t0 = time.perf_counter()
         lam_used = self.lam
-        res = self.core.lookup(q, K, lam_used, m, True)
+        res = self.core.lookup(q, K, lam_used, m, not self.p.no_mini_cache)
         cache_ms = (time.perf_counter() - t0) * 1e3
         if res.path == MINI_HIT:                      # a mini hit touches nothing else
             self.counts["mini_hits"] += 1
@@ -126,7 +129,7 @@ class ReCal:
         self.counts["misses"] += 1
         ids, dists = self.backend.search(q, K, kind="miss")
         self.log.append(q, K, MISS, ids, dists, self.backend.version)
-        self.core.mini_put(q, ids, dists)
+        self._mini_put(q, ids, dists)
         if res.has_score and len(res.ids) == K and self.window is not None:
             y = float(np.isin(ids, res.ids).mean())
             self._label(res.score, y, 1.0)
@@ -137,14 +140,18 @@ class ReCal:
         self.counts["audits"] += 1
         ids, dists = self.backend.search(q, K, kind="audit")
         self.log.append(q, K, AUDITED, ids, dists, self.backend.version)
-        self.core.mini_put(q, ids, dists)
+        self._mini_put(q, ids, dists)
         y = float(np.isin(ids, res.ids).mean())
         self._label(res.score, y, 1.0 / self.p.a)
         return Response(res.ids, res.dists, "main", float(res.score), res.path, [("audit", K)], audited=True)
 
+    def _mini_put(self, q, ids, dists) -> None:
+        if not self.p.no_mini_cache:
+            self.core.mini_put(q, ids, dists)
+
     def _label(self, score: float, y: float, weight: float) -> None:
         """A labeled query enters the window and lambda is recomputed."""
-        if self.window is None:
+        if self.window is None or self.p.no_calibration or self.p.no_recalibration:
             return
         self.window.add(self.t, score, y, weight)
         self.certified = self.window.certify()
@@ -183,12 +190,15 @@ class ReCal:
             self.h0, self.log.hash_snapshot())
         built.info["labels"] = labels
         # the new core takes over the mini cache at the size R, then everything is swapped
-        built.core.mini_set_capacity(built.R)
+        built.core.mini_set_capacity(0 if self.p.no_mini_cache else built.R)
         for h, ids, dists in self.core.mini_dump():
             built.core.mini_put_hash(h, ids, dists)
         self.core, self.built = built.core, built
         self.core.set_track_contributing(self.track_contributing)
+        self.core.set_union(not self.p.no_union)
         self.window, self.lam, self.certified, self.h0 = built.window, built.lam, built.certified, max(built.h0, 1e-3)
+        if self.p.no_calibration:
+            self.lam = self.p.T
         self.status = policy.Status(int(self.p.drop_window * self.p.H))
         self.status.margin_unreachable = built.margin_unreachable
         self.constructions += 1

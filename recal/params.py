@@ -41,6 +41,13 @@ class Params:
     outage: float = 0.9
     split_by_query: bool = False    # option: all occurrences of a query in one role
     idealized: bool = False         # exact labels and candidates from all entries (no m cap)
+    no_union: bool = False          # ablation: answer from the single best entry
+    no_expansion: bool = False      # ablation: entries hold only their query's own top-K (j = 1)
+    no_shells: bool = False         # ablation: no shell, estimator on offset and size only
+    lru: bool = False               # ablation: no greedy; every miss admits a 2K entry, LRU eviction
+    no_calibration: bool = False    # ablation: serve when the estimate is at least T
+    no_recalibration: bool = False  # ablation: lambda fixed at construction
+    no_mini_cache: bool = False     # ablation: every request goes to the main cache
     seed: int = 0
     coord_bytes: float = 4.0        # bytes charged per vector coordinate (stored precision)
     reread_spread: int = 1000       # requests over which a construction's vector re-reads are spread (0: at once)

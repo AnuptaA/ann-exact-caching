@@ -642,6 +642,7 @@ class Core {
     int n_entries() const { return (int)entries_.size(); }
     void set_track_contributing(bool on) { track_contrib_ = on; }
     void set_coord_bytes(double b) { coord_bytes_ = b; }
+    void set_union(bool on) { union_ = on; }
     std::vector<int32_t> entry_sizes() const {
         std::vector<int32_t> out;
         out.reserve(entries_.size());
@@ -715,6 +716,7 @@ class Core {
     std::vector<uint32_t> dstamp_, sstamp_, kstamp_;
     uint32_t depoch_ = 0, sepoch_ = 0, kepoch_ = 0;
     bool track_contrib_ = false;
+    bool union_ = true;  // false: answer from the single best entry
     double coord_bytes_ = 4.0;  // bytes charged per stored vector coordinate
 
     size_t mini_capacity_ = 0;
@@ -933,6 +935,25 @@ class Core {
             }
         }
         r.best_entry = best_e;
+        if (!union_) {
+            // answer from the best-fit entry alone: its own list's K nearest
+            std::vector<std::pair<double, int32_t>> own;
+            for (int32_t s : entries_[best_e].resp)
+                if (data_alive_[s]) own.emplace_back(l2(q, &data_vec_[(size_t)s * d], d), s);
+            r.n_candidates = (int)own.size();
+            if ((int)own.size() < K) {
+                r.ids.clear();
+                r.dists.clear();
+                return;
+            }
+            std::partial_sort(own.begin(), own.begin() + K, own.end());
+            for (int t = 0; t < K; t++) {
+                r.ids[t] = data_id_[own[t].second];
+                r.dists[t] = (float)own[t].first;
+            }
+            nr = std::max(own[K - 1].first, EPS);
+            if (track_contrib_) r.n_contrib = 1;
+        }
         r.nr = nr;
         r.offset = best_de / best_rad;
         r.size = nr / best_rad;
@@ -998,6 +1019,7 @@ PYBIND11_MODULE(_recal_core, mod) {
         .def("set_budget", &Core::set_budget)
         .def("set_track_contributing", &Core::set_track_contributing)
         .def("set_coord_bytes", &Core::set_coord_bytes)
+        .def("set_union", &Core::set_union)
         .def("entry_sizes", [](const Core& c) { auto v = c.entry_sizes(); return py::array_t<int32_t>(v.size(), v.data()); })
         .def("set_external_bytes", &Core::set_external_bytes)
         .def("set_model", &Core::set_model)

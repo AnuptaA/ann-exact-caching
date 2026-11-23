@@ -85,8 +85,9 @@ def propose(backend, centers: np.ndarray, Ks: np.ndarray, p) -> Proposals:
         rows = np.flatnonzero(Ks == K)
         ids, dists = backend.search(centers[rows], int(p.deep * K), kind="candidate")
         for local, c in enumerate(rows):
-            for j in p.sizes:
-                n, hi = int(j * K), int((j + p.shell_width) * K)
+            for j in ((1,) if p.no_expansion else p.sizes):
+                n = int(j * K)
+                hi = n if p.no_shells else int((j + p.shell_width) * K)
                 if ids.shape[1] < n:
                     continue
                 entries["cand"].append(c)
@@ -284,6 +285,8 @@ def mini_cache_size(hashes: np.ndarray, M: float, p) -> int:
     cap = int(p.mini_cap * M // entry)
     dist = reuse_distances(hashes)
     r95 = int(np.percentile(dist, p.mini_percentile, method="higher")) if len(dist) else 0
+    if p.no_mini_cache:
+        return 0
     return max(p.mini_floor, min(r95, cap))
 
 
@@ -359,6 +362,7 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
     # build the core: entries, then shells, then the center index
     core = Core(d, p.k_max)
     core.set_coord_bytes(p.coord_bytes)
+    core.set_union(not p.no_union)
     pool_ids = np.unique(np.concatenate([prop.resp[e] for e in chosen])) if chosen else np.array([], np.int64)
     zone_ids = np.unique(np.concatenate([prop.zone[e] for e in chosen])) if chosen else np.array([], np.int64)
     all_ids = np.unique(np.concatenate([pool_ids, zone_ids]))
@@ -395,7 +399,7 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
     ok = feat[:, 0] == 1
     F = feat[ok][:, [2, 3, 4]]
     y = _recall(cand_ids[ok], ids[train][ok][:, :Kt]) if ok.any() else np.array([])
-    model = policy.logistic_model(F, y) if len(y) >= 10 else {"mean": np.zeros(3), "scale": np.ones(3),
+    model = fit_model(F, y, p.no_shells) if len(y) >= 10 else {"mean": np.zeros(3), "scale": np.ones(3),
                                                                 "coef": np.zeros(3), "intercept": 0.0}
     core.set_model(model["mean"], model["scale"], model["coef"], model["intercept"])
     train_scores = policy.score_features(F, model) if len(y) else np.array([0.0])
@@ -423,6 +427,15 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
             "candidates": int(len(prop.centers)), "proposed_entries": int(len(prop.entry_cand))}
     return Built(core, model, m, R, edges, window, cert.lam, cert, h0, W, unreachable, train_scores, sel_centers,
                  sel_K, n_entries, info, pool_ids, zone_ids)
+
+
+def fit_model(F: np.ndarray, y: np.ndarray, no_shells: bool) -> dict:
+    """The recall estimator; without shells it uses offset and size only (the rate coefficient is 0)."""
+    if not no_shells:
+        return policy.logistic_model(F, y)
+    two = policy.logistic_model(F[:, :2], y)
+    return {"mean": np.r_[two["mean"], 0.0], "scale": np.r_[two["scale"], 1.0], "coef": np.r_[two["coef"], 0.0],
+            "intercept": two["intercept"]}
 
 
 def _recall(cand_ids: np.ndarray, truth_ids: np.ndarray) -> np.ndarray:
