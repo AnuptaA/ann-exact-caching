@@ -5,12 +5,14 @@ M is a percentage of the dataset's stored bytes. ReCal charges its own structure
 simulators count the budget in vectors; here the pool is chosen so that the system's bytes by structure
 (recal.accounting) stay within M: a run is repeated with a rescaled pool when it used more than M.
 
-  python -m recal.cells --method recal|prototype|aker|qvcache|proximity --prep <prep> --stream random \\
+  python -m recal.cells --method recal|prototype|aker|aker_sim|qvcache|proximity --prep <prep> --stream random \\
       --budget 0.05 --out <dir>
 
-aker and qvcache are the simulators of simulations/approximate_hits/online_baselines.py at the papers' settings
-(Aker: alpha_T 0.25, alpha_L 1.1, delta 0; QVCache: D 0.075, alpha 0.9, 4 mini-indexes). proximity and the real
-Aker library need the Linux build (needs cluster check): `python -m recal.cells --method proximity` says so.
+aker and proximity run the real vendored Aker library (aker_real/eval_aker_real.py, paper settings, pool sized
+to M from the library's own counts); proximity takes --prox-percentile of the history's pairwise squared
+distances (0.1 and 1). aker_sim, prototype and qvcache are the simulators of
+simulations/approximate_hits/online_baselines.py (QVCache: D 0.075, alpha 0.9, 4 mini-indexes). The real library
+needs the Linux build (needs cluster check): without libakershim.so the cell stops and says so.
 """
 
 import os
@@ -27,12 +29,16 @@ from recal.measure.jobs_util import register_args, stamp_result
 from recal.records import Records
 
 SIM = "simulations/approximate_hits/online_sim.py"
-SIM_METHOD = {"prototype": "static", "aker": "aker", "qvcache": "qvcache"}
+SIM_METHOD = {"prototype": "static", "aker_sim": "aker", "qvcache": "qvcache"}
+REAL_DRIVER = "simulations/approximate_hits/aker_real/eval_aker_real.py"
+REAL_METHODS = ("aker", "proximity")
+REAL_SHIM = Path("simulations/approximate_hits/aker_real/libakershim.so")
+PROX_SHIM = Path("simulations/approximate_hits/aker_real/libakershim_prox.so")
 
 
 def counters(method: str, log: dict, d: int, args: dict, coord_bytes: float = 4) -> dict:
     cached, entries = log["cached"], log["entries"]
-    if method == "aker":
+    if method in ("aker", "aker_sim"):
         return accounting.aker_bytes(cached, entries, args.get("k", 10), args.get("aker_reserve", 0), d,
                                      coord_bytes=coord_bytes)
     if method == "qvcache":
@@ -106,20 +112,61 @@ def run_baseline(method: str, a, attempts: int = 6) -> dict:
     return res
 
 
+def real_aker_command(a, scale: float, out_file: Path) -> list[str]:
+    """Command of the real-library driver for one attempt; Proximity adds the percentile threshold."""
+    cmd = [a.ann_python, REAL_DRIVER, "--prep", a.prep, "--stream", a.stream, "--budget", f"{a.budget:.6g}",
+           "--k", str(a.k), "--equal-bytes", "--coord-bytes", f"{a.coord_bytes:g}", "--pool-scale", f"{scale:.6g}",
+           "--history-frac", f"{a.history_frac:g}", "--out", str(out_file)]
+    if a.max_requests:
+        cmd += ["--max-requests", str(a.max_requests)]
+    if a.backend == "file":
+        cmd += ["--backend-file", a.backend_file, "--backend-target", a.backend_target]
+    if a.method == "proximity":
+        cmd += ["--prox-percentile", f"{a.prox_percentile:g}"]
+    return cmd
+
+
+def run_real_aker(a, attempts: int = 3) -> dict:
+    """Real Aker or Proximity at M: the pool is rescaled and the run repeated while it exceeds M."""
+    shim = PROX_SHIM if a.method == "proximity" else REAL_SHIM
+    if not shim.exists():
+        raise SystemExit(f"{shim} is missing: build the Aker shim (aker_real/build.sh); needs cluster check")
+    scale, res = 1.0, None
+    for attempt in range(attempts):
+        out_file = Path(a.out) / f"{a.method}{a.tag}_try{attempt}.json"
+        subprocess.run(real_aker_command(a, scale, out_file), check=True, env={**os.environ, "PYTHONPATH": "."})
+        res = json.loads(out_file.read_text())
+        records = out_file.with_name(f"{out_file.stem}_records.npz")
+        if res.get("within_M"):
+            break
+        scale *= 0.97 * res["M"] / res["bytes"]["total"]
+    final = Path(a.out) / f"{a.method}{a.tag}_records.npz"
+    if records.exists():
+        records.replace(final)
+    for extra in list(Path(a.out).glob(f"{a.method}{a.tag}_try*.json")) + list(Path(a.out).glob("*_try*_records.npz")):
+        extra.unlink()
+    res.update({"method": a.method, "pool_scale": scale})
+    return res
+
+
 def main() -> None:
     ap = sim.parser()
-    ap.add_argument("--method", choices=["recal", "prototype", "aker", "qvcache", "proximity"], required=True)
+    ap.add_argument("--method", choices=["recal", "prototype", "aker", "aker_sim", "qvcache", "proximity"],
+                    required=True)
+    ap.add_argument("--prox-percentile", type=float, default=0.1,
+                    help="Proximity: threshold at this percentile of squared distances between history queries")
+    ap.add_argument("--ann-python", default=".venv-ann/bin/python", help="interpreter of the real-library driver")
     a = ap.parse_args()
     register_args(a)
-    if a.method == "proximity":
-        raise SystemExit("Proximity mode needs the real Aker library built on Linux: needs cluster check "
-                         "(make q1-run-proximity-p0.1-b5, or aker_real with --prox-frac)")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     if a.method == "recal":
         records = Records()
         result = sim.run(a, records)
         records.save(out / f"recal{a.tag}_records.npz")
+    elif a.method in REAL_METHODS:
+        out.mkdir(parents=True, exist_ok=True)
+        result = run_real_aker(a)
     else:
         result = run_baseline(a.method, a)
     stamp_result(result)

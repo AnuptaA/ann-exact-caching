@@ -465,6 +465,11 @@ def run_timing(args, db, q, top, stream):
 
 def write_result(out, res, **dump_kwargs):
     try:
+        from recal.measure.aker_check import library_fingerprint
+        res.setdefault("aker_library", library_fingerprint())
+    except ImportError:
+        pass
+    try:
         from recal.measure.jobs_util import atomic_write_json, stamp_result
     except ImportError:
         Path(out).parent.mkdir(parents=True, exist_ok=True)

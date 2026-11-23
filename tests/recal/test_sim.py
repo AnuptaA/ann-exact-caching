@@ -137,3 +137,68 @@ def test_records_file_rows_match_the_run(prep, tmp_path):
     assert (cols["n_contrib"][cols["path"] == rec.MAIN] >= 1).all()
     assert len(constructions) == r["constructions"] and "entries_by_size" in constructions[0]
     assert meta["history_len"] == r["history_len"]
+
+
+def real_args(prep, tmp_path, method, extra=()):
+    from recal import cells
+    parser = sim.parser()
+    parser.add_argument("--method")
+    parser.add_argument("--prox-percentile", type=float, default=0.1)
+    parser.add_argument("--ann-python", default=".venv-ann/bin/python")
+    return parser.parse_args(["--method", method, "--prep", str(prep), "--budget", "0.05", "--k", "10",
+                              "--history-frac", "0.3", "--coord-bytes", "1", "--out", str(tmp_path / "o"), *extra])
+
+
+def test_real_aker_and_proximity_commands(prep, tmp_path):
+    from recal import cells
+    aker = cells.real_aker_command(real_args(prep, tmp_path, "aker"), 0.9, tmp_path / "x.json")
+    assert aker[:2] == [".venv-ann/bin/python", cells.REAL_DRIVER] and "--prox-percentile" not in aker
+    assert aker[aker.index("--history-frac") + 1] == "0.3" and "--equal-bytes" in aker
+    assert aker[aker.index("--coord-bytes") + 1] == "1" and aker[aker.index("--pool-scale") + 1] == "0.9"
+    prox = cells.real_aker_command(real_args(prep, tmp_path, "proximity", ["--prox-percentile", "1"]), 1.0,
+                                   tmp_path / "x.json")
+    assert prox[prox.index("--prox-percentile") + 1] == "1"
+
+
+def test_real_aker_rescales_the_pool_until_within_m(prep, tmp_path, monkeypatch):
+    from recal import cells
+    monkeypatch.setattr(cells, "REAL_SHIM", tmp_path / "libakershim.so")
+    (tmp_path / "libakershim.so").write_bytes(b"")
+    (tmp_path / "o").mkdir()
+    scales = []
+
+    def fake_run(cmd, check, env):
+        scale = float(cmd[cmd.index("--pool-scale") + 1])
+        scales.append(scale)
+        out = Path(cmd[cmd.index("--out") + 1])
+        total = 1200.0 * scale
+        out.write_text(json.dumps({"M": 1000.0, "bytes": {"total": total}, "within_M": total <= 1000.0}))
+
+    from pathlib import Path
+    monkeypatch.setattr(cells.subprocess, "run", fake_run)
+    res = cells.run_real_aker(real_args(prep, tmp_path, "aker"))
+    assert len(scales) == 2 and scales[1] < scales[0] and res["within_M"] and res["method"] == "aker"
+    assert not list((tmp_path / "o").glob("*_try*.json"))
+
+
+def test_missing_shim_is_flagged_as_cluster_only(prep, tmp_path, monkeypatch):
+    from recal import cells
+    monkeypatch.setattr(cells, "REAL_SHIM", tmp_path / "missing.so")
+    with pytest.raises(SystemExit) as e:
+        cells.run_real_aker(real_args(prep, tmp_path, "aker"))
+    assert "cluster" in str(e.value)
+
+
+def test_library_fingerprint_names_commit_and_vendored_tree():
+    from recal.measure.aker_check import library_fingerprint
+    fp = library_fingerprint(".")
+    assert fp["source"] == "vendored" and fp["filter"]["efSearch"] == 16
+    assert fp["code_commit"] and fp["aker_tree"]
+
+
+def test_job_lines_cover_real_aker_and_both_proximity_settings():
+    from recal import jobs
+    out = jobs.lines("prepdir", "random", [0.05], ["aker", "proximity-p0.1", "proximity-p1"], "x")
+    assert "--method aker " in out[0] and "aker.json" in out[0]
+    assert "--method proximity --prox-percentile 0.1 --tag _p0.1" in out[1] and "proximity_p0.1.json" in out[1]
+    assert "--prox-percentile 1 --tag _p1" in out[2]

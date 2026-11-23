@@ -65,3 +65,18 @@ def verify_filter(text: str, expected: dict = PAPER_FILTER, allow_unverified: bo
             return held
         raise
     return held
+
+
+def library_fingerprint(repo: str = ".") -> dict:
+    """Repo commit and the git tree hash of the vendored Aker library, for every result."""
+    import subprocess
+
+    def git(*args):
+        try:
+            out = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=True)
+            return out.stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+    return {"code_commit": git("rev-parse", "HEAD"), "aker_tree": git("rev-parse", "HEAD:third_party/aker"),
+            "source": "vendored", "filter": PAPER_FILTER}
