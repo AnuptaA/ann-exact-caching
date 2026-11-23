@@ -125,6 +125,30 @@ class LruCache:
             res.path = MISS_ABSTAIN
         return res
 
+    def entries_needed(self, queries: np.ndarray, truth: np.ndarray) -> np.ndarray:
+        """Per query, the entries (nearest center first) that reach every true neighbor the pool holds.
+
+        -1 when none of its neighbors is pooled (the core's entries_needed_batch).
+        """
+        out = np.full(len(queries), -1, dtype=np.int64)
+        if not self.entries:
+            return out
+        ids = list(self.entries)
+        rows = np.array([self.entries[e]["row"] for e in ids])
+        holders: dict = {}
+        for pos, e in enumerate(ids):
+            for i in self.entries[e]["resp"]:
+                holders.setdefault(i, []).append(pos)
+        for n, q in enumerate(queries):
+            slots = [holders[i] for i in truth[n].tolist() if i in holders]
+            if not slots:
+                continue
+            d2 = ((self.centers[rows] - q) ** 2).sum(axis=1)
+            rank = np.empty(len(ids), dtype=np.int64)
+            rank[np.argsort(d2, kind="stable")] = np.arange(len(ids))
+            out[n] = max(min(rank[p] for p in held) + 1 for held in slots)
+        return out
+
     def touch(self, entry_ids) -> None:
         for eid in entry_ids:
             if eid in self.order:

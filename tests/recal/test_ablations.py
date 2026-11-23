@@ -143,3 +143,41 @@ def test_no_rebuild_signals_leaves_only_the_periodic_refresh(tmp_path):
     default = Signals(Params(**BASE))
     default.pool_at_build = 1000
     assert default.fired(Sys, since=10) == "R2 shrinking pool"
+
+
+def test_choose_m_rule_and_the_lru_needed_count_match_the_core_semantics():
+    from recal import build as builder
+    from recal.lru import LruCache
+    needed = np.array([1, 2, 3, 10, -1, 4])
+    assert builder.choose_m(needed, 50, 95.0) == 10
+    assert builder.choose_m(needed, 6, 95.0) == 6
+    assert builder.choose_m(np.array([-1, -1]), 7, 95.0) == 7 and builder.choose_m(needed, 50, 95.0, True) == 0
+    cache = LruCache(2, budget=1e9)
+    far = np.array([10.0, 0.0], np.float32)
+    near = np.array([0.0, 0.0], np.float32)
+    zeros = np.zeros(2, np.float32)
+    for center, ids in ((far, np.arange(0, 10)), (near, np.arange(10, 20))):
+        cache.admit(center, 5, ids, np.linspace(0.1, 1.0, 10).astype(np.float32), np.zeros((20, 2), np.float32))
+    q = np.array([[0.5, 0.0]], np.float32)
+    assert cache.entries_needed(q, np.array([[10, 11, 12, 13, 14]])).tolist() == [1]
+    assert cache.entries_needed(q, np.array([[10, 0, 99, 98, 97]])).tolist() == [2]
+    assert cache.entries_needed(q, np.array([[90, 91, 92, 93, 94]])).tolist() == [-1]
+    assert zeros.shape == (2,)
+
+
+def test_lru_and_recal_report_m_from_the_same_function(tmp_path, monkeypatch):
+    from recal import build as builder
+    calls = []
+    real = builder.choose_m
+
+    def spy(needed, n_entries, percentile, idealized=False):
+        m = real(needed, n_entries, percentile, idealized)
+        calls.append(m)
+        return m
+
+    monkeypatch.setattr(builder, "choose_m", spy)
+    recal, _ = run(tmp_path / "a", n=2600)
+    lru, _ = run(tmp_path / "b", n=3000, lru=True, T=0.5)
+    assert recal.construction_log[0]["m"] == calls[0] and recal.construction_log[0]["m_source"] == "construction"
+    assert lru.construction_log[0]["m"] == calls[-1] and lru.construction_log[0]["m_source"] == "history_once"
+    assert lru.built.m == calls[-1] and lru.built.m <= lru.lru.n_entries()

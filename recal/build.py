@@ -389,11 +389,8 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
     keep = K[train] == Kt
     train, tq = train[keep], tq[keep]
     needed = np.asarray(core.entries_needed_batch(tq, ids[train][:, :Kt])) if len(tq) and chosen else np.array([])
-    needed = needed[needed >= 0]
     n_entries = len(chosen)
-    m = int(min(np.percentile(needed, p.m_percentile, method="higher"), n_entries)) if len(needed) else n_entries
-    if p.idealized:
-        m = 0
+    m = choose_m(needed, n_entries, p.m_percentile, p.idealized)
     # train the recall estimator on the training queries' candidate responses
     feat, cand_ids, _ = core.candidates_batch(tq, Kt, m) if len(tq) else (np.zeros((0, 7)), None, None)
     ok = feat[:, 0] == 1
@@ -427,6 +424,21 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
             "candidates": int(len(prop.centers)), "proposed_entries": int(len(prop.entry_cand))}
     return Built(core, model, m, R, edges, window, cert.lam, cert, h0, W, unreachable, train_scores, sel_centers,
                  sel_K, n_entries, info, pool_ids, zone_ids)
+
+
+def choose_m(needed: np.ndarray, n_entries: int, percentile: float, idealized: bool = False) -> int:
+    """Entries probed per request: the percentile of the entries each training query needs, at most all of them.
+
+    needed: per training query, the entries (nearest center first) that reach every pooled true neighbor,
+    -1 when none of its neighbors is pooled. 0 means all entries (idealized mode).
+    """
+    if idealized:
+        return 0
+    needed = np.asarray(needed)
+    needed = needed[needed >= 0]
+    if not len(needed):
+        return int(n_entries)
+    return int(min(np.percentile(needed, percentile, method="higher"), n_entries))
 
 
 def fit_model(F: np.ndarray, y: np.ndarray, no_shells: bool) -> dict:

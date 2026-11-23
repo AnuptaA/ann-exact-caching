@@ -230,7 +230,7 @@ class ReCal:
             self.signals.after_construction(self)
             return self.built
         built, self.lru = lru_build.build_lru(snap, self.backend, self.p, self.M, self.t, self.log.hash_snapshot(),
-                                              self.core)
+                                              self.core, np.random.default_rng(self.p.seed + 1))
         built.info["labels"] = labels
         self.core.mini_set_capacity(0 if self.p.no_mini_cache else built.R)
         self.built = built
@@ -246,7 +246,7 @@ class ReCal:
         self.construction_log.append({"request": self.requests, "t": self.t, "m": built.m, "R": built.R,
                                       "h0": float(built.h0), "W": built.W, "lambda": self.lam,
                                       "entries": built.n_entries, "new_pool_vectors": 0, "new_shell_vectors": 0,
-                                      "entries_by_size": {2 * self.p.K: built.n_entries},
+                                      "entries_by_size": {2 * self.p.K: built.n_entries}, "m_source": built.info["m_source"],
                                       "bytes": {k: float(v) for k, v in self.bytes_by_structure().items()},
                                       "background": {k: dict(v) for k, v in self.backend.stats.items()}})
         return built
@@ -264,7 +264,7 @@ class ReCal:
         sizes, counts = np.unique(self.core.entry_sizes(), return_counts=True)
         self.construction_log.append({
             "request": self.requests, "t": self.t, "new_pool_vectors": new_pool, "new_shell_vectors": new_zone,
-            "m": built.m, "R": built.R, "h0": float(built.h0),
+            "m": built.m, "m_source": "construction", "R": built.R, "h0": float(built.h0),
             "W": built.W, "lambda": self.lam, "entries": built.n_entries,
             "entries_by_size": {int(s): int(c) for s, c in zip(sizes, counts)},
             "bytes": {k: float(v) for k, v in self.bytes_by_structure().items()},
