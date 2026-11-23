@@ -165,6 +165,7 @@ def run(args, db, q, top, idx, ks, backend, out_dir: Path, records: Records | No
            "background": backend.stats(), "bytes": used, "M": M, "within_M": bool(used["total"] <= M),
            "configured_capacity": capacity, "bytes_used_end": used["total"],
            "bytes_at_full_capacity": calibration["bytes_at_full_capacity"], "calibration": calibration,
+           "memory_model": accounting.qvcache_memory_model(d, args.coord_bytes, conf["R"], conf["pca_dim"]),
            "qvcache": {"repo": ARTIFACT_REPO, "commit": ARTIFACT_COMMIT, "settings": conf,
                        "deviation_factor": deviation, "search_strategy": SEARCH_STRATEGY,
                        "threads": args.qvcache_threads, "differences": DIFFERENCES,

@@ -4,7 +4,9 @@ Everything a system keeps in RAM to serve is charged: vectors at their stored pr
 indexes, entry metadata, models and its own caches. The formulas are nominal sizes.
 """
 
+import json
 import re
+from pathlib import Path
 
 ID_BYTES = 8
 FLOAT_BYTES = 4
@@ -170,19 +172,49 @@ def capacity_for_budget(system: str, M: float, d: int, coord_bytes: float, **kwa
 # 4-byte neighbors. Per active region: its key and a double threshold. PCA: pca_dim x dim float32 plus the mean.
 QVCACHE_TAG_BYTES = 4
 QVCACHE_REGION_BYTES = 16
+QVCACHE_MEMORY_FILE = Path(__file__).parent / "data" / "qvcache_memory.json"
+
+
+def qvcache_measured(d: int, coord_bytes: float, R: int) -> dict | None:
+    """Constants measured on the artifact (scripts/measure_qvcache_memory.py) for this dimension, precision and
+    degree, or None. Written only when the measurement differs from the model by more than 5%."""
+    try:
+        entries = json.loads(Path(QVCACHE_MEMORY_FILE).read_text())
+    except (OSError, ValueError):
+        return None
+    return entries.get(qvcache_memory_key(d, coord_bytes, R))
+
+
+def qvcache_memory_key(d: int, coord_bytes: float, R: int) -> str:
+    return f"{d}x{coord_bytes:g}x{R}"
 
 
 def qvcache_unit_costs(d: int, coord_bytes: float, R: int) -> dict:
-    return {"per_point": coord_bytes * d + QVCACHE_TAG_BYTES + 4.0 * R, "per_region": QVCACHE_REGION_BYTES}
+    """Bytes per cached point (model: vector at stored precision + tag + graph row, or the measured value)."""
+    measured = qvcache_measured(d, coord_bytes, R)
+    per_point = measured["per_point"] if measured else coord_bytes * d + QVCACHE_TAG_BYTES + 4.0 * R
+    return {"per_point": per_point, "per_region": QVCACHE_REGION_BYTES,
+            "source": f"measured:{qvcache_memory_key(d, coord_bytes, R)}" if measured else "model"}
 
 
-def qvcache_fixed_bytes(d: int, pca_dim: int, regions: int) -> float:
-    return pca_dim * d * 4.0 + d * 4.0 + regions * QVCACHE_REGION_BYTES
+def qvcache_fixed_bytes(d: int, pca_dim: int, regions: int, coord_bytes: float = FLOAT_BYTES, R: int = 64) -> float:
+    """Bytes that do not scale with the points: the PCA projection (or the measured fixed overhead) and the regions."""
+    measured = qvcache_measured(d, coord_bytes, R)
+    base = measured["fixed"] if measured else pca_dim * d * 4.0 + d * 4.0
+    return base + regions * QVCACHE_REGION_BYTES
+
+
+def qvcache_memory_model(d: int, coord_bytes: float, R: int, pca_dim: int) -> dict:
+    """The constants a result records: per point, fixed bytes and where they come from."""
+    c = qvcache_unit_costs(d, coord_bytes, R)
+    return {"per_point": c["per_point"], "fixed": qvcache_fixed_bytes(d, pca_dim, 0, coord_bytes, R),
+            "per_region": c["per_region"], "source": c["source"]}
 
 
 def qvcache_full_capacity_bytes(max_points: int, d: int, coord_bytes: float, R: int, pca_dim: int,
                                 regions: int) -> float:
-    return max_points * qvcache_unit_costs(d, coord_bytes, R)["per_point"] + qvcache_fixed_bytes(d, pca_dim, regions)
+    return (max_points * qvcache_unit_costs(d, coord_bytes, R)["per_point"]
+            + qvcache_fixed_bytes(d, pca_dim, regions, coord_bytes, R))
 
 
 def qvcache_capacity_for_budget(M: float, d: int, coord_bytes: float, R: int, pca_dim: int, regions: int,
@@ -192,13 +224,17 @@ def qvcache_capacity_for_budget(M: float, d: int, coord_bytes: float, R: int, pc
     The points are split evenly over the n_mini mini-indexes, so the result is a multiple of n_mini.
     """
     per_point = qvcache_unit_costs(d, coord_bytes, R)["per_point"]
-    points = int((M - qvcache_fixed_bytes(d, pca_dim, regions)) // per_point)
+    points = int((M - qvcache_fixed_bytes(d, pca_dim, regions, coord_bytes, R)) // per_point)
     return max(n_mini, points // n_mini * n_mini)
 
 
 def qvcache_bytes_used(vectors: int, regions: int, d: int, coord_bytes: float, R: int, pca_dim: int) -> dict:
     c = qvcache_unit_costs(d, coord_bytes, R)
-    out = {"vectors": vectors * coord_bytes * d, "tags": vectors * QVCACHE_TAG_BYTES, "graphs": vectors * 4.0 * R,
-           "pca": pca_dim * d * 4.0 + d * 4.0, "regions": regions * c["per_region"]}
+    if c["source"] != "model":
+        out = {"points": vectors * c["per_point"], "fixed": qvcache_fixed_bytes(d, pca_dim, 0, coord_bytes, R),
+               "regions": regions * c["per_region"]}
+    else:
+        out = {"vectors": vectors * coord_bytes * d, "tags": vectors * QVCACHE_TAG_BYTES, "graphs": vectors * 4.0 * R,
+               "pca": pca_dim * d * 4.0 + d * 4.0, "regions": regions * c["per_region"]}
     out["total"] = sum(out.values())
     return out

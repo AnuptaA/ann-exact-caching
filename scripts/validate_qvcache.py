@@ -72,7 +72,16 @@ def compare(artifact: dict, ours: dict, tolerance: float) -> dict:
     return {"differences": diff, "tolerance": tolerance, "ok": all(abs(v) <= tolerance for v in diff.values())}
 
 
+def ensure_data(artifact_dir: Path, dataset: str = "siftsmall") -> None:
+    """The artifact's README expects siftsmall under data/, but the repository does not contain it."""
+    base = Path(artifact_dir) / "data" / dataset / f"{dataset}_base.bin"
+    if not base.exists():
+        raise FileNotFoundError(f"{base} is missing: run scripts/fetch_qvcache_validation_data.sh first (siftsmall, "
+                                "for validating QVCache only)")
+
+
 def run_artifact(artifact_dir: Path, command: str) -> dict:
+    ensure_data(artifact_dir)
     out = subprocess.run(["bash", command], cwd=artifact_dir, capture_output=True, text=True, check=True).stdout
     return {"command": command, "metrics": parse_window_metrics(out),
             "variables": script_variables((artifact_dir / command).read_text())}
