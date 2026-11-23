@@ -160,6 +160,31 @@ public:
         sstamp_.clear(); sfree_.clear(); sslot_.clear(); n_samp_eff_ = 0;
     }
 
+    // The backend's in-memory PQ codes as the shell (doc 9au; optional optimization): DiskANN keeps a PQ code
+    // for every database vector in RAM. A shell sample is then just its id; its distance to a request is the
+    // asymmetric PQ distance (a per-request table of M x 256 chunk distances, one lookup per chunk). No shell
+    // vectors are read or stored; memory per sample = one 4-byte id. Set before any sample.
+    void set_pq(py::array_t<float, py::array::c_style | py::array::forcecast> pivots,
+                std::vector<double> centroid, std::vector<long long> chunk_offsets,
+                py::array_t<uint8_t, py::array::c_style> codes) {
+        if (!sid_.empty() && sslot_.size()) throw std::logic_error("set_pq: samples present");
+        auto P = pivots.unchecked<2>();
+        if (P.shape(0) != 256 || P.shape(1) != d_ || (int)centroid.size() != d_) throw std::invalid_argument("pq dims");
+        pq_ = true; qpack_ = false; rq_ = false;
+        pq_piv_.assign((size_t)256 * d_, 0.f);
+        for (int j = 0; j < 256; ++j) for (int i = 0; i < d_; ++i) pq_piv_[(size_t)j * d_ + i] = P(j, i);
+        pq_cen_.assign(d_, 0.f);
+        for (int i = 0; i < d_; ++i) pq_cen_[i] = (float)centroid[i];
+        pq_chunk_.assign(chunk_offsets.begin(), chunk_offsets.end());
+        pq_M_ = (int)pq_chunk_.size() - 1;
+        if (codes.ndim() != 2 || codes.shape(1) != pq_M_) throw std::invalid_argument("pq codes shape");
+        pq_codes_ref_ = codes;                       // keep the numpy buffer alive (no copy)
+        pq_codes_ = codes.data();
+        pq_n_ = (size_t)codes.shape(0);
+        sstore_.clear(); scode_.clear(); snorm_.clear(); sid_.clear(); sref_.clear(); scached_.clear(); sstamp_.clear();
+        sfree_.clear(); sslot_.clear(); n_samp_eff_ = 0;
+    }
+
     // ---------------------------------------------------------------- cached vectors
     // ids may already be cached (refcount + 1); vecs: one row per id
     void add_cached(py::array_t<i64, py::array::c_style | py::array::forcecast> ids,
@@ -200,6 +225,10 @@ public:
                      py::array_t<float, py::array::c_style | py::array::forcecast> vecs) {
         auto I = ids.unchecked<1>();
         auto V = vecs.unchecked<2>();
+        if (pq_) {                                   // ids only (vecs may be empty)
+            for (ssize_t j = 0; j < I.shape(0); ++j) add_sample(I(j), nullptr);
+            return;
+        }
         if (V.shape(0) != I.shape(0) || V.shape(1) != d_) throw std::invalid_argument("sample vecs shape");
         for (ssize_t j = 0; j < I.shape(0); ++j) add_sample(I(j), &V(j, 0));
     }
@@ -328,7 +357,10 @@ public:
     size_t n_cached() const { return n_cached_; }
     size_t n_samples() const { return n_samp_eff_; }      // samples whose id is not cached
     size_t n_entries() const { return ec_.size(); }
-    double memory(int bits) const { return (double)n_cached_ + (double)n_samp_eff_ * bits / 32.0; }
+    double memory(int bits) const {
+        if (pq_) return (double)n_cached_ + (double)n_samp_eff_ / (double)d_;   // a 4-byte id per sample
+        return (double)n_cached_ + (double)n_samp_eff_ * bits / 32.0;
+    }
     size_t graph_elements() const { return hnsw_ ? hnsw_->getCurrentElementCount() : 0; }
     size_t dead_slots() const { return vid_.size() - vfree_.size() - n_cached_; }
     size_t graph_deleted() const { return n_deleted_; }
@@ -480,6 +512,10 @@ private:
     // the sample's stored form in slot s: packed 4-bit codes + decoded norm, RaBitQ bits + norm + <x, u>, or float32
     void store_sample(int s, const float* v) {
         size_t n = (size_t)s + 1;
+        if (pq_) {
+            if ((size_t)sid_[s] >= pq_n_) throw std::invalid_argument("pq: id out of range");
+            return;
+        }
         if (qpack_) {
             if (scode_.size() < n * nb_) scode_.resize(n * nb_);
             if (snorm_.size() < n) snorm_.resize(n);
@@ -752,7 +788,7 @@ private:
         float nr2 = (float)(nr * nr);
         int cnt = 0;
         QPrep qp;
-        if (qpack_ || rq_) qprep(x, qp);
+        if (qpack_ || rq_ || pq_) qprep(x, qp);
         if (shell_balls_ <= 0) {
             for (size_t s = 0; s < sid_.size(); ++s)
                 if (sref_[s] > 0 && !scached_[s] && sample_d2(x, qp, (int)s) < nr2) ++cnt;
@@ -798,6 +834,23 @@ private:
     // per sample): one multiply-add per dimension on the codes (the simulator's form, sv_sq - 2 sv.x + x.x)
     struct QPrep { std::vector<float> we, wo; float base = 0.f; std::vector<float> tab; float qn = 0.f, qsum = 0.f; };
     void qprep(const float* x, QPrep& p) const {
+        if (pq_) {
+            // tab[c][j] = || (x - centroid)[chunk c] - pivot_j[chunk c] ||^2
+            std::vector<float> xc(d_);
+            for (int i = 0; i < d_; ++i) xc[i] = x[i] - pq_cen_[i];
+            p.tab.assign((size_t)pq_M_ * 256, 0.f);
+            for (int c = 0; c < pq_M_; ++c) {
+                int a = (int)pq_chunk_[c], b = (int)pq_chunk_[c + 1];
+                float* t = &p.tab[(size_t)c * 256];
+                for (int j = 0; j < 256; ++j) {
+                    const float* pv = &pq_piv_[(size_t)j * d_];
+                    float acc = 0.f;
+                    for (int i = a; i < b; ++i) { float u = xc[i] - pv[i]; acc += u * u; }
+                    t[j] = acc;
+                }
+            }
+            return;
+        }
         if (rq_) {
             // q' = P^T (x - c) / ||x - c||; tab[j][b] = sum of q'_i over the set bits of byte value b in byte j
             std::vector<float> r(d_), qp(d_);
@@ -836,6 +889,13 @@ private:
         p.base = (float)(xx - 2.0 * xl);
     }
     inline float sample_d2(const float* x, const QPrep& p, int s) const {
+        if (pq_) {
+            const uint8_t* c = pq_codes_ + (size_t)sid_[s] * pq_M_;
+            const float* t = p.tab.data();
+            float S = 0.f;
+            for (int j = 0; j < pq_M_; ++j) S += t[(size_t)j * 256 + c[j]];
+            return S;
+        }
         if (rq_) {
             const uint8_t* c = &scode_[(size_t)s * rq_nb_];
             const float* t = p.tab.data();
@@ -891,6 +951,14 @@ private:
     int rq_nb_ = 0;
     float rq_isd_ = 1.f;
     std::vector<float> rq_c_, rq_pt_, sxo_;
+    // the backend's PQ codes as the shell (doc 9au)
+    bool pq_ = false;
+    int pq_M_ = 0;
+    size_t pq_n_ = 0;
+    std::vector<float> pq_piv_, pq_cen_;
+    std::vector<long long> pq_chunk_;
+    py::array_t<uint8_t> pq_codes_ref_;
+    const uint8_t* pq_codes_ = nullptr;
     // exact-repeat fast path: center hash -> entry
     bool repeat_fast_ = false;
     std::unordered_multimap<uint64_t, i64> chash_;
@@ -967,6 +1035,7 @@ PYBIND11_MODULE(_cachecore, m) {
         .def("set_insert_ef", &Core::set_insert_ef)
         .def("set_serve_balls", &Core::set_serve_balls)
         .def("set_rabitq", &Core::set_rabitq)
+        .def("set_pq", &Core::set_pq)
         .def("add_cached", &Core::add_cached)
         .def("remove_cached", &Core::remove_cached)
         .def("add_samples", &Core::add_samples)
@@ -1002,6 +1071,7 @@ PYBIND11_MODULE(_cachecore, m) {
         .def("lookup", &QVCore::lookup)
         .def("on_miss", &QVCore::on_miss)
         .def("n_cached", &QVCore::n_cached)
+        .def("n_fetched", &QVCore::n_fetched)
         .def("n_minis_used", &QVCore::n_minis_used)
         .def("n_regions", &QVCore::n_regions)
         .def("cached_ids", &QVCore::cached_ids);

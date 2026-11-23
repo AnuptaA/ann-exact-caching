@@ -522,6 +522,7 @@ class Sim:
                                    ball_scan_below=args.core_ball_scan_below,
                                    repeat_fast=getattr(args, "core_repeat_fast", False),
                                    shell_code=getattr(args, "core_shell_code", "sq"),
+                                   pq_dir=getattr(args, "core_pq_dir", None),
                                    insert_ef=getattr(args, "core_insert_ef", 40),
                                    shell_range=getattr(args, "shell_range", "minmax"),
                                    serve_balls=getattr(args, "core_serve_balls", 0))
@@ -1802,7 +1803,9 @@ def make_parser():
                     help="core: 4-bit code range per dimension, min / max or 1st / 99th percentile (doc 9al)")
     ap.add_argument("--core-insert-ef", type=int, default=40,
                     help="efConstruction of incremental graph inserts (bulk builds use 200; doc 9al)")
-    ap.add_argument("--core-shell-code", choices=["sq", "rabitq"], default="sq",
+    ap.add_argument("--core-pq-dir", type=str, default=None,
+                    help="--core-shell-code pq: the DiskANN index folder whose in-memory PQ codes the shell uses (doc 9au)")
+    ap.add_argument("--core-shell-code", choices=["sq", "rabitq", "pq"], default="sq",
                     help="shell sample codes in the core: b-bit scalar quantization (4 bits: packed) or 1-bit RaBitQ "
                          "(doc 9ak; memory still charged at --bits)")
     ap.add_argument("--timing-compose", default=None,

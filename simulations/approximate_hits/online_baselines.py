@@ -139,6 +139,11 @@ class Base:
                                  "audited_served": 0, "lambda": None,
                                  "memory": self.n_cached(), "cached": self.n_cached(),
                                  "entries": self.n_entries(), "events": n_ev})
+                core = getattr(self, "core", None)
+                if core is not None and hasattr(core, "n_fetched"):
+                    # doc 9au: QVCache fetches each miss's answer vectors not cached yet from the backend (its paper,
+                    # 3.2); cumulative, for the throughput replay's re-reads
+                    self.log[-1].update(fetched=int(core.n_fetched()), samp_fetched=0, samp_new=0)
                 if "initial" in self.D:
                     aff = (~self.D["initial"][truth]).any(axis=1) & keep
                     self.log[-1].update(aff_n=int(aff.sum()), aff_served=int((aff & served).sum()),

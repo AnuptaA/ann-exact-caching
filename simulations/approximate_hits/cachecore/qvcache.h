@@ -93,6 +93,7 @@ public:
         if (th == theta_.end()) theta_[key] = dk; else th->second = (1 - alpha_) * th->second + alpha_ * dk;
         std::vector<ssize_t> fresh;
         for (ssize_t j = 0; j < n; ++j) if (!owner_.count(I(j))) fresh.push_back(j);
+        n_fetched_ += fresh.size();          // doc 9au: vectors QVCache fetches from the backend (re-reads)
         if (minis_[fill_].ids.size() + fresh.size() > cap_) next_fill();
         Mini& mi = minis_[fill_];
         if (graph_ && !mi.g) mi.g.reset(new hnswlib::HierarchicalNSW<float>(&space_, cap_ + k_ + 1, M_, efc_, 100));
@@ -108,11 +109,13 @@ public:
     }
 
     size_t n_cached() const { return owner_.size(); }
+    size_t n_fetched() const { return n_fetched_; }
     int n_minis_used() const { int c = 0; for (auto& m : minis_) c += !m.ids.empty(); return c; }
     size_t n_regions() const { return theta_.size(); }
     std::vector<i64> cached_ids() const { std::vector<i64> o; for (auto& p : owner_) o.push_back(p.first); return o; }
 
 private:
+    size_t n_fetched_ = 0;
     struct Mini {
         std::vector<i64> ids;
         std::vector<float> vecs;

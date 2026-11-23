@@ -25,7 +25,8 @@ FAST_SCORE = 1e9      # the core's score of an exact repeat (fast path, doc 9ak)
 
 class CoreCache(Cache):
     def __init__(self, D, k, R, bits, budget, maintain=True, threads=8, ef1=0, ef2=0, ball_mode="fit", ball_m=64,
-                 ball_ef=64, ball_scan_below=1000, repeat_fast=False, shell_code="sq", insert_ef=40, shell_range="minmax", serve_balls=0):
+                 ball_ef=64, ball_scan_below=1000, repeat_fast=False, shell_code="sq", insert_ef=40, shell_range="minmax", serve_balls=0,
+                 pq_dir=None):
         super().__init__(D, k, R, bits, budget, maintain=maintain)
         if not np.all(self.D["present"]):
             raise ValueError("CoreCache: database changes are not supported")
@@ -57,9 +58,19 @@ class CoreCache(Cache):
             self.core.set_repeat_fast(True)
         # shell sample codes: sq = the simulator's b-bit scalar quantization (4 bits: packed codes in the core);
         # rabitq = 1-bit RaBitQ codes of the raw vectors (doc 9ak; memory still charged at b bits, conservative)
-        if shell_code not in ("sq", "rabitq"):
+        if shell_code not in ("sq", "rabitq", "pq"):
             raise ValueError(shell_code)
         self.shell_code = shell_code
+        if shell_code == "pq":
+            # doc 9au: the shell is the backend's in-memory PQ codes (DiskANN): samples are ids, nothing read or coded
+            if not pq_dir:
+                raise ValueError("--core-shell-code pq needs --core-pq-dir")
+            from simulations.approximate_hits.hit_table_aug5 import load_pq
+            piv, cen, chunk, codes = load_pq(pq_dir)
+            if codes.shape[0] != len(self._db):
+                raise ValueError("pq codes do not match the database")
+            self._pq_codes = np.ascontiguousarray(codes)
+            self.core.set_pq(np.ascontiguousarray(piv), list(map(float, cen)), list(map(int, chunk)), self._pq_codes)
         # 4-bit code range per dimension: the sample's min / max, or its 1st / 99th percentile (robust, doc 9al:
         # outliers stretch min / max and coarsen the codes; the robust range matches float counts in the ladder)
         if shell_range not in ("minmax", "robust"):
@@ -89,12 +100,13 @@ class CoreCache(Cache):
         ball, shell = self._ball_shell(int(c))
         ball = ball[ball >= 0]
         shell = shell[shell >= 0]
-        shell = shell[self.D["draw"][shell] < self.p] if self.qlo is not None or self.bits >= 32 else shell[:0]
+        shell = shell[self.D["draw"][shell] < self.p] if (self.qlo is not None or self.bits >= 32 or self.shell_code == "pq") else shell[:0]
         return ball.astype(np.int64), shell.astype(np.int64)
 
     def _core_add(self, c):
         ball, samp = self._entry_parts(c)
-        sv = (np.asarray(self._db[samp], np.float32) if self.shell_code == "rabitq"
+        sv = (np.zeros((0, self.dim), np.float32) if self.shell_code == "pq"
+              else np.asarray(self._db[samp], np.float32) if self.shell_code == "rabitq"
               else self._quantize(self._db[samp]))
         self.core.add_entry(int(c), np.asarray(self._q[c], np.float32), float(self.geo[c][2]), ball,
                             np.asarray(self._db[ball], np.float32), samp, sv,
@@ -106,6 +118,8 @@ class CoreCache(Cache):
         self.samp_fetched = getattr(self, "samp_fetched", 0) + len(samp)     # shell-sample vectors (re)coded (doc 9as)
         # 11-21: vectors a real cache must read for its shell sample: only ones no current entry samples already (a
         # resized or re-added entry re-codes its sample, but those vectors are in memory)
+        if self.shell_code == "pq":
+            samp = samp[:0]                      # nothing to read: the backend's codes are in memory
         if not hasattr(self, "_samp_count"):
             self._samp_count = np.zeros(len(self._db), dtype=np.int32)
         if len(samp):
@@ -138,7 +152,7 @@ class CoreCache(Cache):
         """p changed: every entry's sampled shell changes (warm-up, greedy rebuilds)."""
         ents = list(self.entries)
         new_range = False
-        if self.qlo is None and self.bits < 32:
+        if self.qlo is None and self.bits < 32 and self.shell_code != "pq":
             # the range over the current sample (shell minus cached vectors), before the entries leave the core
             sid = self.shell_ids()
             samp = sid[self.D["draw"][sid] < self.p]
@@ -193,6 +207,14 @@ class CoreCache(Cache):
         super().remove(c)
 
     def set_p_to_fill(self):
+        if self.shell_code == "pq":              # a sample costs one 4-byte id: (1 / dim) of a vector
+            full = len(self.shell_ids()) / self.dim
+            room = self.budget - self.n_cached()
+            self.p = float(np.clip(room / full, 0.0, 1.0)) if full > 0 else 0.0
+            self._dirty = True
+            if self.p != self._core_p:
+                self._resync_samples()
+            return
         super().set_p_to_fill()
         if self.p != self._core_p:
             self._resync_samples()
