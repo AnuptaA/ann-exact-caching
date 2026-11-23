@@ -1,0 +1,161 @@
+{
+ "history_frac": 0.3,
+ "datasets": {
+  "spacev": {
+   "prep": "results/online/spacev",
+   "coord_bytes": 1,
+   "streams": [
+    "zipf0.3",
+    "zipf0.6",
+    "zipf0.99"
+   ],
+   "budgets": [
+    0.01,
+    0.05,
+    0.1
+   ]
+  },
+  "triviaqa": {
+   "prep": "results/online/triviaqa",
+   "coord_bytes": 4,
+   "streams": [
+    "zipf0.3",
+    "zipf0.6",
+    "zipf0.99"
+   ],
+   "budgets": [
+    0.01,
+    0.05,
+    0.1
+   ]
+  },
+  "medrag": {
+   "prep": "results/online/medrag",
+   "coord_bytes": 4,
+   "streams": [
+    "proximity"
+   ],
+   "budgets": [
+    0.0001,
+    0.0003,
+    0.001,
+    0.003
+   ]
+  },
+  "tripclick": {
+   "prep": "results/online/tripclick",
+   "coord_bytes": 4,
+   "streams": [
+    "consecutive"
+   ],
+   "budgets": [
+    0.01,
+    0.05,
+    0.1
+   ]
+  }
+ },
+ "q1": {
+  "targets": [
+   0.8,
+   0.85,
+   0.9,
+   0.95
+  ],
+  "seeds": [
+   0,
+   1
+  ]
+ },
+ "q2": {
+  "target": 0.9,
+  "budget": 0.05,
+  "seeds": [
+   0,
+   1
+  ],
+  "cells": [
+   {
+    "dataset": "spacev",
+    "stream": "zipf0.99"
+   },
+   {
+    "dataset": "triviaqa",
+    "stream": "zipf0.99"
+   },
+   {
+    "dataset": "tripclick",
+    "stream": "consecutive"
+   }
+  ]
+ },
+ "q3": {
+  "target": 0.9,
+  "total_fraction": 0.05,
+  "cells": [
+   {
+    "dataset": "spacev",
+    "stream": "zipf0.99",
+    "workload": "spacev-aker-0.99",
+    "aker_run": "results/q1/spacev/zipf0.99/aker_b0.05_s0/aker.json",
+    "total_nodes": 200000,
+    "base_nodes": 100000,
+    "index_dir": "results/backends/spacev10m/diskann",
+    "queries": "results/online/spacev/q.npy",
+    "depths": [
+     10,
+     70,
+     100,
+     700
+    ],
+    "curve_nodes": [
+     0,
+     10000,
+     50000,
+     100000,
+     200000,
+     400000
+    ],
+    "node_bytes": 268
+   }
+  ]
+ },
+ "q4": {
+  "target": 0.9,
+  "seeds": [
+   0,
+   1
+  ],
+  "shift_seeds": [
+   0,
+   1,
+   2,
+   3,
+   4
+  ],
+  "cells": [
+   {
+    "dataset": "spacev",
+    "stream": "zipf0.99",
+    "shifts": {
+     "abrupt": "shift_abrupt",
+     "gradual": "shift_gradual",
+     "correlated": "shift_correlated"
+    }
+   },
+   {
+    "dataset": "tripclick",
+    "stream": "consecutive",
+    "bursts": true
+   },
+   {
+    "dataset": "spacev",
+    "stream": "zipf0.99",
+    "updates": {
+     "uniform1": "data/upd_uniform1.npz",
+     "targeted5": "data/upd_targeted5.npz"
+    }
+   }
+  ]
+ }
+}

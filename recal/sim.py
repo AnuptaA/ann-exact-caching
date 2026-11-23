@@ -83,7 +83,7 @@ def run(args, records: Records | None = None) -> dict:
     else:
         backend = make_backend(args.backend, db, q, top, idx, args)
     M = accounting.budget_bytes(len(db), d, args.budget, args.coord_bytes)
-    params = Params(K=K, coord_bytes=args.coord_bytes, seed=args.seed, split_by_query=args.split_by_query, idealized=args.idealized,
+    params = Params(K=K, T=args.target, coord_bytes=args.coord_bytes, seed=args.seed, split_by_query=args.split_by_query, idealized=args.idealized,
                     cold_start=args.cold_start, H=args.history, min_ess=args.min_ess,
                     **ablations(args))
     work = tempfile.mkdtemp(prefix="recal_sim_")
@@ -170,6 +170,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--stream", default="random")
     ap.add_argument("--budget", type=float, default=0.05, help="M as a fraction of the dataset's stored bytes")
     ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--target", type=float, default=0.9, help="recall target T")
     ap.add_argument("--k-mixed", action="store_true", help="draw K per request from --k-set")
     ap.add_argument("--k-set", type=int, nargs="+", default=list(ksets.K_SET))
     ap.add_argument("--updates", default=None, help="update schedule npz (recal/update_schedule.py): inserts and "
