@@ -122,3 +122,24 @@ def test_lru_leaves_default_path_and_refresh_is_a_noop(tmp_path):
     system, _ = run(tmp_path, n=3200, lru=True)
     built = system.built
     assert system.construct() is built and system.constructions == 1
+
+
+def test_no_rebuild_signals_leaves_only_the_periodic_refresh(tmp_path):
+    from recal.signals import Signals
+
+    class Sys:
+        built, t, last_construction = object(), 0, 0
+
+        class core:
+            @staticmethod
+            def n_data_slots():
+                return 1
+
+    p = Params(**BASE, no_rebuild_signals=True)
+    sig = Signals(p)
+    sig.pool_at_build = 1000
+    assert sig.fired(Sys, since=10) is None
+    assert sig.fired(Sys, since=p.H) == "R4 periodic refresh"
+    default = Signals(Params(**BASE))
+    default.pool_at_build = 1000
+    assert default.fired(Sys, since=10) == "R2 shrinking pool"

@@ -25,7 +25,8 @@ from recal.params import Params
 from recal.records import Records, add_response
 from recal.stored import StoredAnswers
 from recal.system import ReCal
-from recal import accounting, history_mode
+from recal import accounting, history_mode, ksets
+from recal.update_schedule import UpdateStream, live_truth
 
 
 def load_prep(prep: Path):
@@ -57,7 +58,7 @@ def make_backend(kind: str, db, q, top, stream_idx, args):
 
 
 ABLATIONS = ("no_union", "no_expansion", "no_shells", "lru", "no_calibration", "no_recalibration",
-             "no_mini_cache")
+             "no_mini_cache", "no_rebuild_signals")
 
 
 def ablations(args) -> dict:
@@ -72,7 +73,15 @@ def run(args, records: Records | None = None) -> dict:
         idx = idx[:args.max_requests]
     d, K = db.shape[1], args.k
     history_len = history_mode.history_length(len(idx), args.history_frac)
-    backend = make_backend(args.backend, db, q, top, idx, args)
+    ks = ksets.k_sequence(len(idx), K, args.k_mixed, args.k_set, args.seed)
+    updates = None
+    if args.updates:
+        if args.backend != "exact":
+            raise SystemExit("--updates needs --backend exact (or the live pgvector backend)")
+        updates = UpdateStream(dict(np.load(args.updates)))
+        backend = ExactBackend(db[updates.present], np.flatnonzero(updates.present))
+    else:
+        backend = make_backend(args.backend, db, q, top, idx, args)
     M = accounting.budget_bytes(len(db), d, args.budget, args.coord_bytes)
     params = Params(K=K, coord_bytes=args.coord_bytes, seed=args.seed, split_by_query=args.split_by_query, idealized=args.idealized,
                     cold_start=args.cold_start, H=args.history, min_ess=args.min_ess,
@@ -86,19 +95,29 @@ def run(args, records: Records | None = None) -> dict:
     first_construction, t0 = None, time.time()
     if history_len:
         system.ingest_history(np.asarray(q[idx[:history_len]], dtype=np.float32),
-                              [K] * history_len)
+                              ks[:history_len])
         first_construction = history_len
     for pos in range(history_len, len(idx)):
         qi = idx[pos]
         vec = np.asarray(q[qi], dtype=np.float32)
-        r = system.serve(vec, K)
+        if updates is not None:
+            ins, dels = updates.due(pos)
+            if len(ins):
+                system.insert(ins, db[ins])
+            if len(dels):
+                system.delete(dels)
+        Kp = int(ks[pos])
+        r = system.serve(vec, Kp)
         served = r.source in ("mini", "main")
         batch["n"] += 1
         truth = None
         if served or records is not None:
-            truth = top[qi, :K] if top is not None else backend.search(vec, K, kind="eval")[0]
+            if updates is not None:
+                truth = live_truth(np.asarray(top[qi]), updates.present, Kp)
+            else:
+                truth = top[qi, :Kp] if top is not None else backend.search(vec, Kp, kind="eval")[0]
         if records is not None:
-            add_response(records, pos, K, r, truth)
+            add_response(records, pos, Kp, r, truth)
         if served:
             batch["served"] += 1
             batch["ret"] += float(np.isin(truth, r.ids).mean())
@@ -151,6 +170,10 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--stream", default="random")
     ap.add_argument("--budget", type=float, default=0.05, help="M as a fraction of the dataset's stored bytes")
     ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--k-mixed", action="store_true", help="draw K per request from --k-set")
+    ap.add_argument("--k-set", type=int, nargs="+", default=list(ksets.K_SET))
+    ap.add_argument("--updates", default=None, help="update schedule npz (recal/update_schedule.py): inserts and "
+                    "deletes applied while the stream is replayed; truth is filtered to the live vectors")
     ap.add_argument("--coord-bytes", type=float, default=4.0,
                     help="bytes per coordinate of the stored vectors (SPACEV: 1); M and the cache charge use it")
     ap.add_argument("--backend", choices=["exact", "stored", "file"], default="stored")

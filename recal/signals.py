@@ -43,6 +43,8 @@ class Signals:
 
     def fired(self, system, since: int) -> str | None:
         p = self.p
+        if p.no_rebuild_signals:
+            return "R4 periodic refresh" if since >= p.H else None
         if self.pool_at_build and system.core.n_data_slots() < p.shrink * self.pool_at_build:
             return "R2 shrinking pool"
         if self.updater is not None and self.updater.frozen >= p.frozen * max(system.core.n_data_slots(), 1):

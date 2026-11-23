@@ -46,6 +46,7 @@ class Params:
     no_shells: bool = False         # ablation: no shell, estimator on offset and size only
     lru: bool = False               # ablation: no greedy; every miss admits a 2K entry, LRU eviction
     lru_m: int = 32                 # entries read per request in the LRU ablation
+    no_rebuild_signals: bool = False  # rebuild only at the periodic refresh
     no_calibration: bool = False    # ablation: serve when the estimate is at least T
     no_recalibration: bool = False  # ablation: lambda fixed at construction
     no_mini_cache: bool = False     # ablation: every request goes to the main cache
