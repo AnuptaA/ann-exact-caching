@@ -18,6 +18,14 @@ BACKENDS = ("exact", "diskann")
 ROOT = "results"
 
 
+def default_deviation(w: dict | None) -> str:
+    """The paper's deviation factor, written explicitly so the default cell hashes like the sweep cell at that value."""
+    if w is None:
+        return ""
+    from recal.qvcache_driver import default_deviation as paper_default
+    return f"--deviation-factor {paper_default(w['coord_bytes']):g}"
+
+
 def backend_flags(w: dict, backend: str) -> str:
     if backend == "exact":
         return "--backend exact"
@@ -31,7 +39,7 @@ def cell(d: str, stem: str, method: str, w: dict, budget, flags: str) -> str:
             f"{flags} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
 
 
-def q1_systems(cfg: dict) -> list[tuple]:
+def q1_systems(cfg: dict, w: dict | None = None) -> list[tuple]:
     """(label, method, stem, backend, flags) of every system cell of one (workload, budget, seed)."""
     q1, out = cfg["q1"], []
     for t in q1["targets"]:
@@ -43,7 +51,7 @@ def q1_systems(cfg: dict) -> list[tuple]:
         out.append((f"proximity-a_{backend}", "proximity", "proximity_p0.1", backend,
                     "--prox-percentile 0.1 --tag _p0.1"))
         out.append((f"proximity-b_{backend}", "proximity", "proximity_p1", backend, "--prox-percentile 1 --tag _p1"))
-        out.append((f"qvcache_{backend}", "qvcache", "qvcache", backend, ""))
+        out.append((f"qvcache_{backend}", "qvcache", "qvcache", backend, default_deviation(w)))
     for d in q1["qvcache_sweep"]:
         out.append((f"qvcache-d{d:g}_exact", "qvcache", f"qvcache_d{d:g}", "exact",
                     f"--deviation-factor {d:g} --tag _d{d:g}"))
@@ -55,7 +63,7 @@ def q1_lines(cfg: dict) -> list[str]:
     for name, w in cfg["workloads"].items():
         for budget in w["budgets"]:
             for seed in cfg["seeds"]:
-                for label, method, stem, backend, flags in q1_systems(cfg):
+                for label, method, stem, backend, flags in q1_systems(cfg, w):
                     d = f"{ROOT}/q1/{name}/{label}_b{budget:g}_s{seed}"
                     out.append(cell(d, stem, method, w, budget, f"{backend_flags(w, backend)} {flags} --seed {seed}"))
     return out
@@ -157,7 +165,50 @@ EXPERIMENTS = {"q1": q1_lines, "q2": q2_lines, "q3": q3_lines, "q4": q4_lines}
 
 
 def all_lines(cfg: dict, only=None) -> dict[str, list[str]]:
+    """Every cell of every experiment, one line each (identical runs appear once per experiment cell)."""
     return {name: fn(cfg) for name, fn in EXPERIMENTS.items() if only is None or name in only}
+
+
+def runs(cfg: dict, only=None) -> dict:
+    """Each distinct run once, with the mapping from every experiment cell to the run that produces it.
+
+    jobs: experiment -> job lines to execute (the first experiment, in q1..q4 order, that contains a run emits it);
+    runs: hash -> {line, out (where the result is), cells: [{experiment, cell, out}]};
+    cells: experiment -> [{cell, hash}] in cell order.
+    """
+    from recal import matrix_hash
+    jobs, table, cells = {}, {}, {}
+    for exp, lines in all_lines(cfg, only).items():
+        jobs[exp], cells[exp] = [], []
+        for line in lines:
+            h, out = matrix_hash.cell_hash(line), matrix_hash.out_dir(line)
+            entry = table.get(h)
+            if entry is None:
+                entry = table[h] = {"line": line, "out": out, "cells": []}
+                jobs[exp].append(line)
+            entry["cells"].append({"experiment": exp, "cell": out, "out": out})
+            cells[exp].append({"cell": out, "hash": h})
+    return {"jobs": jobs, "runs": table, "cells": cells}
+
+
+def sharing_table(cfg: dict, only=None) -> dict:
+    """Per experiment: cells, runs it executes, cells whose run is also used by another experiment, and cells
+    that repeat a run already in the same experiment."""
+    r = runs(cfg, only)
+    out = {}
+    for exp, cells in r["cells"].items():
+        owners = {h: {c["experiment"] for c in r["runs"][h]["cells"]} for h in {c["hash"] for c in cells}}
+        shared = sum(1 for c in cells if len(owners[c["hash"]]) > 1)
+        counts = {}
+        for c in cells:
+            counts[c["hash"]] = counts.get(c["hash"], 0) + 1
+        repeats = sum(n - 1 for n in counts.values())
+        out[exp] = {"cells": len(cells), "runs_emitted": len(r["jobs"][exp]), "shared_with_other": shared,
+                    "repeated_within": repeats}
+    out["total"] = {"cells": sum(v["cells"] for v in out.values()), "runs_emitted": len(r["runs"]),
+                    "shared_with_other": sum(v["shared_with_other"] for v in out.values()),
+                    "repeated_within": sum(v["repeated_within"] for v in out.values())}
+    return out
 
 
 def design_table(cfg: dict) -> dict:

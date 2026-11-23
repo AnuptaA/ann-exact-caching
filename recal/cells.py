@@ -152,7 +152,7 @@ def run_real_aker(a, attempts: int = 3) -> dict:
     return res
 
 
-def main() -> None:
+def make_parser():
     ap = sim.parser()
     ap.add_argument("--method", choices=["recal", "prototype", "aker", "aker_sim", "qvcache", "qvcache_sim", "proximity"],
                     required=True)
@@ -163,6 +163,11 @@ def main() -> None:
     ap.add_argument("--pca-points", type=int, default=10_000_000, help="QVCache: base points in its PCA training file")
     ap.add_argument("--qvcache-threads", type=int, default=None, help="QVCache build, search and insert threads")
     ap.add_argument("--ann-python", default=".venv-ann/bin/python", help="interpreter of the real-library driver")
+    return ap
+
+
+def main() -> None:
+    ap = make_parser()
     a = ap.parse_args()
     register_args(a)
     out = Path(a.out)

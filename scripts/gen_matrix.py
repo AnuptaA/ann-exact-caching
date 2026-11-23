@@ -29,21 +29,26 @@ def main(argv=None) -> int:
     if a.table:
         for name, row in matrix.design_table(cfg).items():
             print(f"{name}: {row['cells']} cells = {row['dimensions']}")
+        for name, row in matrix.sharing_table(cfg).items():
+            print(f"{name}: {row['cells']} cells, {row['runs_emitted']} runs emitted, "
+                  f"{row['shared_with_other']} cells shared with another experiment, "
+                  f"{row['repeated_within']} repeating a run of the same experiment")
         return 0
-    lines = matrix.all_lines(cfg, a.only)
-    counts = {name: len(v) for name, v in lines.items()}
-    for name, n in counts.items():
-        print(f"{name}: {n} cells")
-    print(f"total: {sum(counts.values())} cells")
+    result = matrix.runs(cfg, a.only)
+    counts = {name: len(v) for name, v in result["cells"].items()}
+    for name, row in matrix.sharing_table(cfg, a.only).items():
+        print(f"{name}: {row['cells']} cells, {row['runs_emitted']} runs")
     if a.dry_run or a.out is None:
         return 0
     a.out.mkdir(parents=True, exist_ok=True)
-    manifest = {"config": str(a.config), "counts": counts}
-    for name, v in lines.items():
+    manifest = {"config": str(a.config), "cells": counts,
+                "runs_emitted": {k: len(v) for k, v in result["jobs"].items()}, "distinct_runs": len(result["runs"])}
+    for name, v in result["jobs"].items():
         (a.out / f"{name}.txt").write_text("\n".join(v) + "\n")
+    (a.out / "matrix_runs.json").write_text(json.dumps(result["runs"], indent=1))
     if a.hashes:
         from recal.measure import jobs_util
-        manifest["hashes"] = {name: [jobs_util.jobline_hash(line) for line in v] for name, v in lines.items()}
+        manifest["hashes"] = {name: [jobs_util.jobline_hash(line) for line in v] for name, v in result["jobs"].items()}
     (a.out / "manifest.json").write_text(json.dumps(manifest, indent=1))
     return 0
 

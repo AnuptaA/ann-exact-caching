@@ -100,7 +100,7 @@ def test_cli_table_writes_files_manifest_and_counts(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "q1: 1050 cells = 25 (workload, budget) x 21 systems x 2 seeds" in out and "total: 2014 cells" in out
     gen_matrix.main(["--config", str(CONFIG), "--out", str(tmp_path), "--only", "q2"])
-    assert json.loads((tmp_path / "manifest.json").read_text())["counts"] == {"q2": 128}
+    assert json.loads((tmp_path / "manifest.json").read_text())["cells"] == {"q2": 128}
     assert len((tmp_path / "q2.txt").read_text().splitlines()) == 128
 
 
