@@ -101,18 +101,18 @@ Tests (no data or services): `.venv/bin/python -m pytest tests/approximate_hits 
 
 ## Fetching data
 
-SPACEV and Aker's request streams (Zipf 0.3, 0.6, 0.99) come from Aker's Hugging Face release (`sjoon-oh/aker`). The TriviaQA and SPHERE inner-product files, MedRAG and TripClick come from a shared Google Drive folder (ask the maintainers for access; use only these files and do not re-share them; TripClick's terms forbid sharing it).
+SPACEV and SPHERE bases and Aker's request streams (Zipf 0.3, 0.6, 0.99) come from Aker's Hugging Face release (`sjoon-oh/aker`). TriviaQA, MedRAG and TripClick each have a shared Google Drive folder with a README (ask the maintainers for access; do not re-share them; TripClick's terms forbid sharing it). `datasets/MANIFEST.md` lists every folder, file, shape and transform.
 
 ```sh
 python3 -m venv .venv-fetch && .venv-fetch/bin/pip install gdown
 sh scripts/fetch_data.sh --list                     # what each mode fetches, no network
 sh scripts/fetch_data.sh --spacev --dry-run         # actions and the free-space check, nothing downloaded
 sh scripts/fetch_data.sh --spacev --triviaqa --sphere --medrag --tripclick   # or --all
-sh scripts/fetch_data.sh --medrag --no-corpus       # MedRAG without the 74 GB corpus
+sh scripts/fetch_data.sh --medrag --no-corpus       # MedRAG requests without the 74 GB corpus
 sh scripts/fetch_data.sh --esci                     # ESCI for local checks (never part of --all)
 ```
 
-One mode per dataset. Files are placed where the workload registry expects them (`datasets/aker/`, `datasets/medrag/`, `datasets/tripclick/`), the free space is checked before every download (a 10 GB floor), and each dataset is verified afterwards (`scripts/verify_data.py`: shape, dtype, no NaN in a sample, document norms equal M and request last coordinate 0 for the inner-product files). `datasets/MANIFEST.md` lists the expected files. `scripts/fetch_drive_data.sh` is the earlier TripClick and MedRAG fetcher.
+One mode per dataset. Files are placed where the workload registry expects them (`datasets/aker/`, `datasets/medrag/`, `datasets/tripclick/`). A file expected in a Drive folder but missing from its listing stops the run before any download, the free space is checked before every download (a 10 GB floor), and each dataset is verified afterwards (`scripts/verify_data.py`). `--sphere` downloads the Hugging Face base and builds the inner-product corpus (`scripts/build_sphere_ip.py`, which checks M against the published value). MedRAG uses the 100,000-request stream and its corpus; the 10,000-request stream was made with a different rewording model and is fetched only with `--medrag-10k`, under its own names (`medrag-10k-ip` in the registry), and is not used by the experiments. Verification of the 100K stream checks the vector file (100,000 x 769 float32, last coordinate 0), the draw (Zipf 0.8, seed 0, 500 questions, counts maximum 7,602, median 92, minimum 38), the request texts (unique, question sequence equal to the draw's). Results record the request file name and SHA-256 (`data_files`).
 
 ## Setting up an instance
 

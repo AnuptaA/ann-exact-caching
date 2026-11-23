@@ -23,16 +23,19 @@ AKER_EXPECTED = {
     "spacev-10m.npy": ((10_000_000, 100), "int8", "cluster only"),
     "sphere-ip-10m.npy": ((10_000_000, 769), "float32", "cluster only"),
     **{f"spacev-sim-100k-{z}.npy": ((100_000, 100), "int8", "local") for z in ZIPF},
-    **{f"triviaqa-ip-sim-100k-{z}.npy": ((100_000, 769), "float32", "local")
-       for z in ZIPF},
+    **{f"triviaqa-ip-sim-100k-{z}.npy": ((n, 769), "float32", "local")
+       for z, n in (("0.3", 99_903), ("0.6", 99_990), ("0.99", 99_907))},
 }
 
 MEDRAG_EXPECTED = {
     "medrag-ip-docs.npy": ((23_888_832, 769), "float32", "cluster only"),
     "base_pmids.npy": ((23_888_832,), "int64", "cluster only"),
     "medrag_pmids.npy": ((23_895_135,), "int64", "cluster only"),
-    "medrag-ip-requests.npy": ((10_000, 769), "float32", "local"),
+    "medrag-ip_100k-requests.npy": ((100_000, 769), "float32", "local"),
 }
+
+MEDRAG_DRAW = {"zipf": 0.8, "seed": 0, "n": 100_000, "questions": 500, "max_count": 7_602, "median": 92,
+               "min_count": 38}
 
 
 def sample_rows(array: np.ndarray, count: int = SAMPLE, seed: int = 0) -> np.ndarray:
@@ -63,16 +66,41 @@ def check_ip_transform(docs: np.ndarray, requests: np.ndarray, norm_max: float |
     return {"norm": float(norms.max()), "spread": spread, "problems": problems}
 
 
-def check_zipf_draw(draw: dict, n_requests: int = 10_000, n_questions: int = 500) -> list[str]:
+def check_zipf_draw(draw: dict, expected: dict = MEDRAG_DRAW) -> list[str]:
+    """The 100K MedRAG draw: exponent, seed, questions, sequence length and the count statistics."""
     problems = []
-    seq = np.asarray(draw["seq"])
-    if len(seq) != n_requests:
-        problems.append(f"draw has {len(seq)} requests, expected {n_requests}")
-    counts = np.bincount(seq, minlength=n_questions)
-    if len(counts) != n_questions or counts.min() < 1:
+    seq = np.asarray(draw.get("seq", []), dtype=np.int64)
+    if draw.get("zipf") != expected["zipf"]:
+        problems.append(f"exponent {draw.get('zipf')}, expected {expected['zipf']}")
+    if draw.get("seed") != expected["seed"]:
+        problems.append(f"seed {draw.get('seed')}, expected {expected['seed']}")
+    if len(draw.get("questions", [])) != expected["questions"]:
+        problems.append(f"{len(draw.get('questions', []))} questions, expected {expected['questions']}")
+    if len(seq) != expected["n"]:
+        problems.append(f"draw has {len(seq)} requests, expected {expected['n']}")
+        return problems
+    counts = np.bincount(seq, minlength=expected["questions"])
+    if len(counts) != expected["questions"] or counts.min() < 1:
         problems.append("not every question appears at least once")
     if list(counts) != list(draw.get("counts", counts)):
         problems.append("counts do not match the sequence")
+    got = (int(counts.max()), int(np.median(counts)), int(counts.min()))
+    want = (expected["max_count"], expected["median"], expected["min_count"])
+    if got != want:
+        problems.append(f"counts (max, median, min) {got}, expected {want}")
+    return problems
+
+
+def check_requests_json(requests: dict, draw: dict, n: int = MEDRAG_DRAW["n"]) -> list[str]:
+    """requests_100k.json: one entry per request, the question sequence of the draw, unique rewording texts."""
+    problems = []
+    texts = requests.get("texts", [])
+    if len(texts) != n:
+        problems.append(f"{len(texts)} rewording texts, expected {n}")
+    if list(requests.get("question", [])) != list(draw.get("seq", [])):
+        problems.append("question sequence of the requests differs from the draw")
+    if len(set(texts)) != len(texts):
+        problems.append(f"{len(texts) - len(set(texts))} rewording texts are repeated")
     return problems
 
 
@@ -144,36 +172,36 @@ def verify_tripclick(directory: Path) -> int:
 
 
 def verify_medrag(directory: Path, aker_dir: Path) -> int:
-    failures = 0
-    for name, (shape, dtype, where) in MEDRAG_EXPECTED.items():
+    """The 100K request files and, when present, the corpus. Any mismatch is a failure."""
+    problems = []
+    requests_path = aker_dir / "medrag-ip_100k-requests.npy"
+    if not requests_path.exists():
+        return report([f"missing {requests_path}"])
+    shape, dtype, _ = MEDRAG_EXPECTED[requests_path.name]
+    problems += check_shape(requests_path, shape, dtype)
+    requests = np.load(requests_path, mmap_mode="r")
+    if not problems and np.abs(sample_rows(requests, len(requests))[:, -1]).max() != 0.0:
+        problems.append("last coordinate of a request is not 0")
+    draw_path, texts_path = directory / "zipf_draw_100k.json", directory / "requests_100k.json"
+    draw = json.loads(draw_path.read_text()) if draw_path.exists() else None
+    if draw is None:
+        problems.append(f"missing {draw_path}")
+    else:
+        problems += check_zipf_draw(draw)
+        if texts_path.exists():
+            problems += check_requests_json(json.loads(texts_path.read_text()), draw)
+        else:
+            problems.append(f"missing {texts_path}")
+    for name in ("medrag-ip-docs.npy", "base_pmids.npy", "medrag_pmids.npy"):
         path = (aker_dir if name.startswith("medrag-ip") else directory) / name
-        if not path.exists():
-            print(f"missing ({where}): {name}")
-            continue
-        array = np.load(path, mmap_mode="r")
-        if array.shape != shape or str(array.dtype) != dtype:
-            print(f"PROBLEM: {name} is {array.shape} {array.dtype}, expected {shape} {dtype}")
-            failures += 1
-    draw_path = directory / "zipf_draw.json"
-    if draw_path.exists():
-        for problem in check_zipf_draw(json.loads(draw_path.read_text())):
-            print("PROBLEM:", problem)
-            failures += 1
-    base_path = directory / "base.json"
-    docs_path = aker_dir / "medrag-ip-docs.npy"
-    requests_path = aker_dir / "medrag-ip-requests.npy"
-    if base_path.exists() and requests_path.exists():
+        if path.exists():
+            shape, dtype, _ = MEDRAG_EXPECTED[name]
+            problems += check_shape(path, shape, dtype)
+    base_path, docs_path = directory / "base.json", aker_dir / "medrag-ip-docs.npy"
+    if base_path.exists() and docs_path.exists() and not problems:
         base = json.loads(base_path.read_text())
-        requests = np.load(requests_path, mmap_mode="r")
-        if np.abs(sample_rows(requests, len(requests))[:, -1]).max() != 0.0:
-            print("PROBLEM: last coordinate of a request is not 0")
-            failures += 1
-        if docs_path.exists():
-            docs = np.load(docs_path, mmap_mode="r")
-            for problem in check_ip_transform(docs, requests, base["M"])["problems"]:
-                print("PROBLEM:", problem)
-                failures += 1
-    return 1 if failures else 0
+        problems += check_ip_transform(np.load(docs_path, mmap_mode="r"), requests, base["M"])["problems"]
+    return report(problems)
 
 
 def sha256(path: Path, block: int = 1 << 24) -> str:

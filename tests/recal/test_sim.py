@@ -230,3 +230,17 @@ def test_baseline_cell_and_real_aker_commands_default_to_thirty_percent(prep, tm
                                  "--out", str(tmp_path / "o")])
     res = cells.run_baseline("prototype", a, attempts=1)
     assert res["history_len"] == 1260 and seen["cmd"][seen["cmd"].index("--warmup") + 1] == "1260"
+
+
+def test_result_records_the_request_file_hash(prep, tmp_path):
+    import hashlib
+    from recal.measure import jobs_util as ju
+    ju._data_files.clear()
+    args = sim.parser().parse_args(["--prep", str(prep), "--stream", "random", "--budget", "0.6", "--k", "5",
+                                    "--backend", "exact", "--history", "3000", "--min-ess", "30",
+                                    "--out", str(tmp_path / "o")])
+    result = ju.stamp_result(sim.run(args))
+    entry = result["data_files"][0]
+    assert entry["name"] == "q.npy"
+    assert entry["sha256"] == hashlib.sha256((prep / "q.npy").read_bytes()).hexdigest()
+    ju._data_files.clear()

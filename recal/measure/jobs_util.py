@@ -39,6 +39,7 @@ FRESH, MISSING, STALE = 0, 1, 2
 HASH_SCHEME = 2
 HASH_FLAG = "--print-config-hash"
 _registered: dict = {}
+_data_files: list = []
 
 
 def atomic_write_json(path: Any, obj: Any, **dump_kwargs: Any) -> None:
@@ -143,8 +144,41 @@ def register_args(args: argparse.Namespace) -> None:
     _registered.update(resolved)
 
 
+def file_sha256(path: Any, block: int = 1 << 24) -> str:
+    """SHA-256 of a file, cached in a sidecar (<file>.sha256) that holds the size it was computed for."""
+    import hashlib
+    path = Path(path)
+    sidecar = path.with_name(path.name + ".sha256")
+    size = path.stat().st_size
+    try:
+        recorded_size, digest = sidecar.read_text().split()
+        if int(recorded_size) == size:
+            return digest
+    except (OSError, ValueError):
+        pass
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(block):
+            h.update(chunk)
+    try:
+        sidecar.write_text(f"{size} {h.hexdigest()}\n")
+    except OSError:
+        pass
+    return h.hexdigest()
+
+
+def register_data_file(path: Any) -> None:
+    """Remember a request file a run reads; stamp_result records its name, size and SHA-256."""
+    path = Path(path)
+    if path.exists() and all(d["path"] != str(path) for d in _data_files):
+        _data_files.append({"path": str(path), "name": path.name, "bytes": path.stat().st_size,
+                            "sha256": file_sha256(path)})
+
+
 def stamp_result(result: dict, argv: Optional[list] = None) -> dict:
     """Add config_hash and code_commit: scheme 2 when the script registered its arguments."""
+    if _data_files:
+        result["data_files"] = [dict(d) for d in _data_files]
     if _registered:
         result["config_hash"] = resolved_hash(_registered)
         result["hash_scheme"] = HASH_SCHEME

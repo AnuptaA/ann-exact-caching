@@ -1,0 +1,292 @@
+{
+ "medrag": [
+  {
+   "path": "100k/medrag-ip_100k-requests.npy",
+   "id": "1YWJIjvCnhTw-cDDfKGkx44EXpvIq9KmI",
+   "size": null
+  },
+  {
+   "path": "100k/paraphrase_stats_100k.json",
+   "id": "1bzD0RZkfTB-9-ejSpUiZcfzXCoLQAX8X",
+   "size": null
+  },
+  {
+   "path": "100k/paraphrases_100k.json",
+   "id": "17BERDUntOxsLqkSSwWMGZlNCOft0wlCZ",
+   "size": null
+  },
+  {
+   "path": "100k/README.md",
+   "id": "14xRDD_izgAqCy1xJl93QrsvT9vFAxLFq",
+   "size": null
+  },
+  {
+   "path": "100k/requests_100k.json",
+   "id": "1WbdMUPjs8ru8VHYhSX75cxqEHEDfn9y0",
+   "size": null
+  },
+  {
+   "path": "100k/zipf_draw_100k.json",
+   "id": "1pJ_320N2SOF2h0BOvmuAhmqmzqzWkMHX",
+   "size": null
+  },
+  {
+   "path": "scripts/build_workload.py",
+   "id": "1ojj12EnQ4SoSpPXdOXBlV_hfoYi83WU9",
+   "size": null
+  },
+  {
+   "path": "scripts/download_medcpt.sh",
+   "id": "1Pat4wV_YdNZY6ER4hzo2R6jBgS-vozo-",
+   "size": null
+  },
+  {
+   "path": "scripts/medrag_pmids.py",
+   "id": "1XBnxg7EyXLB-JQ16dDi_B-JaUTPViARU",
+   "size": null
+  },
+  {
+   "path": "scripts/paraphrase.py",
+   "id": "13s7q_1HDOYok1a8n7U-0eljYHSFTljqp",
+   "size": null
+  },
+  {
+   "path": "base.json",
+   "id": "17vnnSuHZijHDB0WTNY_zW0UYVUauP3UA",
+   "size": null
+  },
+  {
+   "path": "base_pmids.npy",
+   "id": "1dxtW70B4xIVZCUClG072qkGajTD3um9W",
+   "size": null
+  },
+  {
+   "path": "benchmark.json",
+   "id": "11QvJg0vdtCwI2Dj0Cy-XWHb3O0-jicB7",
+   "size": null
+  },
+  {
+   "path": "medrag-ip-docs.npy",
+   "id": "1_A_FsryLgTxttgBO_zBxpw0bSWZbAeRN",
+   "size": null
+  },
+  {
+   "path": "medrag-ip-requests.npy",
+   "id": "1jOaMnYcxyVGzQkkSXPmrdszK2Q2m3wPy",
+   "size": null
+  },
+  {
+   "path": "medrag_pmids.npy",
+   "id": "1OPuGEYrK9ihS7tqwX6f6XY22LLFwvXP1",
+   "size": null
+  },
+  {
+   "path": "paraphrase_stats.json",
+   "id": "1CyMEkY6u4u0u3Fskvgf-bCh5Z2xF-1cP",
+   "size": null
+  },
+  {
+   "path": "paraphrases.json",
+   "id": "1kwZ5HjKJ79L1t8ePvJOrFmDJ1S-3HlSg",
+   "size": null
+  },
+  {
+   "path": "README.md",
+   "id": "17hLDRWkguSCbidJR2ONREyhc0sMk_-of",
+   "size": null
+  },
+  {
+   "path": "requests.json",
+   "id": "1erpWKjn9HF4yBP3fiBf8UcmpgpKgTV_w",
+   "size": null
+  },
+  {
+   "path": "zipf_draw.json",
+   "id": "1xOj0GX1ikAeyyFnLmIwCu1RxXRDNmg78",
+   "size": null
+  }
+ ],
+ "medrag100k": [
+  {
+   "path": "medrag-ip_100k-requests.npy",
+   "id": "1YWJIjvCnhTw-cDDfKGkx44EXpvIq9KmI",
+   "size": null
+  },
+  {
+   "path": "paraphrase_stats_100k.json",
+   "id": "1bzD0RZkfTB-9-ejSpUiZcfzXCoLQAX8X",
+   "size": null
+  },
+  {
+   "path": "paraphrases_100k.json",
+   "id": "17BERDUntOxsLqkSSwWMGZlNCOft0wlCZ",
+   "size": null
+  },
+  {
+   "path": "README.md",
+   "id": "14xRDD_izgAqCy1xJl93QrsvT9vFAxLFq",
+   "size": null
+  },
+  {
+   "path": "requests_100k.json",
+   "id": "1WbdMUPjs8ru8VHYhSX75cxqEHEDfn9y0",
+   "size": null
+  },
+  {
+   "path": "zipf_draw_100k.json",
+   "id": "1pJ_320N2SOF2h0BOvmuAhmqmzqzWkMHX",
+   "size": null
+  }
+ ],
+ "tripclick": [
+  {
+   "path": "doc_shards/part_0_of_6.json",
+   "id": "1VtGvoibfaIVEoiNmya587KUcK6QvfJ1k",
+   "size": null
+  },
+  {
+   "path": "doc_shards/part_1_of_6.json",
+   "id": "1xLHjmLl8qkuxj1_WQwXZ7E_4r1jJAtgy",
+   "size": null
+  },
+  {
+   "path": "doc_shards/part_2_of_6.json",
+   "id": "1Tf6GTGozToXrs_LExdti3d_ZWZlI0lbW",
+   "size": null
+  },
+  {
+   "path": "doc_shards/part_3_of_6.json",
+   "id": "1u5z9bSnXQt9Dmf_zH9huYACja_Y9ES-J",
+   "size": null
+  },
+  {
+   "path": "doc_shards/part_4_of_6.json",
+   "id": "1nLGO5FZBoxGZ2Kpn7895xw3YrboaN1wy",
+   "size": null
+  },
+  {
+   "path": "doc_shards/part_5_of_6.json",
+   "id": "1tSO1LBRaxbakVnyoIhZrZ0hrV3JMFaNW",
+   "size": null
+  },
+  {
+   "path": "LICENSE.md",
+   "id": "1V5uyW38aZGQoToX-RYLCF_LlFCnSBaoA",
+   "size": null
+  },
+  {
+   "path": "README.md",
+   "id": "1VrY3V_W9ei58FSACtufYjOPQw7MRJL9B",
+   "size": null
+  },
+  {
+   "path": "requests-2018-01-01.json",
+   "id": "1ivHhkgyTDsEdd3SVowsb3WFmXgvmOzVe",
+   "size": null
+  },
+  {
+   "path": "tripclick-ip-docs.npy",
+   "id": "1OCVBnZ4gqhWZZTDNatqdEct9xa5WUlPJ",
+   "size": null
+  },
+  {
+   "path": "tripclick-ip-requests-2018-01-01.npy",
+   "id": "10Ds1vvFr7-NBiYc9R9t8Y3pxO8-mDoKR",
+   "size": null
+  }
+ ],
+ "triviaqa": [
+  {
+   "path": "scripts/make_sphere_ip_transform.py",
+   "id": "1-DwkZl-MrrwIhCIwD6MWJeQYqXBSl__w",
+   "size": null
+  },
+  {
+   "path": "scripts/reembed_triviaqa_queries.py",
+   "id": "1DyUyj3dd3HyjLA5KEeo9zJkhj4UkgUt-",
+   "size": null
+  },
+  {
+   "path": "README.md",
+   "id": "1yYIJTQ32rEIUrTmvuIlmt2j4GTFJXBL4",
+   "size": null
+  },
+  {
+   "path": "sphere-ip-10m.json",
+   "id": "1pjpJr76jGBu38_EPMFnkqXJECCZQmX8H",
+   "size": null
+  },
+  {
+   "path": "triviaqa-dpr-sim-100k-0.3-lineidx.npy",
+   "id": "1xx3x4apVmzQLQWI6m3-XnK-yr-xtMYpB",
+   "size": null
+  },
+  {
+   "path": "triviaqa-dpr-sim-100k-0.3.json",
+   "id": "177ZG3IE96xuLWryyD19-WdXp-xIGZtig",
+   "size": null
+  },
+  {
+   "path": "triviaqa-dpr-sim-100k-0.3.npy",
+   "id": "1gk2uz4GlsLgM-agF6xFiAZRIQtXai4tB",
+   "size": null
+  },
+  {
+   "path": "triviaqa-dpr-sim-100k-0.6-lineidx.npy",
+   "id": "1DOkPcr82RYNc0Q6UguqigQhwtysE1Npm",
+   "size": null
+  },
+  {
+   "path": "triviaqa-dpr-sim-100k-0.6.json",
+   "id": "1pra_rEbSegtqeE4CCCuvYR0_VLwJc9iB",
+   "size": null
+  },
+  {
+   "path": "triviaqa-dpr-sim-100k-0.6.npy",
+   "id": "1HQD6V8LEBk5zeiq-KzZffxRVIfjpYG0k",
+   "size": null
+  },
+  {
+   "path": "triviaqa-dpr-sim-100k-0.99-lineidx.npy",
+   "id": "1tedXr5zgcxjeagANTfMWykWk9F1wuC5h",
+   "size": null
+  },
+  {
+   "path": "triviaqa-dpr-sim-100k-0.99.json",
+   "id": "1brmIC3ky3ly0rZ1yM2t0TNejlYHfSlTY",
+   "size": null
+  },
+  {
+   "path": "triviaqa-dpr-sim-100k-0.99.npy",
+   "id": "147yGFI_veGVK-RhVvjID8cqjjS-4cJL9",
+   "size": null
+  },
+  {
+   "path": "triviaqa-ip-sim-100k-0.3.npy",
+   "id": "1TXmq0Xxd5QsN08akjfVW8H4H1RsDlgwp",
+   "size": null
+  },
+  {
+   "path": "triviaqa-ip-sim-100k-0.6.npy",
+   "id": "1jpUeFoZq_7q8E8S_LenXS3AzikFauZ8s",
+   "size": null
+  },
+  {
+   "path": "triviaqa-ip-sim-100k-0.99.npy",
+   "id": "1rFlLhusZOCjfS3xKJqlf9BtjcsNGAGXD",
+   "size": null
+  }
+ ],
+ "esci": [
+  {
+   "path": "ESCI/queries.npz",
+   "id": "q",
+   "size": 3
+  },
+  {
+   "path": "ESCI/data_vectors/shard_000.npz",
+   "id": "s",
+   "size": 4
+  }
+ ]
+}

@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from recal.backend import ExactBackend
-from recal.measure.jobs_util import add_hash_flag, register_args, stamp_result
+from recal.measure.jobs_util import add_hash_flag, register_args, register_data_file, stamp_result
 from recal.params import Params
 from recal.records import Records, add_response
 from recal.stored import StoredAnswers
@@ -34,11 +34,14 @@ def load_prep(prep: Path):
     if meta["kind"] == "files":          # database and queries as .npy files (local checks, TripClick subsample)
         db = np.load(meta["db"])
         q = np.load(meta["q"], mmap_mode="r")
+        register_data_file(meta["q"])
     elif meta["kind"] == "esci":
         db = np.load(f"datasets/esci/data_vectors/esci_db{meta['n_db']}_s42.npy")
         q = np.load("datasets/esci/data_vectors/esci_queries.npy", mmap_mode="r")
     else:
+        from simulations.approximate_hits.prep_io import register_trace_requests
         from simulations.approximate_hits.run_e2e_oracle_trace import load_base_f32
+        register_trace_requests(meta["trace"])
         db = load_base_f32(meta["trace"])
         q = np.load(prep / "q.npy", mmap_mode="r")
     top = np.load(prep / "top500.npy", mmap_mode="r") if (prep / "top500.npy").exists() else None
