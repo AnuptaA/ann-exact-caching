@@ -38,7 +38,7 @@ def _state(d, target, size):
 
 
 def fig1():
-    runs = [("esci_score20k", "ESCI (real queries)"), ("sift_score20k", "SIFT (real queries)")]
+    runs = [("esci_score20k", "ESCI (real queries)")]
     fig, axes = plt.subplots(len(runs), 3, figsize=(16, 5.0 * len(runs)), squeeze=False)
     for row, (run, title) in enumerate(runs):
         d = _load(RESULTS / run / "radius_baselines.json")

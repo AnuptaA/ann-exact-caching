@@ -23,11 +23,11 @@ Datasets are not in git. TripClick's terms forbid redistributing the data or any
 | `simulations/approximate_hits/plot_headline.py`, `plot_timing.py` | Headline (hit rate) and timing plots |
 | `simulations/approximate_hits/{eval_*,plot_*,summarize_*}.py` | Earlier offline evaluations and figures |
 | `harness/` | Q1 harness: pgvector backend, precomputed answer tables, Aker and Proximity replay (`harness/cpp/ak_replay.cc`), deploy scripts. See `harness/README.md` |
-| `workloads/q1/` | Q1 workload generator: SIFT-10M, SPACEV, SPHERE, ESCI, TriviaQA datasets; Zipf, uniform, no-locality streams; exact ground truth with CPU or GPU |
+| `workloads/q1/` | Q1 workload generator: SPACEV, SPHERE, ESCI, TriviaQA datasets; Zipf, uniform, no-locality streams; exact ground truth with CPU or GPU |
 | `third_party/aker/` | Vendored Aker library with local patches (`PATCHES.md`) used by `harness/` |
-| `datasets/` | Builders: `medrag/`, `tripclick/`, `esci/`, `sift/`, `synthetic/`, `reembed_triviaqa_queries.py`, `make_sphere_ip_transform.py` |
+| `datasets/` | Builders: `medrag/`, `tripclick/`, `esci/`, `synthetic/`, `reembed_triviaqa_queries.py`, `make_sphere_ip_transform.py` |
 | `utils/` | `utils/base/{io,knn,logs}.py` and `utils/cache/` (helpers of the harness) next to the older exact-cache modules (`utils/base/{lemmas,kv_cache,...}.py`) |
-| `tests/` | `approximate_hits`, `test_cachecore.py`, `harness`, `workloads`, `base`, `cache`, `utils`, `esci`, `sift`, `synthetic` |
+| `tests/` | `approximate_hits`, `test_cachecore.py`, `harness`, `workloads`, `base`, `cache`, `utils`, `esci`, `synthetic` |
 | `investigations/sphere_queries/` | SPHERE query-encoder investigation (report in `REPORT.md`) |
 | `stale/` | Old exact-cache code and docs, kept for reference |
 | `envs/`, `env.example` | Requirement files per environment, environment variables |
@@ -64,7 +64,7 @@ All paths are relative to the repository root and gitignored.
 | MedRAG | `datasets/aker/medrag-ip-docs.npy` (about 74 GB), `datasets/aker/medrag-ip-requests.npy`, `datasets/medrag/*` | `datasets/medrag/download_medcpt.sh`, `medrag_pmids.py`, `build_workload.py draw|base|queries`, `paraphrase.py` (local llama.cpp server on 127.0.0.1:18080) |
 | TripClick | `datasets/tripclick/raw/` (Hugging Face token needed), `datasets/aker/tripclick-ip-docs.npy`, `tripclick-ip-requests-2018-01-01.npy` | `datasets/tripclick/download.py`, `build_workload.py --start 2018-01-01 --n 100000` |
 | ESCI 1M | `datasets/esci/data_vectors/{esci_db1000000_s42.npy,esci_queries.npy}` | `datasets/esci/build_embedding_subsample.py` (see `datasets/esci/README_esci.md`) |
-| Q1 streams (SIFT-10M, SPACEV, SPHERE, ESCI, TriviaQA; Zipf, uniform, no-locality) | `$Q1_DATA/<dataset>/` (`base.f32bin`, `streams_seed0.npz`, `gt/`, `answers/`, ...), default `/data/q1` | `make q1-generate DATASET=<name>` |
+| Q1 streams (SPACEV, SPHERE, ESCI, TriviaQA; Zipf, uniform, no-locality) | `$Q1_DATA/<dataset>/` (`base.f32bin`, `streams_seed0.npz`, `gt/`, `answers/`, ...), default `/data/q1` | `make q1-generate DATASET=<name>` |
 | Per-workload preps and backends | `simulations/approximate_hits/results/online/<prep>/` and `results/backends/<prep>/` | `online_prepare.py`, `eval_real_backend.py` |
 
 ## Running things
@@ -86,7 +86,7 @@ Workloads and experiments:
 
 Job runner: job generators print one shell command per line and each command skips itself when its result JSON exists. `run_jobs.py <file> --workers N --cores-per-job C --first-core F` runs the lines with `taskset` pinning (rewriting `.venv-core/bin/python`). `mx_run_job.sh` admits a job only when free memory allows it (learned per-class peaks in `$RECAL_QUEUE_DIR/peaks.tsv`, retries after out-of-memory kills, `HOLD` and `skip.txt` files); `mx_complete.sh`, `mx_requeue.sh` and `mx_watchdog4.sh` re-run missing jobs and supervise. Timing runs go through `run_timing_batch2.sh`, which suspends other jobs and checks that the machine is quiet. The runner assumes a large Linux host with `/proc`.
 
-Tests (no data or services): `.venv/bin/python -m pytest tests/approximate_hits tests/base tests/cache tests/utils tests/workloads tests/harness`. `make test-q1` runs the harness and workload tests. The old exact-cache suites `tests/esci`, `tests/sift` and `tests/synthetic` are older suites; they are excluded from the default collection (`pytest.ini`) and currently fail. Run them explicitly by path.
+Tests (no data or services): `.venv/bin/python -m pytest tests/approximate_hits tests/base tests/cache tests/utils tests/workloads tests/harness`. `make test-q1` runs the harness and workload tests. The old exact-cache suites `tests/esci` and `tests/synthetic` are older suites; they are excluded from the default collection (`pytest.ini`) and currently fail. Run them explicitly by path.
 
 ## ReCal implementation (`recal/`)
 

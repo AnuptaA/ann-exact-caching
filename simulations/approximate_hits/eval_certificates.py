@@ -35,7 +35,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 import numpy as np
 
 from simulations.approximate_hits.greedy_population import hits_from_histograms, online_hits
-from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk, load_inputs
+from simulations.approximate_hits.run_e2e_oracle import exact_topk, load_inputs
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -65,18 +65,9 @@ def pairwise_dist(a, b, b_sq=None):
 def load_run(run_dir: Path):
     data = json.loads((run_dir / "results.json").read_text())
     args = argparse.Namespace(**data["config"])
-    if "zipf" in data["config"]:
-        from simulations.approximate_hits.run_e2e_oracle_synthetic import build_inputs
-        inp = build_inputs(args)
-        wl = inp["wl"]
-        db = inp["db"]
-        cand_q = wl.vectors(inp["cand_ids"])
-        test_q = wl.vectors(inp["test_ids"])
-        test_w, test_seq = inp["test_w"], inp["test_seq"]
-    else:
-        db, cand_q, _, test_q = load_inputs(args)
-        test_w = np.ones(len(test_q), dtype=np.int64)
-        test_seq = None
+    db, cand_q, _, test_q = load_inputs(args)
+    test_w = np.ones(len(test_q), dtype=np.int64)
+    test_seq = None
     return data, args, db, cand_q, test_q, test_w, test_seq
 
 

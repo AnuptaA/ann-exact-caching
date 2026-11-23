@@ -3,7 +3,7 @@
 Data side of research question 1: K = 10, Euclidean, float32 for indexes and ground
 truth. Run from the repo root with `PYTHONPATH=.`; `python -m workloads.q1 --help`.
 
-- `datasets/`: SIFT-10M (HTTP range slice of SIFT-1B), SPACEV 10M and SPHERE 10M (Aker's
+- `datasets/`: SPACEV 10M and SPHERE 10M (Aker's
   released files, used as is), ESCI (all products, distinct queries, 384-d MiniLM), TriviaQA
   (public questions, de-duplicated, encoded with Sphere's DPR query encoder, not normalized;
   `triviaqa_evidence.py` writes the encoder evidence log, informational only).

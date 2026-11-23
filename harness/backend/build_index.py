@@ -7,11 +7,10 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-# Build params: Aker's published values for SPACEV and SPHERE; SIFT-10M and ESCI use SPACEV's.
+# Build params: Aker's published values for SPACEV and SPHERE; ESCI uses SPACEV's.
 BUILD_PARAMS = {
     "spacev": {"m": 16, "ef_construction": 128},
     "sphere": {"m": 32, "ef_construction": 256},
-    "sift10m": {"m": 16, "ef_construction": 128},
     "esci": {"m": 16, "ef_construction": 128},
 }
 

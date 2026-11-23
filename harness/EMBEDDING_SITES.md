@@ -16,7 +16,7 @@ How to read the evidence: **code** = read in this repository, **file** = measure
 | C | `workloads/q1/datasets/triviaqa_evidence.py` (CLI `triviaqa-evidence`) | 300 TriviaQA questions and 50K Hermes SPHERE_100K passages | dpr_web, and with `--compare` bge-base-en-v1.5 and DPR single-nq | `triviaqa_encoder_evidence.md` (a log) | n/a. Feeds no workload |
 | D | `datasets/esci/build_embedding_subsample.py` (older, used by `populate esci` and the simulations) | Same product recipe on a seed-42 random 50K sample; all 130,652 query ids (no text dedup) | Same model, batch 256, normalized, device hard-coded to CPU, no shards, no manifest | `datasets/esci/data_vectors/esci_db50000_s42.npy`, `esci_queries.npy` | Same as A |
 | E | Local files `datasets/esci/product_embeddings.npy`, `queries.npz` | Not produced by any script in the repository; `stale/datasets/esci/README_esci.md` documents the model and recipe | Documented as the same model, unit norm | Files only | Same as A |
-| F | SPACEV, SIFT-10M, SPHERE base vectors; SPACEV and SIFT-10M query vectors | No text | None | Released files | Yes, used as released (section 2) |
+| F | SPACEV, SPHERE base vectors; SPACEV query vectors | No text | None | Released files | Yes, used as released (section 2) |
 | G | `datasets/tripclick/build_workload.py` (`encode`, steps documents and queries) | TripClick: [title, abstract] pairs of 1.52M MEDLINE documents (documents), normalized search texts of a window of 100,000 consecutive searches from 2018-01-01 (queries) | `ncbi/MedCPT-Article-Encoder` (max 512 tokens, CLS, pairs, bf16 autocast on CPU, cosine to fp32 at least 0.99996 per the script) and `ncbi/MedCPT-Query-Encoder` (max 64 tokens, CLS); fp32 output; inner product turned Euclidean by appending sqrt(M^2 - |x|^2) to documents and 0 to queries (769-d) | `datasets/aker/tripclick-ip-docs.npy`, `tripclick-ip-requests-<start>.npy` | No public release; **not run here, vectors are obtained precomputed** (and, locally, already present under `datasets/tripclick/`). MedCPT is not a TripClick-trained encoder (flagged in `PROGRESS.md`) |
 | H | `datasets/reembed_triviaqa_queries.py` (`encode`) | Lines of `triviaqa.txt` (the questions behind Aker's released TriviaQA traces) | `BAAI/bge-base-en-v1.5` raw CLS (only to identify which question each released vector is) and Sphere's DPR_web question encoder (`dpr_web_question_encoder`, BERT CLS, `max_length=256`, uncased, not normalized), float32 | `datasets/aker/triviaqa-dpr-sim-100k-<z>.npy` (same row order as Aker's traces) | Aker's own query vectors exist (bge-base, other space than the SPHERE base). **Not run here, vectors are obtained precomputed.** Same truncation as site B (`max_length=256`) |
 
@@ -24,7 +24,7 @@ No other encoder call exists outside `stale/`, `tests/`, `third_party/` and `inv
 
 ## 2. Released vectors are used as released (code, tested)
 
-- SPACEV: `spacev-10m.npy` (int8, HF `sjoon-oh/aker`) and the big-ann `query.i8bin` (29,316 queries). SIFT-10M: first 10M rows of `base.1B.u8bin` by byte range and `query.public.10K.u8bin`. SPHERE base: `sphere-10m.npy` (float64, 768-d, not normalized).
+- SPACEV: `spacev-10m.npy` (int8, HF `sjoon-oh/aker`) and the big-ann `query.i8bin` (29,316 queries). SPHERE base: `sphere-10m.npy` (float64, 768-d, not normalized).
 - `stage_to_f32` only casts (int8, uint8, float64 to float32) and writes `.f32bin`; no normalization. `test_embedding_sites.py` asserts the cast is exact for all three source types, that the three dataset modules contain no encoder code, and that only `esci` and `sphere` have an `embed` stage (for SPHERE it writes only `triviaqa_enc.npy`, the query vectors).
 
 ## 3. ESCI
@@ -58,7 +58,6 @@ The harness never loads these files. Whether `product_embeddings.npy` matches th
 | Dataset | Query vectors that interpolation uses | Released? In the base space? |
 |---|---|---|
 | SPACEV | `query.i8bin` of the big-ann release | Released; same release as the base (inferred from the release, not checked by code) |
-| SIFT-10M | `query.public.10K.u8bin` of the SIFT-1B release | Released; same release as the base |
 | SPHERE | `triviaqa_enc.npy`: our DPR query encoding of public TriviaQA questions | Not released in this form; the space match to `sphere-10m.npy` is unverified (`DECISIONS.md`, "Not verified yet"). See `investigations/sphere_queries/REPORT.md` |
 | ESCI | `esci_queries.npy`: our embeddings of 130,193 distinct query texts | Not released (section 3); same model and recipe family as the products, so the same space by construction |
 | tiny | Synthetic (verification only) | n/a |
@@ -114,7 +113,6 @@ from disk once per query chunk, and a 10M x 768 float32 base (30.7 GB) does not 
 | ESCI | 1,945,117 | 640,193 x 1,814,924 x 384 | about 4.5 h | about 2.4 h |
 | SPHERE | 96,005 questions | 606,005 x 10M x 768 | about 12 min | about 11.8 h |
 | SPACEV | none (released) | 539,316 x 10M x 100 | none | about 12.7 h |
-| SIFT-10M | none (released) | 520,000 x 10M x 128 | none | about 14.8 h |
 
 Ground-truth query counts are `10,000 x 50 + 10,000 + official queries`. A GPU would be much faster (not measured here). `make q1-preflight` prints these estimates for the machine it runs on, and each
 stage prints its own at the start.

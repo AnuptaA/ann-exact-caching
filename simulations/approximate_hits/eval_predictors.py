@@ -37,7 +37,7 @@ import numpy as np
 
 from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits.eval_certificates import build_entry_tables, pairwise_dist
-from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk, load_inputs
+from simulations.approximate_hits.run_e2e_oracle import exact_topk, load_inputs
 from simulations.approximate_hits.threshold_selection import select, threshold_grid
 
 logging.basicConfig(level=logging.INFO,
@@ -59,19 +59,6 @@ MODELS = ["ridge_base", "ridge_ext", "gbt", "gbt_cls", "gbt_q20", "gbt_pooled"]
 def load_splits(run_dir: Path, n_each: int):
     data = json.loads((run_dir / "results.json").read_text())
     cfg = argparse.Namespace(**data["config"])
-    if "zipf" in data["config"]:
-        from simulations.approximate_hits.run_e2e_oracle_synthetic import (
-            build_inputs, _dedup,
-        )
-        inp = build_inputs(cfg)
-        wl = inp["wl"]
-        rng = np.random.default_rng(cfg.seed + 4)  # independent of all other draws
-        sets = {}
-        for name in ("fit", "dev", "cal"):
-            ids, w, _ = _dedup(wl.sample(n_each, rng))
-            sets[name] = (wl.vectors(ids), w)
-        sets["test"] = (wl.vectors(inp["test_ids"]), inp["test_w"])
-        return data, cfg, inp["db"], wl.vectors(inp["cand_ids"]), sets
     db, cand_q, _, test_q = load_inputs(cfg)
     pool = np.load(Path(cfg.esci_dir) / "esci_queries.npy")
     perm = np.random.default_rng(cfg.seed).permutation(len(pool))

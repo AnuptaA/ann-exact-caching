@@ -19,7 +19,7 @@
 #   PYTHON_BIN                  system python for the venvs (default /usr/bin/python3)
 #   Q1_MIN_DATA_GB              minimum size of the data volume (default 400; 10 is enough for the smoke test)
 #   Q1_ALLOW_ROOT_VOLUME=1      accept a data directory on the root volume
-#   Q1_SETUP_DATASETS           datasets preflight sizes disk and RAM for (default "spacev sift10m sphere esci";
+#   Q1_SETUP_DATASETS           datasets preflight sizes disk and RAM for (default "spacev sphere esci";
 #                               "none" skips the sizing, for a dry run)
 #   Q1_ALLOW_SHORTFALL=1        preflight disk and RAM shortfalls are warnings with the numbers (small dry-run
 #                               machine; combine with Q1_SETUP_DATASETS=tiny or one dataset name). Other preflight
@@ -56,7 +56,7 @@ Q1_PG_PORT="${Q1_PG_PORT:-54320}"
 PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 PG_BIN="/usr/lib/postgresql/$PG_MAJOR/bin"
 MIN_DATA_GB="${Q1_MIN_DATA_GB:-400}"
-SETUP_DATASETS="${Q1_SETUP_DATASETS:-spacev sift10m sphere esci}"
+SETUP_DATASETS="${Q1_SETUP_DATASETS:-spacev sphere esci}"
 
 # Do not inherit the AMI's conda or any active virtualenv: our venvs are created from $PYTHON_BIN.
 PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -viE 'conda|miniforge|mambaforge' | paste -sd: -)"

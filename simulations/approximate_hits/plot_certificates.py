@@ -17,10 +17,6 @@ import matplotlib.pyplot as plt
 RESULTS = Path(__file__).parent / "results"
 RUNS = [
     ("esci_score20k", "ESCI, real queries"),
-    ("syn_interp_zipf0.3", "SIFT, simZipf s=0.3 (interp)"),
-    ("syn_interp_zipf0.6", "SIFT, simZipf s=0.6 (interp)"),
-    ("syn_interp_zipf0.99", "SIFT, simZipf s=0.99 (interp)"),
-    ("syn_gauss0.1_zipf0.99", "SIFT, simZipf s=0.99 (gauss 0.1)"),
 ]
 METHODS = [
     ("oracle", "oracle (true retention)", "k", "-"),

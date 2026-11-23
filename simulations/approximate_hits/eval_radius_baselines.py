@@ -35,11 +35,11 @@ from datasets.dataloaders import load_fvecs_fast
 from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits import eval_predictors as epred
 from simulations.approximate_hits.eval_certificates import build_entry_tables, pairwise_dist
-from simulations.approximate_hits.run_e2e_oracle_sift import (
-    SIFT1M_DIR, exact_topk, load_inputs,
+from simulations.approximate_hits.run_e2e_oracle import (
+    exact_topk, load_inputs,
 )
 from simulations.approximate_hits.threshold_selection import select, threshold_grid
-from simulations.radius_estimation.run_granularity_sweep import MultiTableLSH
+from simulations.radius_estimation.multi_table_lsh import MultiTableLSH
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -56,23 +56,6 @@ CHUNK = 2048
 def load_splits(run_dir: Path, n_each: int):
     data = json.loads((run_dir / "results.json").read_text())
     cfg = argparse.Namespace(**data["config"])
-    if not hasattr(cfg, "dataset"):
-        cfg.dataset = "sift"  # runs from before --dataset existed were SIFT
-    if cfg.dataset == "sift" and "zipf" not in data["config"]:
-        db, cand_q, _, test_q = load_inputs(cfg)
-        learn = load_fvecs_fast(str(SIFT1M_DIR / "sift_learn.fvecs"))
-        rng = np.random.default_rng(cfg.seed)
-        rng.choice(1_000_000, size=cfg.n_db, replace=False)  # same draws as load_inputs
-        used = rng.choice(len(learn), size=cfg.n_cand_queries + cfg.n_score_queries,
-                          replace=False)
-        free = np.setdiff1d(np.arange(len(learn)), used)
-        free = np.random.default_rng(cfg.seed + 5).permutation(free)
-        sets = {}
-        for i, name in enumerate(("fit", "dev", "cal")):
-            q = learn[free[i * n_each:(i + 1) * n_each]]
-            sets[name] = (q, np.ones(len(q), dtype=np.int64))
-        sets["test"] = (test_q, np.ones(len(test_q), dtype=np.int64))
-        return data, cfg, db, cand_q, sets
     return epred.load_splits(run_dir, n_each)
 
 

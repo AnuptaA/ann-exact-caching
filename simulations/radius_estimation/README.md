@@ -5,7 +5,7 @@ query by averaging ground-truth radii of train queries that fall into nearby
 LSH buckets (within a Hamming threshold). Uses plain random-hyperplane LSH.
 
 **All results below are on synthetic data.** They are mechanism demonstrations,
-not measurements on SIFT/ESCI.
+not measurements on real datasets.
 
 ## Files
 

@@ -17,12 +17,7 @@ RESULTS = Path(__file__).parent / "results"
 
 # (run folder, panel title)
 RUNS = [
-    ("sift_score20k", "SIFT, real queries"),
     ("esci_score20k", "ESCI, real queries"),
-    ("syn_interp_zipf0.3", "SIFT, simZipf s=0.3 (interp)"),
-    ("syn_interp_zipf0.6", "SIFT, simZipf s=0.6 (interp)"),
-    ("syn_interp_zipf0.99", "SIFT, simZipf s=0.99 (interp)"),
-    ("syn_gauss0.1_zipf0.99", "SIFT, simZipf s=0.99 (gauss 0.1)"),
 ]
 KEY = "test_hit_rate_online"
 

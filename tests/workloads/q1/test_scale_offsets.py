@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from harness import data
-from workloads.q1.datasets import common, sift10m
+from workloads.q1.datasets import common
 
 BIG = 2 ** 31
 
@@ -100,25 +100,6 @@ def test_content_length_beyond_int32(virtual_server):
     handler, url = virtual_server
     handler.files["/huge"] = (3 * BIG + 17, b"")
     assert common.content_length(f"{url}/huge") == 3 * BIG + 17
-
-
-def test_sift_slice_requests_exactly_header_plus_rows_and_never_over_reads(virtual_server, tmp_path,
-                                                                           monkeypatch):
-    handler, url = virtual_server
-    n_total, dim, n_base = 1_000_000_000, 128, 40
-    total = 8 + n_total * dim
-    handler.files["/base"] = (total, struct.pack("<ii", n_total, dim))
-    handler.files["/query"] = (8 + 3 * dim, struct.pack("<ii", 3, dim))
-    monkeypatch.setattr(common.download_slice, "__defaults__", (b"", 1000))
-    base, query = sift10m.fetch(tmp_path, n_base=n_base, base_url=f"{url}/base", query_url=f"{url}/query")
-    assert not handler.over_reads
-    slice_spans = [(s, e) for p, s, e in handler.ranges if p == "/base" and not (s == 0 and e == 8)]
-    assert covered([("/base", s, e) for s, e in slice_spans], "/base") == [[8, 8 + n_base * dim]]
-    assert covered(handler.ranges, "/base")[0][0] == 0
-    mapped = common.memmap_bin(base, np.uint8)
-    assert mapped.shape == (n_base, dim)
-    expected = np.frombuffer(pattern(8, n_base * dim), dtype=np.uint8).reshape(n_base, dim)
-    assert np.array_equal(mapped, expected)
 
 
 def test_dropped_connection_mid_body_is_retried(virtual_server, tmp_path, monkeypatch):

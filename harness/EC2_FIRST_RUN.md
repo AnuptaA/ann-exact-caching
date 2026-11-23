@@ -136,4 +136,4 @@ Go when all hold, per cell (they are in the result header; `python -m harness co
 
 No-go: a fingerprint mismatch message (regenerate the named input), a missing `PARAM` line (stale driver), `counter_disagreements` above 0, or peak pool above `pool_size`.
 
-Then run the other eight configs (`make -j 9 q1-run-all` or the nine shortcuts), and the other three datasets in the order esci, spacev, sift10m, sphere. SPHERE needs about 49.5 GB for the index build plus 4 GiB; `make q1-preflight` refuses a machine with less.
+Then run the other eight configs (`make -j 9 q1-run-all` or the nine shortcuts), and the other three datasets in the order esci, spacev, sphere. SPHERE needs about 49.5 GB for the index build plus 4 GiB; `make q1-preflight` refuses a machine with less.

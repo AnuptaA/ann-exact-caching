@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
-"""Workloads and saved-run inputs: SIFT/ESCI query pools, simZipf, Aker traces."""
+"""Workloads and saved-run inputs: ESCI query pools, simZipf, Aker traces."""
 
 import json
 import argparse
@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DataPaths:
     """Where the raw data lives; the command line can override it (see cli.py)."""
-    sift: Path = Path("datasets/sift/raw_sift1m/sift")
     aker: Path = Path("datasets/aker")
     esci: Path = Path("datasets/esci/data_vectors")
 
@@ -64,31 +63,17 @@ def load_inputs(args):
     rebuild a run's exact inputs from its saved config.
     """
     rng = np.random.default_rng(args.seed)
-    if args.dataset == "sift":
-        logger.info("Loading SIFT1M...")
-        base = load_fvecs_fast(str(PATHS.sift / "sift_base.fvecs"))
-        learn = load_fvecs_fast(str(PATHS.sift / "sift_learn.fvecs"))
-        test = load_fvecs_fast(str(PATHS.sift / "sift_query.fvecs"))
-        if args.n_test > len(test):
-            raise ValueError(f"n_test={args.n_test} exceeds the {len(test)} SIFT queries")
-        test = test[:args.n_test]
-        db = base[rng.choice(len(base), size=args.n_db, replace=False)]
-        train_idx = rng.choice(len(learn), size=args.n_cand_queries + args.n_score_queries,
-                               replace=False)
-        cand_q = learn[train_idx[:args.n_cand_queries]]
-        score_q = learn[train_idx[args.n_cand_queries:]]
-    else:
-        # ESCI: database = pre-built product subsample; train and test are
-        # disjoint random splits of the real ESCI queries
-        esci_dir = Path(args.esci_dir)
-        logger.info(f"Loading ESCI from {esci_dir}...")
-        db = np.load(esci_dir / f"esci_db{args.n_db}_s{args.seed}.npy")
-        pool = np.load(esci_dir / "esci_queries.npy")
-        perm = rng.permutation(len(pool))
-        n_c, n_s = args.n_cand_queries, args.n_score_queries
-        test = pool[_take(perm, 0, args.n_test, len(pool), "test")]
-        cand_q = pool[_take(perm, args.n_test, n_c, len(pool), "candidates")]
-        score_q = pool[_take(perm, args.n_test + n_c, n_s, len(pool), "scoring")]
+    # ESCI: database = pre-built product subsample; train and test are
+    # disjoint random splits of the real ESCI queries
+    esci_dir = Path(args.esci_dir)
+    logger.info(f"Loading ESCI from {esci_dir}...")
+    db = np.load(esci_dir / f"esci_db{args.n_db}_s{args.seed}.npy")
+    pool = np.load(esci_dir / "esci_queries.npy")
+    perm = rng.permutation(len(pool))
+    n_c, n_s = args.n_cand_queries, args.n_score_queries
+    test = pool[_take(perm, 0, args.n_test, len(pool), "test")]
+    cand_q = pool[_take(perm, args.n_test, n_c, len(pool), "candidates")]
+    score_q = pool[_take(perm, args.n_test + n_c, n_s, len(pool), "scoring")]
     return db, cand_q, score_q, test
 
 
@@ -140,42 +125,6 @@ class SimZipfWorkload:
 def dedup(ids):
     uniq, inv, counts = np.unique(ids, return_inverse=True, return_counts=True)
     return uniq, counts.astype(np.int64), inv
-
-
-def build_inputs(args):
-    """Database and workload draws; deterministic given args (sizes, seed).
-
-    Returns a dict with db, the workload, deduplicated candidate / scoring /
-    test variant ids, their weights, the test access order, and stats.
-    """
-    # same database subsample as load_inputs for the same seed
-    rng = np.random.default_rng(args.seed)
-    logger.info("Loading SIFT1M...")
-    sift_base = load_fvecs_fast(str(PATHS.sift / "sift_base.fvecs"))
-    db = sift_base[rng.choice(len(sift_base), size=args.n_db, replace=False)]
-    base_queries = load_fvecs_fast(str(PATHS.sift / "sift_query.fvecs"))
-
-    wl = SimZipfWorkload(base_queries, args.group_size, args.zipf, args.method,
-                         args.lambda_max, args.noise_rel, args.seed)
-    wrng = np.random.default_rng(args.seed + 1)
-    cand_ids, _, _ = dedup(wl.sample(args.n_cand_requests, wrng))
-    score_ids, score_w, _ = dedup(wl.sample(args.n_score_requests, wrng))
-    test_req = wl.sample(args.n_test_requests, wrng)
-    test_ids, test_w, test_seq = dedup(test_req)
-
-    stats = {
-        "distinct_cand": int(len(cand_ids)),
-        "distinct_score": int(len(score_ids)),
-        "distinct_test": int(len(test_ids)),
-        "test_requests_exact_repeat_of_score": float(np.isin(test_req, score_ids).mean()),
-        "test_requests_group_in_cand": float(np.isin(
-            test_req // args.group_size, cand_ids // args.group_size).mean()),
-        "top1pct_groups_request_share": float(
-            np.sort(wl.group_prob)[::-1][:max(1, wl.n_groups // 100)].sum()),
-    }
-    return {"db": db, "wl": wl, "cand_ids": cand_ids, "score_ids": score_ids,
-            "score_w": score_w, "test_ids": test_ids, "test_w": test_w,
-            "test_seq": test_seq, "stats": stats}
 
 
 def _read_spacev_bin(path: Path) -> np.ndarray:

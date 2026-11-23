@@ -20,8 +20,6 @@ import matplotlib.image as mpimg
 from matplotlib.backends.backend_pdf import PdfPages
 
 from datasets.dataloaders import (
-    load_sift_dataset,
-    load_sift_benchmark,
     load_esci_data,
     load_esci_benchmark,
 )
@@ -41,11 +39,9 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).parent.parent
 
 SYNTHETIC_BASELINE_SEEDS = [42, 43, 44]
-SIFT_BASELINE_SEEDS = [42, 43, 44]
 ESCI_BASELINE_SEEDS = [42, 43, 44]
 
 SYNTHETIC_BASELINE_TEMPLATE = "set1_baseline_seed{seed}"
-SIFT_BASELINE_TEMPLATE = "sift_b50k_c1024k100_t512n20_s{seed}"
 ESCI_BASELINE_TEMPLATE = "esci_c1024k99_t512n20_s{seed}"
 
 ESCI_FULL_SAMPLE_SIZE = 10_000
@@ -54,18 +50,15 @@ NN_SCORE_RANKS = [1, 5, 25, 50, 99]
 
 WORKLOAD_COLORS = {
     'synthetic': 'steelblue',
-    'sift': 'darkorange',
     'esci': 'forestgreen',
 }
 
 WORKLOAD_LABELS = {
     'synthetic': 'Synthetic',
-    'sift': 'SIFT',
     'esci': 'ESCI',
 }
 
 POPULATION_LABELS = {
-    'sift': 'SIFT',
     'esci': 'ESCI (sub-sampled 10k)',
 }
 
@@ -148,9 +141,7 @@ def load_gt_distances_at_ranks(
     Load angular distances from precomputed ground truth at specific 1-based ranks.
     Returns {rank: np.ndarray(n_cache,)} or {} if the file is missing.
     """
-    if dataset == 'sift':
-        gt_file = benchmark_dir / f"cache_gt_angular_K{cache_K}.npz"
-    elif dataset == 'esci':
+    if dataset == 'esci':
         gt_file = benchmark_dir / f"cache_gt_K{cache_K}.npz"
     else:
         return {}
@@ -204,28 +195,6 @@ def load_synthetic_set1():
         np.concatenate(count_parts),
     )
 
-def load_sift_set1():
-    """Returns (nn_dists, containment_counts) over seeds 42/43/44."""
-    nn_parts, count_parts = [], []
-
-    for seed in SIFT_BASELINE_SEEDS:
-        bm = SIFT_BASELINE_TEMPLATE.format(seed=seed)
-        bd = ROOT / 'datasets' / 'sift' / bm
-        logger.info("SIFT Set 1: %s", bm)
-        _, cache_q, test_q, config = load_sift_benchmark(str(bd))
-        cache_K = config.get('cache_K', 100)
-
-        nn_parts.append(test_to_cache_nn(test_q, cache_q))
-
-        rq = load_rq_values(bd, 'sift', cache_K)
-        if rq is not None:
-            count_parts.append(compute_containment_counts(test_q, cache_q, rq))
-
-    return (
-        np.concatenate(nn_parts),
-        np.concatenate(count_parts) if count_parts else np.array([]),
-    )
-
 def load_esci_set1():
     """Returns (nn_dists, containment_counts) over seeds 42/43/44."""
     nn_parts, count_parts = [], []
@@ -253,13 +222,6 @@ SYNTHETIC_SET2_LEVELS = [
     ('Medium Perturbation', 'set2_pert_medium_seed{seed}'),
     ('Large Perturbation',  'set2_pert_large_seed{seed}'),
 ]
-
-def load_sift_population() -> dict:
-    """Intra-set NN distances at multiple ranks within the full 10K SIFT query set."""
-    logger.info("Loading SIFT full query population")
-    _, _, queries, _ = load_sift_dataset(str(ROOT / 'datasets' / 'sift'))
-    logger.info("Computing intra-set NN for %d SIFT queries", len(queries))
-    return angular_pairwise_topk(queries, NN_SCORE_RANKS)
 
 def load_esci_population() -> dict:
     """Intra-set NN distances at multiple ranks within a sub-sampled 10K ESCI query set."""
@@ -325,12 +287,12 @@ def _pct_legend(ax, pct_handles, title=None, loc='upper right'):
 # Plot 1: Baseline query similarity -- CDF
 #-------------------------------------------------------------------------------
 
-def plot_baseline_query_similarity_cdf(nn_syn, nn_sift, nn_esci, out_path: Path):
-    fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
+def plot_baseline_query_similarity_cdf(nn_syn, nn_esci, out_path: Path):
+    fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
     fig.suptitle("Baseline - Test-to-Cache Query NN Angular Distance Frequency", fontsize=13)
 
     for ax, (wl, data) in zip(axes, [
-        ('synthetic', nn_syn), ('sift', nn_sift), ('esci', nn_esci)
+        ('synthetic', nn_syn), ('esci', nn_esci)
     ]):
         ax.set_title(WORKLOAD_LABELS[wl], fontsize=10)
         x, y = _cdf(data)
@@ -352,12 +314,12 @@ def plot_baseline_query_similarity_cdf(nn_syn, nn_sift, nn_esci, out_path: Path)
 # Plot 2: Baseline query similarity -- histogram
 #-------------------------------------------------------------------------------
 
-def plot_baseline_query_similarity_hist(nn_syn, nn_sift, nn_esci, out_path: Path):
-    fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
+def plot_baseline_query_similarity_hist(nn_syn, nn_esci, out_path: Path):
+    fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
     fig.suptitle("Baseline - Test-to-Cache Query NN Angular Distance Frequency", fontsize=13)
 
     for ax, (wl, data) in zip(axes, [
-        ('synthetic', nn_syn), ('sift', nn_sift), ('esci', nn_esci)
+        ('synthetic', nn_syn), ('esci', nn_esci)
     ]):
         ax.set_title(WORKLOAD_LABELS[wl], fontsize=10)
         ax.hist(data, bins=BINS_DIST, color=WORKLOAD_COLORS[wl], alpha=0.7, density=True)
@@ -377,22 +339,21 @@ def plot_baseline_query_similarity_hist(nn_syn, nn_sift, nn_esci, out_path: Path
 # Plot 3: Inter-query (population) similarity -- CDF
 #-------------------------------------------------------------------------------
 
-def plot_inter_query_similarity_cdf(nn_sift, nn_esci, out_path: Path):
-    fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+def plot_inter_query_similarity_cdf(nn_esci, out_path: Path):
+    fig, ax = plt.subplots(figsize=(8, 4))
     fig.suptitle("Full Query Set - NN Angular Distance Frequency", fontsize=13)
 
-    for ax, (wl, data) in zip(axes, [('sift', nn_sift), ('esci', nn_esci)]):
-        ax.set_title(POPULATION_LABELS[wl], fontsize=10)
-        x, y = _cdf(data)
-        ax.plot(x, y, color=WORKLOAD_COLORS[wl], linewidth=1.8)
-        pct_handles = _add_hist_percentile_lines(ax, data)
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.set_ylabel("Cumulative Probability", fontsize=9)
-        ax.grid(True, alpha=0.2)
-        _pct_legend(ax, pct_handles, loc='lower right')
+    ax.set_title(POPULATION_LABELS['esci'], fontsize=10)
+    x, y = _cdf(nn_esci)
+    ax.plot(x, y, color=WORKLOAD_COLORS['esci'], linewidth=1.8)
+    pct_handles = _add_hist_percentile_lines(ax, nn_esci)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Cumulative Probability", fontsize=9)
+    ax.grid(True, alpha=0.2)
+    _pct_legend(ax, pct_handles, loc='lower right')
 
-    axes[-1].set_xlabel("Angular Distance", fontsize=10)
+    ax.set_xlabel("Angular Distance", fontsize=10)
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
@@ -402,45 +363,42 @@ def plot_inter_query_similarity_cdf(nn_sift, nn_esci, out_path: Path):
 # Plot 4: Inter-query (population) similarity -- histogram
 #-------------------------------------------------------------------------------
 
-def plot_inter_query_similarity_hist(nn_sift, nn_esci, out_path: Path):
-    fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+def plot_inter_query_similarity_hist(nn_esci, out_path: Path):
+    fig, ax = plt.subplots(figsize=(8, 4))
     fig.suptitle("Full Query Set - NN Angular Distance Frequency", fontsize=13)
 
-    for ax, (wl, data) in zip(axes, [('sift', nn_sift), ('esci', nn_esci)]):
-        ax.set_title(POPULATION_LABELS[wl], fontsize=10)
-        ax.hist(data, bins=BINS_DIST, color=WORKLOAD_COLORS[wl], alpha=0.7, density=True)
-        pct_handles = _add_hist_percentile_lines(ax, data)
-        ax.set_xlim(0, 1)
-        ax.set_ylabel("Density", fontsize=9)
-        ax.grid(True, alpha=0.2, axis='y')
-        _pct_legend(ax, pct_handles, loc='upper right')
+    ax.set_title(POPULATION_LABELS['esci'], fontsize=10)
+    ax.hist(nn_esci, bins=BINS_DIST, color=WORKLOAD_COLORS['esci'], alpha=0.7, density=True)
+    pct_handles = _add_hist_percentile_lines(ax, nn_esci)
+    ax.set_xlim(0, 1)
+    ax.set_ylabel("Density", fontsize=9)
+    ax.grid(True, alpha=0.2, axis='y')
+    _pct_legend(ax, pct_handles, loc='upper right')
 
-    axes[-1].set_xlabel("Angular Distance", fontsize=10)
+    ax.set_xlabel("Angular Distance", fontsize=10)
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     logger.info("Saved: %s", out_path)
 
 #-------------------------------------------------------------------------------
-# Plot 5: Intra-set NN at multiple ranks -- 5x2 grid (SIFT and ESCI)
+# Plot 5: Intra-set NN at multiple ranks -- 5x1 grid (ESCI)
 #-------------------------------------------------------------------------------
 
-def plot_query_population_multirank_grid(pop_sift, pop_esci, out_path: Path):
+def plot_query_population_multirank_grid(pop_esci, out_path: Path):
     n_ranks = len(NN_SCORE_RANKS)
     fig, axes = plt.subplots(
-        n_ranks, 2,
-        figsize=(10, 3 * n_ranks + 1),
+        n_ranks, 1,
+        figsize=(6, 3 * n_ranks + 1),
         sharex='row',
+        squeeze=False,
     )
     fig.suptitle("Full Query Set - Angular Distances to Top-1/5/25/50/99 NN by Rank", fontsize=13)
 
-    populations = [('sift', pop_sift), ('esci', pop_esci)]
+    populations = [('esci', pop_esci)]
     for col_idx, (wl, pop) in enumerate(populations):
         color = WORKLOAD_COLORS[wl]
-        if col_idx == 0:
-            axes[0, col_idx].set_title(POPULATION_LABELS[wl], fontsize=11)
-        else:
-            axes[0, col_idx].set_title(POPULATION_LABELS[wl], fontsize=11)
+        axes[0, col_idx].set_title(POPULATION_LABELS[wl], fontsize=11)
 
         for row_idx, rank in enumerate(NN_SCORE_RANKS):
             ax = axes[row_idx, col_idx]
@@ -465,14 +423,14 @@ def plot_query_population_multirank_grid(pop_sift, pop_esci, out_path: Path):
     logger.info("Saved: %s", out_path)
 
 #-------------------------------------------------------------------------------
-# Plot 6: Intra-set NN at multiple ranks -- 2x1 by-workload overlay
+# Plot 6: Intra-set NN at multiple ranks -- 1x1 by-workload overlay
 #-------------------------------------------------------------------------------
 
-def plot_query_population_multirank_by_workload(pop_sift, pop_esci, out_path: Path):
-    fig, axes = plt.subplots(2, 1, figsize=(8, 9), sharex=True)
+def plot_query_population_multirank_by_workload(pop_esci, out_path: Path):
+    fig, ax = plt.subplots(figsize=(8, 5))
     fig.suptitle("Full Query Set - Angular Distance to Top-1/5/25/50/99 NN Consolidated", fontsize=13)
 
-    for ax, (wl, pop) in zip(axes, [('sift', pop_sift), ('esci', pop_esci)]):
+    for wl, pop in [('esci', pop_esci)]:
         ax.set_title(POPULATION_LABELS[wl], fontsize=10)
         for rank in NN_SCORE_RANKS:
             data = pop.get(rank)
@@ -489,7 +447,7 @@ def plot_query_population_multirank_by_workload(pop_sift, pop_esci, out_path: Pa
         ax.grid(True, alpha=0.2, axis='y')
         ax.legend(fontsize=8, loc='upper right')
 
-    axes[-1].set_xlabel("Angular Distance", fontsize=10)
+    ax.set_xlabel("Angular Distance", fontsize=10)
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
@@ -499,8 +457,8 @@ def plot_query_population_multirank_by_workload(pop_sift, pop_esci, out_path: Pa
 # Plot 7: Containment count -- histogram
 #-------------------------------------------------------------------------------
 
-def plot_containment_hist(counts_syn, counts_sift, counts_esci, out_path: Path):
-    all_counts = [c for c in [counts_syn, counts_sift, counts_esci] if len(c) > 0]
+def plot_containment_hist(counts_syn, counts_esci, out_path: Path):
+    all_counts = [c for c in [counts_syn, counts_esci] if len(c) > 0]
     if not all_counts:
         logger.warning("No containment data; skipping %s", out_path)
         return
@@ -508,11 +466,11 @@ def plot_containment_hist(counts_syn, counts_sift, counts_esci, out_path: Path):
     global_max = int(max(c.max() for c in all_counts))
     bins = np.arange(0, global_max + 2) - 0.5
 
-    fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
     fig.suptitle("Baseline - Counts of Cache Radii Containing Test Query", fontsize=13)
 
     for ax, (wl, data) in zip(axes, [
-        ('synthetic', counts_syn), ('sift', counts_sift), ('esci', counts_esci)
+        ('synthetic', counts_syn), ('esci', counts_esci)
     ]):
         if len(data) == 0:
             ax.set_visible(False)
@@ -586,14 +544,8 @@ def run(out_dir: Path):
     logger.info("=== Loading Synthetic Set 1 ===")
     nn_syn, counts_syn = load_synthetic_set1()
 
-    logger.info("=== Loading SIFT Set 1 ===")
-    nn_sift, counts_sift = load_sift_set1()
-
     logger.info("=== Loading ESCI Set 1 ===")
     nn_esci, counts_esci = load_esci_set1()
-
-    logger.info("=== Loading SIFT full query population ===")
-    pop_sift = load_sift_population()
 
     logger.info("=== Loading ESCI full query population ===")
     pop_esci = load_esci_population()
@@ -614,13 +566,13 @@ def run(out_dir: Path):
         out_dir / "synthetic_set2_perturbation.png",
     ]
 
-    plot_baseline_query_similarity_cdf(nn_syn, nn_sift, nn_esci, p[0])
-    plot_baseline_query_similarity_hist(nn_syn, nn_sift, nn_esci, p[1])
-    plot_inter_query_similarity_cdf(pop_sift[1], pop_esci[1], p[2])
-    plot_inter_query_similarity_hist(pop_sift[1], pop_esci[1], p[3])
-    plot_query_population_multirank_grid(pop_sift, pop_esci, p[4])
-    plot_query_population_multirank_by_workload(pop_sift, pop_esci, p[5])
-    plot_containment_hist(counts_syn, counts_sift, counts_esci, p[6])
+    plot_baseline_query_similarity_cdf(nn_syn, nn_esci, p[0])
+    plot_baseline_query_similarity_hist(nn_syn, nn_esci, p[1])
+    plot_inter_query_similarity_cdf(pop_esci[1], p[2])
+    plot_inter_query_similarity_hist(pop_esci[1], p[3])
+    plot_query_population_multirank_grid(pop_esci, p[4])
+    plot_query_population_multirank_by_workload(pop_esci, p[5])
+    plot_containment_hist(counts_syn, counts_esci, p[6])
     plot_synthetic_set2_perturbation(set2_syn, p[7])
 
     pdf_path = out_dir / "characterization.pdf"

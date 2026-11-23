@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 #-------------------------------------------------------------------------------
 """
-Best-case end-to-end approximate-hit experiment on SIFT (oracle radius).
+Best-case end-to-end approximate-hit experiment on ESCI (oracle radius).
 
 Setup:
-  - Database: random subsample of SIFT1M base.
-  - Train queries: SIFT learn set, split into candidate-generating queries
+  - Database: pre-built ESCI product subsample.
+  - Train queries: ESCI queries, split into candidate-generating queries
     (their top-K balls are cache candidates) and scoring queries (used to
     compute greedy utility). The split avoids a candidate covering its own
     source query.
-  - Test queries: official SIFT query set (held out).
+  - Test queries: held-out ESCI queries.
   - Retention uses each query's TRUE top-k (exact backend, oracle radius).
   - Policy: hits-only running average >= target (best-case offline admission;
     the online order-dependent variant is also reported at checkpoints).
@@ -32,7 +32,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from datasets.dataloaders import load_fvecs_fast
 from simulations.approximate_hits.greedy_population import (
     GreedyPopulator,
     hits_from_histograms,
@@ -44,7 +43,6 @@ logging.basicConfig(level=logging.INFO,
                     datefmt="%H:%M:%S")
 logger = logging.getLogger(__name__)
 
-SIFT1M_DIR = Path("datasets/sift/raw_sift1m/sift")
 DEFAULT_TARGETS = [0.5, 0.7, 0.8, 0.9, 0.95, 1.0]
 DEFAULT_K_VALUES = [10, 20, 50, 100, 200, 500]
 DEFAULT_CHECKPOINTS = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3]
@@ -210,7 +208,7 @@ def _run_target_worker(target):
     return run_target(target, **_SHARED)
 
 
-def plot_results(results, out_dir, n_db, title="SIFT"):
+def plot_results(results, out_dir, n_db, title="ESCI"):
     colors = plt.cm.viridis(np.linspace(0, 0.9, len(results)))
     panels = [
         ("test_hit_rate", "hit rate (best-case admission)"),
@@ -255,34 +253,23 @@ def load_inputs(args):
     rebuild a run's exact inputs from its saved config.
     """
     rng = np.random.default_rng(args.seed)
-    if args.dataset == "sift":
-        logger.info("Loading SIFT1M...")
-        base = load_fvecs_fast(str(SIFT1M_DIR / "sift_base.fvecs"))
-        learn = load_fvecs_fast(str(SIFT1M_DIR / "sift_learn.fvecs"))
-        test = load_fvecs_fast(str(SIFT1M_DIR / "sift_query.fvecs"))[:args.n_test]
-        db = base[rng.choice(len(base), size=args.n_db, replace=False)]
-        train_idx = rng.choice(len(learn), size=args.n_cand_queries + args.n_score_queries,
-                               replace=False)
-        cand_q = learn[train_idx[:args.n_cand_queries]]
-        score_q = learn[train_idx[args.n_cand_queries:]]
-    else:
-        # ESCI: database = pre-built product subsample; train and test are
-        # disjoint random splits of the real ESCI queries
-        esci_dir = Path(args.esci_dir)
-        logger.info(f"Loading ESCI from {esci_dir}...")
-        db = np.load(esci_dir / f"esci_db{args.n_db}_s{args.seed}.npy")
-        pool = np.load(esci_dir / "esci_queries.npy")
-        perm = rng.permutation(len(pool))
-        n_c, n_s = args.n_cand_queries, args.n_score_queries
-        test = pool[perm[:args.n_test]]
-        cand_q = pool[perm[args.n_test:args.n_test + n_c]]
-        score_q = pool[perm[args.n_test + n_c:args.n_test + n_c + n_s]]
+    # ESCI: database = pre-built product subsample; train and test are
+    # disjoint random splits of the real ESCI queries
+    esci_dir = Path(args.esci_dir)
+    logger.info(f"Loading ESCI from {esci_dir}...")
+    db = np.load(esci_dir / f"esci_db{args.n_db}_s{args.seed}.npy")
+    pool = np.load(esci_dir / "esci_queries.npy")
+    perm = rng.permutation(len(pool))
+    n_c, n_s = args.n_cand_queries, args.n_score_queries
+    test = pool[perm[:args.n_test]]
+    cand_q = pool[perm[args.n_test:args.n_test + n_c]]
+    score_q = pool[perm[args.n_test + n_c:args.n_test + n_c + n_s]]
     return db, cand_q, score_q, test
 
 
 def main():
     ap = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--dataset", choices=["sift", "esci"], default="sift")
+    ap.add_argument("--dataset", choices=["esci"], default="esci")
     ap.add_argument("--esci-dir", type=str, default="datasets/esci/data_vectors")
     ap.add_argument("--k", type=int, default=10, help="test query result count")
     ap.add_argument("--n-db", type=int, default=50000)

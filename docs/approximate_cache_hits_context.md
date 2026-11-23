@@ -134,7 +134,7 @@ top-k vectors per new cached vector.
 ## 5c. End-to-end oracle results on SIFT (first run)
 
 Code: `simulations/approximate_hits/` (`greedy_population.py`,
-`run_e2e_oracle_sift.py`); tests in `tests/approximate_hits/`.
+`run_e2e_oracle.py`); tests in `tests/approximate_hits/`.
 Setup: 50k SIFT1M base subsample, 5k candidate-generating + 5k scoring learn
 queries, 10k official test queries, k = 10, candidate K in
 {10, 20, 50, 100, 200, 500}, true radius (oracle), best-case admission.

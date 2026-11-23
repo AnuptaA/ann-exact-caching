@@ -166,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(run=_run)
 
     p = sub.add_parser("generate", help="Q1 workload generation for datasets, through answer tables")
-    p.add_argument("--dataset", nargs="+", required=True, help="esci spacev sift10m sphere tiny, or all")
+    p.add_argument("--dataset", nargs="+", required=True, help="esci spacev sphere tiny, or all")
     p.add_argument("--data-dir", required=True)
     p.add_argument("--dsn", default="", help="PostgreSQL connection string (database q1_<dataset> is used)")
     p.add_argument("--stages", nargs="+", default=None)
@@ -202,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(run=_stages)
 
     p = sub.add_parser("preflight", help="check the instance before a run")
-    p.add_argument("--datasets", nargs="*", default=["spacev", "sift10m", "sphere", "esci"])
+    p.add_argument("--datasets", nargs="*", default=["spacev", "sphere", "esci"])
     p.add_argument("--data-dir", default="/data")
     p.add_argument("--require-gpu", action="store_true")
     p.add_argument("--allow-shortfall", action="store_true")

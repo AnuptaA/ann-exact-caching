@@ -35,7 +35,7 @@ import numpy as np
 
 from simulations.approximate_hits import eval_calibrated as ecal
 from simulations.approximate_hits.eval_certificates import build_entry_tables
-from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk, load_inputs
+from simulations.approximate_hits.run_e2e_oracle import exact_topk, load_inputs
 from simulations.approximate_hits.threshold_selection import (
     METHODS, select, threshold_grid,
 )
@@ -53,19 +53,6 @@ _W: dict = {}  # worker inputs
 def load_pool(run_dir, n_fit):
     data = json.loads((run_dir / "results.json").read_text())
     cfg = argparse.Namespace(**data["config"])
-    if "zipf" in data["config"]:
-        from simulations.approximate_hits.run_e2e_oracle_synthetic import (
-            build_inputs, _dedup,
-        )
-        inp = build_inputs(cfg)
-        wl = inp["wl"]
-        rng = np.random.default_rng(cfg.seed + 3)  # independent of other draws
-        fit_ids, fit_w, _ = _dedup(wl.sample(n_fit, rng))
-        pool_ids, pool_w, _ = _dedup(wl.sample(_W["n_pool_requests"], rng))
-        sets = {"fit": (wl.vectors(fit_ids), fit_w),
-                "pool": (wl.vectors(pool_ids), pool_w),
-                "test": (wl.vectors(inp["test_ids"]), inp["test_w"])}
-        return data, cfg, inp["db"], wl.vectors(inp["cand_ids"]), sets
     db, cand_q, _, test_q = load_inputs(cfg)
     pool = np.load(Path(cfg.esci_dir) / "esci_queries.npy")
     perm = np.random.default_rng(cfg.seed).permutation(len(pool))

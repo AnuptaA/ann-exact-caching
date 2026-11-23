@@ -56,7 +56,7 @@ from simulations.approximate_hits import eval_predictors as epred
 from simulations.approximate_hits.eval_aker_thresholds import fetch
 from simulations.approximate_hits.eval_certificates import pairwise_dist, _sq_norms
 from simulations.approximate_hits.eval_radius_scores import cached_knn, true_radius
-from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk_blocked
+from simulations.approximate_hits.run_e2e_oracle import exact_topk_blocked
 from simulations.approximate_hits.threshold_selection import (
     DEFAULT_METHOD, select, threshold_grid,
 )

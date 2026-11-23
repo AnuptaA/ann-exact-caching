@@ -208,13 +208,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# SIFT
-datasets/sift/*.fvecs
-datasets/sift/*.ivecs
-datasets/sift/*.bvecs
-datasets/sift/benchmark/
-datasets/sift/sift*
-
 # Synthetic datasets
 datasets/synthetic/data/
 
@@ -223,10 +216,6 @@ datasets/esci/data_vectors/
 datasets/esci/*.npy
 datasets/esci/*.npz
 datasets/esci/esci_c*/
-
-# SIFT raw downloads (TEXMEX corpus)
-datasets/sift/raw_sift1m/
-datasets/sift/raw_siftsmall/
 
 # Raw vector / dataset files anywhere
 *.fvecs
@@ -239,15 +228,11 @@ simulations/approximate_hits/results/*
 !simulations/approximate_hits/results/summary/
 !simulations/approximate_hits/results/latest/
 simulations/radius_estimation/results/
-simulations/radius_estimation/results_sift/
-simulations/radius_estimation/results_sift1m/
 
 # Simulation outputs
 simulations/esci/raw/
 simulations/esci/processed/
 simulations/esci/embedding_space/
-simulations/sift/raw/
-simulations/sift/processed/
 simulations/synthetic/raw/
 simulations/synthetic/processed/
 

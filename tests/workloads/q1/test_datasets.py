@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from workloads.q1 import cli
-from workloads.q1.datasets import common, esci, sift10m, sphere, spacev, triviaqa, triviaqa_evidence
+from workloads.q1.datasets import common, esci, sphere, spacev, triviaqa, triviaqa_evidence
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -66,20 +66,6 @@ def test_fetch_range_rejects_servers_without_ranges(server):
     handler.honor_ranges = False
     with pytest.raises(OSError):
         common.fetch_range(f"{url}/f", 0, 10)
-
-
-def test_sift_slice_reads_only_the_first_rows(server, tmp_path):
-    handler, url = server
-    full = np.arange(20 * 128, dtype=np.uint8).reshape(20, 128)
-    handler.files["/base"] = struct.pack("<ii", 20, 128) + full.tobytes()
-    handler.files["/query"] = struct.pack("<ii", 3, 128) + full[:3].tobytes()
-    base, query = sift10m.fetch(tmp_path, n_base=7, base_url=f"{url}/base", query_url=f"{url}/query")
-    b, q = sift10m.load(tmp_path)
-    assert b.shape == (7, 128) and np.array_equal(b, full[:7]) and q.shape == (3, 128)
-    with pytest.raises(ValueError):
-        sift10m.verify(b, q)                    # fake sizes are not the real ones
-    with pytest.raises(ValueError):
-        sift10m.fetch(tmp_path / "x", n_base=99, base_url=f"{url}/base", query_url=f"{url}/query")
 
 
 def test_spacev_and_sphere_verify_dtypes_and_shapes(tmp_path):

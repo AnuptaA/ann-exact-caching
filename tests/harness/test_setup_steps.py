@@ -120,7 +120,7 @@ def test_setup_datasets_none_reaches_preflight_as_an_empty_list(tmp_path):
     assert "--datasets --data-dir" in line
     default = [ln for ln in _setup(_env(tmp_path / "b")).stdout.splitlines() if "harness preflight" in ln] \
         if (tmp_path / "b").mkdir() is None else []
-    assert "--datasets spacev sift10m sphere esci --data-dir" in default[0]
+    assert "--datasets spacev sphere esci --data-dir" in default[0]
 
 
 def test_preflight_without_datasets_checks_no_disk_or_ram(tmp_path):

@@ -23,7 +23,6 @@ ROOT = Path(__file__).parent.parent
 
 WORKLOADS = [
     ('synthetic', 'Synthetic Simulation Analysis'),
-    ('sift', 'SIFT Simulation Analysis'),
     ('esci', 'ESCI Simulation Analysis'),
 ]
 
@@ -38,10 +37,6 @@ SECTIONS = {
         ('set4', 'Synthetic - Set 4: Variable N'),
         ('set5', 'Synthetic - Set 5: Union Effectiveness'),
         ('set6', 'Synthetic - Set 6: Cache Size Variation'),
-    ],
-    'sift': [
-        ('global', 'SIFT - Global'),
-        ('cache_scaling', 'SIFT - Set 2: Cache Size Scaling'),
     ],
     'esci': [
         ('global', 'ESCI - Global'),

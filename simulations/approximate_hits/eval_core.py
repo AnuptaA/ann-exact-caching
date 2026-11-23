@@ -130,7 +130,7 @@ def quantize(x, bits):
 def load_cand_ext(run_dir, R):
     """Exact top-R database ids per candidate query (for shells deeper than the
     cached top-500), computed once and saved to <run>/cand_top<R>.npy."""
-    from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk
+    from simulations.approximate_hits.run_e2e_oracle import exact_topk
     path = Path(run_dir) / f"cand_top{R}.npy"
     if path.exists():
         return np.load(path)

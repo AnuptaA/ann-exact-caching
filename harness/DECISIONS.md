@@ -16,7 +16,7 @@ Last updated with the EC2 preparation. Differences from the Aker paper and the l
 - Stale exact-caching code lives in `stale/`. Native PostgreSQL 16 + pgvector v0.8.0 on EC2.
 - Entry sizes are {1,2,5} x K (K = 10: up to 50 neighbors); the list length is L = 200 (`Q1_LIST_SIZE`), which covers
   shell ranks up to R = 200 and sets ef_search >= 200 (pgvector limit 1000). Based on the L microbenchmark below
-  (one workload; confirm on SIFT1M if desired). Changing L reruns only the `answer_table` and `backend_recall`
+  (one workload). Changing L reruns only the `answer_table` and `backend_recall`
   stages and the cheap `q1-run-*` cells.
 
 ## Decided during implementation

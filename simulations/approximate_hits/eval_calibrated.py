@@ -35,7 +35,7 @@ import numpy as np
 from simulations.approximate_hits.eval_certificates import (
     build_entry_tables, pairwise_dist, _sq_norms,
 )
-from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk, load_inputs
+from simulations.approximate_hits.run_e2e_oracle import exact_topk, load_inputs
 from simulations.approximate_hits.threshold_selection import (
     DEFAULT_METHOD, METHODS, select, threshold_grid,
 )
@@ -62,34 +62,17 @@ def load_all(run_dir: Path, n_fit: int, n_calib: int):
     """Rebuild a run's inputs plus fresh fit and calibration queries."""
     data = json.loads((run_dir / "results.json").read_text())
     cfg = argparse.Namespace(**data["config"])
-    if "zipf" in data["config"]:
-        from simulations.approximate_hits.run_e2e_oracle_synthetic import (
-            build_inputs, _dedup,
-        )
-        inp = build_inputs(cfg)
-        wl = inp["wl"]
-        rng = np.random.default_rng(cfg.seed + 2)  # independent of all run draws
-        fit_ids, fit_w, _ = _dedup(wl.sample(n_fit, rng))
-        cal_ids, cal_w, _ = _dedup(wl.sample(n_calib, rng))
-        sets = {
-            "fit": (wl.vectors(fit_ids), fit_w),
-            "cal": (wl.vectors(cal_ids), cal_w),
-            "test": (wl.vectors(inp["test_ids"]), inp["test_w"]),
-        }
-        db = inp["db"]
-        cand_q = wl.vectors(inp["cand_ids"])
-    else:
-        db, cand_q, _, test_q = load_inputs(cfg)
-        pool = np.load(Path(cfg.esci_dir) / "esci_queries.npy")
-        perm = np.random.default_rng(cfg.seed).permutation(len(pool))
-        start = cfg.n_test + cfg.n_cand_queries + cfg.n_score_queries
-        fit_q = pool[perm[start:start + n_fit]]
-        cal_q = pool[perm[start + n_fit:start + n_fit + n_calib]]
-        sets = {
-            "fit": (fit_q, np.ones(len(fit_q), dtype=np.int64)),
-            "cal": (cal_q, np.ones(len(cal_q), dtype=np.int64)),
-            "test": (test_q, np.ones(len(test_q), dtype=np.int64)),
-        }
+    db, cand_q, _, test_q = load_inputs(cfg)
+    pool = np.load(Path(cfg.esci_dir) / "esci_queries.npy")
+    perm = np.random.default_rng(cfg.seed).permutation(len(pool))
+    start = cfg.n_test + cfg.n_cand_queries + cfg.n_score_queries
+    fit_q = pool[perm[start:start + n_fit]]
+    cal_q = pool[perm[start + n_fit:start + n_fit + n_calib]]
+    sets = {
+        "fit": (fit_q, np.ones(len(fit_q), dtype=np.int64)),
+        "cal": (cal_q, np.ones(len(cal_q), dtype=np.int64)),
+        "test": (test_q, np.ones(len(test_q), dtype=np.int64)),
+    }
     return data, cfg, db, cand_q, sets
 
 

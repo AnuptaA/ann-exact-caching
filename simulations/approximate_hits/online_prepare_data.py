@@ -53,7 +53,7 @@ def union_ranking(prep, q, db, R):
     path = prep / f"topU{R}.npy"
     if path.exists():
         return np.load(path)
-    from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk_blocked
+    from simulations.approximate_hits.run_e2e_oracle import exact_topk_blocked
     logger.info(f"exact top-{R} for {len(q)} queries over {len(db)} vectors (union)...")
     ids = exact_topk_blocked(q, db, R, q_chunk=1024).astype(np.int32)
     tmp = path.with_suffix(".tmp.npy")
@@ -154,7 +154,7 @@ def main():
     flagged = np.flatnonzero(present_counts(topU, always) < args.R)
     rows = np.full((len(flagged), 2 * args.R_union), -1, dtype=np.int32)
     if len(flagged):
-        from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk_blocked
+        from simulations.approximate_hits.run_e2e_oracle import exact_topk_blocked
         init_ids = np.flatnonzero(initial)
         logger.info(f"{len(flagged)} queries need the initial-database ranking...")
         topI = init_ids[exact_topk_blocked(q[flagged], db[init_ids], args.R_union,

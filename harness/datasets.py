@@ -9,10 +9,10 @@ from typing import Callable, Optional
 import numpy as np
 
 from workloads.q1 import streams, universe
-from workloads.q1.datasets import esci, sift10m, sphere, spacev, triviaqa
+from workloads.q1.datasets import esci, sphere, spacev, triviaqa
 
 REPO = Path(__file__).resolve().parents[1]
-PRODUCTION = ("esci", "spacev", "sift10m", "sphere")
+PRODUCTION = ("esci", "spacev", "sphere")
 
 
 @dataclass(frozen=True)
@@ -87,9 +87,6 @@ SPECS = {
     "spacev": DatasetSpec(
         "spacev", spacev.N_BASE, spacev.DIM, lambda raw: spacev.fetch(raw),
         lambda raw: spacev.load(raw)[0], lambda raw: spacev.load(raw)[1]),
-    "sift10m": DatasetSpec(
-        "sift10m", sift10m.N_BASE, sift10m.DIM, lambda raw: sift10m.fetch(raw),
-        lambda raw: sift10m.load(raw)[0], lambda raw: sift10m.load(raw)[1]),
     "sphere": DatasetSpec(
         "sphere", sphere.N_BASE, sphere.DIM, _sphere_fetch,
         lambda raw: sphere.load(raw), lambda raw: np.load(raw / "triviaqa_enc.npy", mmap_mode="r"),

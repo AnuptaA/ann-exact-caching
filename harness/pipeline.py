@@ -325,7 +325,7 @@ def stage_pg_index(ctx: Context) -> dict:
 
 
 def _build_key(ctx: Context) -> str:
-    return ctx.spec.name if ctx.spec.name in ("spacev", "sphere", "sift10m", "esci") else "spacev"
+    return ctx.spec.name if ctx.spec.name in ("spacev", "sphere", "esci") else "spacev"
 
 
 def _load_universe(ctx: Context):

@@ -18,7 +18,7 @@ an estimate per dataset. All cores are used (`Q1_THREADS` caps them). The estima
     make q1-pg-start                 # if the cluster is not running
     make q1-smoke                    # whole stack on a tiny synthetic dataset (about a minute)
 
-    make q1-generate DATASET=esci    # then spacev, sift10m, sphere (or DATASET=all)
+    make q1-generate DATASET=esci    # then spacev, sphere (or DATASET=all)
     make q1-run-aker-b1              # one system config over every dataset and stream
     make q1-run-proximity-p0.1-b5    # ... and the 9 shortcuts:
                                      #   q1-run-aker-b{1,5,10}

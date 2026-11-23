@@ -35,7 +35,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk
+from simulations.approximate_hits.run_e2e_oracle import exact_topk
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -251,7 +251,7 @@ def main():
             ids = exact_topk(q, db, args.R)
         else:
             from simulations.approximate_hits.run_e2e_oracle_trace import load_base
-            from simulations.approximate_hits.run_e2e_oracle_sift import exact_topk_blocked
+            from simulations.approximate_hits.run_e2e_oracle import exact_topk_blocked
             db = load_base(args.trace)
             logger.info(f"exact top-{args.R} for {len(q)} queries over {len(db)} vectors...")
             ids = exact_topk_blocked(uniq, db, args.R)

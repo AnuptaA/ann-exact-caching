@@ -31,9 +31,9 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
-from simulations.approximate_hits import run_e2e_oracle_sift as base
+from simulations.approximate_hits import run_e2e_oracle as base
 from simulations.approximate_hits.greedy_population import GreedyPopulator
-from simulations.approximate_hits.run_e2e_oracle_sift import (
+from simulations.approximate_hits.run_e2e_oracle import (
     DEFAULT_K_VALUES, DEFAULT_TARGETS, exact_topk_blocked, plot_results, _print_target,
 )
 

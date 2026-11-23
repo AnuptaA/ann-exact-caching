@@ -39,7 +39,7 @@ def test_the_only_encoder_call_sites_are_the_audited_ones():
 
 
 def test_released_base_vectors_have_no_encoder_code():
-    for name in ("spacev", "sift10m", "sphere"):
+    for name in ("spacev", "sphere"):
         text = (ROOT / "workloads/q1/datasets" / f"{name}.py").read_text()
         assert not ENCODER_PATTERN.search(text), name
 
@@ -57,7 +57,6 @@ def test_to_f32_only_casts_released_integer_and_float64_vectors(tmp_path, monkey
     import dataclasses
     rng = np.random.default_rng(0)
     cases = {"spacev": rng.integers(-128, 127, size=(40, 6), dtype=np.int8),
-             "sift10m": rng.integers(0, 255, size=(40, 6), dtype=np.uint8),
              "sphere": rng.normal(scale=14.0, size=(40, 6))}
     for name, base in cases.items():
         ctx = pipeline.make_context(name, tmp_path / name, device="cpu")

@@ -15,19 +15,19 @@ from pathlib import Path
 from harness.backend.build_index import BUILD_PARAMS, hnsw_graph_bytes
 from harness.deploy import gpu_check
 from workloads.q1 import cost, device as device_mod, universe
-from workloads.q1.datasets import sift10m, spacev
+from workloads.q1.datasets import spacev
 
 GIB = 2 ** 30
 # dataset: (vectors, dim)
-DATASETS = {"spacev": (10_000_000, 100), "sift10m": (10_000_000, 128),
+DATASETS = {"spacev": (10_000_000, 100),
             "sphere": (10_000_000, 768), "esci": (1_814_924, 384)}
 
 
 # the smoke dataset can be sized too (a dry run on a small machine), but is not part of the default list
 SIZING = {**DATASETS, "tiny": (4000, 16)}
 
-# bytes per value of the downloaded source: spacev int8, sift10m uint8, sphere float64, esci float32
-RAW_ITEMSIZE = {"spacev": 1, "sift10m": 1, "sphere": 8, "esci": 4, "tiny": 4}
+# bytes per value of the downloaded source: spacev int8, sphere float64, esci float32
+RAW_ITEMSIZE = {"spacev": 1, "sphere": 8, "esci": 4, "tiny": 4}
 MAX_WAL_BYTES = 64 * GIB      # max_wal_size set by setup_instance.sh
 OTHER_BYTES = 8 * GIB         # answer tables, ground truth, streams, results
 OTHER_BYTES_TINY = GIB // 4
@@ -36,7 +36,7 @@ RAM_BASE_BYTES_TINY = GIB
 
 # distinct official query vectors per dataset (the interpolation step draws from them); ESCI and SPHERE
 # are the expected distinct text counts of harness/DECISIONS.md
-OFFICIAL_QUERIES = {"esci": 130_193, "spacev": spacev.N_QUERY, "sift10m": sift10m.N_QUERY, "sphere": 96_005,
+OFFICIAL_QUERIES = {"esci": 130_193, "spacev": spacev.N_QUERY, "sphere": 96_005,
                     "tiny": 600}
 EMBEDDED_TEXTS = {"esci": 1_814_924 + 130_193, "sphere": 96_005}
 

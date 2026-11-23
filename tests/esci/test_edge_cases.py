@@ -2,7 +2,7 @@
 """
 Edge case tests for the ESCI simulation workflow.
 
-ESCI-specific notes vs SIFT edge cases:
+ESCI-specific notes:
   - No base_vectors in benchmark (full 1.82M catalog is never loaded in tests)
   - Cache GT includes actual vectors, no brute force, no MainMemory lookup
   - Angular metric only, no multi-metric tests

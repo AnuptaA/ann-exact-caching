@@ -117,8 +117,7 @@ def populate_cache_from_precomputed(
     """
     Populate KVCache from precomputed ground truth (ESCI version).
 
-    Unlike the SIFT version, GT dicts include actual product vectors so no
-    base_vectors array is needed.
+    GT dicts include actual product vectors so no base_vectors array is needed.
 
     Args:
         simulator: CacheSimulator instance

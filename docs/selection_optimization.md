@@ -90,14 +90,14 @@ For budget checks, all alive candidates' `R_c` index arrays are concatenated int
 
 ## Timing Results
 
-Measured on synthetic data designed to match real SIFT benchmark characteristics:
+Measured on synthetic data designed to match real benchmark characteristics:
 - 6000 candidates (1024 queries x ~6 alpha values producing valid candidates)
 - Median R_c size: 661 base vectors per candidate
 - Median coverage: 3 train queries per candidate
 - Budget: 10,000 base vectors
 - n_base: 50,000 | n_train: 1,024 | n_test: 512
 
-**Caveat: this is on synthetic (fake) data with realistic size distributions, not actual SIFT/ESCI embeddings. Real runs may differ somewhat, but the speedup ratios should hold.**
+**Caveat: this is on synthetic (fake) data with realistic size distributions, not actual ESCI embeddings. Real runs may differ somewhat, but the speedup ratios should hold.**
 
 | Strategy | Original | Fast | Speedup |
 |----------|----------|------|---------|
