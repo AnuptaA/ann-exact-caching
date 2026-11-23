@@ -124,6 +124,7 @@ def real_aker_command(a, scale: float, out_file: Path) -> list[str]:
         cmd += ["--backend-file", a.backend_file, "--backend-target", a.backend_target]
     if a.updates:
         cmd += ["--data-change", "churn"]
+        cmd += ["--pg-dsn", a.pg_dsn] if a.backend == "pgvector" else ["--precomputed-answers"]
     if a.method == "proximity":
         cmd += ["--prox-percentile", f"{a.prox_percentile:g}"]
     return cmd

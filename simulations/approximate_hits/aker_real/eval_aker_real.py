@@ -166,6 +166,7 @@ class World:
     def __init__(self, args, prep, top):
         from simulations.approximate_hits.online_sim import approximate_rows, measured_recall
         self.present, self.ev = None, None
+        self.live, self.q = None, None      # live backend (data-change runs) and the request vectors
         kind = args.data_change
         if kind != "none":
             topU = np.load(prep / "topU1000.npy")
@@ -226,6 +227,10 @@ class World:
         return self._first(self.truth_rows, qi, n)
 
     def answer(self, qi, n):
+        """The backend's answer: a live search when the run has a live backend, else the precomputed rows."""
+        if self.live is not None:
+            ids, _ = self.live.search(np.asarray(self.q[qi], dtype=np.float32), n, kind="miss")
+            return np.asarray(ids, dtype=np.int64)
         return self._first(self.answer_rows, qi, n)
 
     def events(self, i):
@@ -241,6 +246,23 @@ class World:
         self.present[ids[ins]] = True
         self.present[ids[~ins]] = False
         return ids[ins], ids[~ins]
+
+
+def require_live_or_flag(args) -> None:
+    if not args.pg_dsn and not args.precomputed_answers:
+        raise SystemExit("a data-change run needs --pg-dsn (the live backend of this job) or, for tests only, "
+                         "--precomputed-answers")
+
+
+def make_live(args, db, world):
+    """The live pgvector backend of this job (its own database clone); only miss answers and data-change
+    events go through it."""
+    from pathlib import Path as P
+    dsn = P(args.pg_dsn[1:]).read_text().strip() if args.pg_dsn.startswith("@") else args.pg_dsn
+    import psycopg
+    from harness.backend.pgvector import with_keepalives
+    from harness.backend.pgvector_live import LivePgvectorBackend
+    return LivePgvectorBackend(psycopg.connect(with_keepalives(dsn)), db.shape[1], int(world.present.sum()))
 
 
 def pool_size(args, db) -> int:
@@ -334,6 +356,11 @@ def run_quality(args, db, q, world, stream, records=None):
         qv = q[qi]
         measure = i >= args.warmup
         ins, dels = world.events(i)
+        if world.live is not None and ins is not None:
+            if len(ins):
+                world.live.insert(ins, np.asarray(db[ins], dtype=np.float32))
+            if len(dels):
+                world.live.delete(dels)
         if ins is not None:
             # database changes reach Aker as they happen: inserts through its
             # write log (fast path), deletes through markVectorDeleted
@@ -356,7 +383,8 @@ def run_quality(args, db, q, world, stream, records=None):
                     records.add(i, k, 1, float(r), cache_ms=t_look * 1e3)
                 cur["served"] += 1
                 cur["ret"] += r
-                cur["ret_b"] += np.isin(got, world.answer(qi, k)).mean()
+                if world.live is None:
+                    cur["ret_b"] += np.isin(got, world.answer(qi, k)).mean()
                 if changing:
                     cur["deleted_returned"] += int((~world.present[got]).sum())
                 cur[KIND[kind]] += 1
@@ -397,7 +425,8 @@ def run_quality(args, db, q, world, stream, records=None):
     s = sum(b["served"] for b in log)
     summ = {"hit_rate": s / max(n, 1),
             "retention": sum(b["served_retention_sum"] for b in log) / max(s, 1),
-            "retention_vs_backend": sum(b["served_retention_backend_sum"] for b in log) / max(s, 1),
+            "retention_vs_backend": None if world.live is not None else
+            sum(b["served_retention_backend_sum"] for b in log) / max(s, 1),
             "exact_hit_share": sum(b["hits_exact"] for b in log) / max(n, 1),
             "approx_hit_share": sum(b["hits_approx"] for b in log) / max(n, 1),
             "linked_hit_share": sum(b["hits_linked"] for b in log) / max(n, 1),
@@ -410,6 +439,11 @@ def run_quality(args, db, q, world, stream, records=None):
             "mean_ms": {k_: float(np.mean(v) * 1e3) if v else None for k_, v in lat.items()},
             "stats": stats}
     out = {"args": vars(args), "log": log, "summary": summ, "status": status, "pool_slots": pool}
+    if changing:
+        out["backend"] = "pgvector" if world.live is not None else "precomputed"
+        out["backend_adapter"] = ("live pgvector adapter in eval_aker_real (World.answer, World.events and the "
+                                  "run_quality event loop); the Aker library is unchanged"
+                                  if world.live is not None else "precomputed answers filtered by liveness (tests only)")
     if args.equal_bytes:
         from recal import accounting
         M = accounting.budget_bytes(len(db), db.shape[1], args.budget, args.coord_bytes)
@@ -539,6 +573,11 @@ def main():
                          "pool is sized so Aker's bytes (library counts at stored precision) stay within it")
     ap.add_argument("--coord-bytes", type=float, default=4.0,
                     help="bytes per coordinate of the stored vectors (SPACEV: 1)")
+    ap.add_argument("--pg-dsn", default=None,
+                    help="data-change runs: DSN (or @file) of this job's own pgvector clone; misses are live searches "
+                         "and the schedule's inserts and deletes are applied to it in order")
+    ap.add_argument("--precomputed-answers", action="store_true",
+                    help="tests only: answer misses from precomputed rows filtered by liveness")
     ap.add_argument("--pool-capacity", type=int, default=None,
                     help="pool capacity in neighbor objects, skipping the calibration (timing runs pass the one "
                          "calibrated by the quality run)")
@@ -622,7 +661,13 @@ def main():
     if args.out:
         from recal.records import Records
         records = Records({"method": "aker_real", "K": args.k, "history_len": args.warmup})
-    res = run_quality(args, db, q, World(args, prep, top), stream, records)
+    world = World(args, prep, top)
+    world.q = q
+    if args.data_change != "none":
+        require_live_or_flag(args)
+        if args.pg_dsn:
+            world.live = make_live(args, db, world)
+    res = run_quality(args, db, q, world, stream, records)
     if args.history_frac and args.warmup == int(args.history_frac * n_stream):
         from recal import history_mode
         history_mode.stamp(res, n_stream, args.warmup)

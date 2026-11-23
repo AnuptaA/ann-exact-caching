@@ -91,10 +91,10 @@ def burst_lines(prep: str, stream: str, name: str, budgets=(0.05,), seeds=(0, 1)
 
 
 UPDATE_SYSTEMS = {
-    "recal": ("recal", "recal", "", True),
-    "aker": ("aker", "aker", "", False),
-    "proximity-a": ("proximity", "proximity_p0.1", "--prox-percentile 0.1 --tag _p0.1", False),
-    "proximity-b": ("proximity", "proximity_p1", "--prox-percentile 1 --tag _p1", False),
+    "recal": ("recal", "recal", ""),
+    "aker": ("aker", "aker", ""),
+    "proximity-a": ("proximity", "proximity_p0.1", "--prox-percentile 0.1 --tag _p0.1"),
+    "proximity-b": ("proximity", "proximity_p1", "--prox-percentile 1 --tag _p1"),
 }
 
 
@@ -106,21 +106,21 @@ def update_lines(w: dict, name: str, q4: dict, seeds) -> list[str]:
     """Data-update cells, one independent job per (workload, mode, rate, system, seed).
 
     Job contract: each job reads its own prep folder (the schedule and its Aker-format files, written by
-    scripts/convert_streams.py updates --out) and, for ReCal (which searches a live database),
-    the DSN of its own PostgreSQL clone in $PG_CLONES/<job id>.dsn. Nothing is shared or mutated between jobs;
-    results go to the job's own directory.
+    scripts/convert_streams.py updates --out) and the DSN of its own PostgreSQL clone in
+    $PG_CLONES/<job id>.dsn. Every system answers its misses with live searches on that clone and applies the
+    schedule's inserts and deletes to it in order; ground truth is the exact top-200 filtered by liveness. Nothing
+    is shared or mutated between jobs; results go to the job's own directory.
     """
     out = []
     for mode in q4["update_modes"]:
         for rate in q4["update_rates"]:
             prep = f"{q4['update_prep_dir']}/{name}_{mode}{round(100 * rate):d}"
             for system in q4["update_systems"]:
-                method, stem, flags, live = UPDATE_SYSTEMS[system]
+                method, stem, flags = UPDATE_SYSTEMS[system]
                 for seed in seeds:
                     job = update_job_id(name, mode, rate, system, seed)
                     d = f"results/q4/{name}/updates/{job}"
-                    backend = (f"--backend pgvector --pg-dsn @$PG_CLONES/{job}.dsn --updates {prep}/updates.npz"
-                               if live else f"--backend exact --updates {prep}/updates.npz")
+                    backend = f"--backend pgvector --pg-dsn @$PG_CLONES/{job}.dsn --updates {prep}/updates.npz"
                     out.append(f"[ -f {d}/{stem}.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u "
                                f"-m recal.cells --method {method} {'--strict-modes ' if method == 'recal' else ''}--prep {prep} "
                                f"--stream {w['stream']} "

@@ -71,6 +71,7 @@ class Base:
         self.n_c = 0            # distinct cached vectors
         self.ev = D.get("events")
         self.ev_i = 0
+        self.live = D.get("live")       # live backend of a data-change run (misses and events go through it)
         self.records = None
         if getattr(args, "records", False):
             from recal.records import Records
@@ -118,6 +119,11 @@ class Base:
         pres = self.D["present"]
         pres[ids[ins]] = True
         pres[ids[~ins]] = False
+        if self.live is not None:
+            if ins.any():
+                self.live.insert(ids[ins], np.asarray(self.D["db"][ids[ins]], dtype=np.float32))
+            if (~ins).any():
+                self.live.delete(ids[~ins])
         self.on_delete(ids[~ins])
         self.on_insert(ids[ins])
         n = j - self.ev_i
@@ -137,7 +143,11 @@ class Base:
             qb = self.stream[s:s + a.batch]
             # labels = the backend's answer; with an approximate backend the
             # exact top-k is also passed, to log retention against exact truth
-            truth = topk_present(self.D, qb, self.k, key="answer")
+            if self.live is not None:
+                found, _ = self.live.search(np.asarray(self.D["q"][qb], dtype=np.float32), self.k, kind="miss")
+                truth = np.asarray(found, dtype=np.int64)
+            else:
+                truth = topk_present(self.D, qb, self.k, key="answer")
             truth_x = None if self.D["truth"] is self.D["answer"] else \
                 topk_present(self.D, qb, self.k, key="truth")
             # oracle reference: share of each query's top-k cached

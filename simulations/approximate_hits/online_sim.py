@@ -1595,6 +1595,15 @@ class Sim:
 #-------------------------------------------------------------------------------
 
 
+def make_live_backend(args, D):
+    """The live pgvector backend of this job (its own database clone), as in the real Aker driver."""
+    dsn = Path(args.pg_dsn[1:]).read_text().strip() if args.pg_dsn.startswith("@") else args.pg_dsn
+    import psycopg
+    from harness.backend.pgvector import with_keepalives
+    from harness.backend.pgvector_live import LivePgvectorBackend
+    return LivePgvectorBackend(psycopg.connect(with_keepalives(dsn)), D["db"].shape[1], int(D["present"].sum()))
+
+
 def load(prep, args):
     meta_path = Path(prep) / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {"kind": "esci"}
@@ -1641,6 +1650,12 @@ def load(prep, args):
         D.update(rank=rank, present=dc["initial"].copy(), top=rank, initial=dc["initial"],
                  events={"t": t[order], "id": np.r_[dc["ins_ids"], dc["del_ids"]][order],
                          "insert": np.r_[np.ones(n, bool), np.zeros(n, bool)][order]})
+    if kind != "none":
+        if getattr(args, "pg_dsn", None):
+            D["live"] = make_live_backend(args, D)
+        elif not getattr(args, "precomputed_answers", False):
+            raise SystemExit("a data-change run needs --pg-dsn (the live backend of this job) or, for tests only, "
+                             "--precomputed-answers")
     recall = getattr(args, "backend_recall", 1.0)
     if recall < 1.0:
         # approximate backend: its answers miss each vector independently
@@ -1883,6 +1898,10 @@ def make_parser():
     ap.add_argument("--tag", type=str, default="", help="suffix of the output file name")
     ap.add_argument("--history-frac", type=float, default=0.3,
                     help="warm-up = this fraction of the stream (0.3 for every experiment; 0 and --warmup for tests)")
+    ap.add_argument("--pg-dsn", default=None,
+                    help="data-change runs: DSN (or @file) of this job's own pgvector clone for miss answers and events")
+    ap.add_argument("--precomputed-answers", action="store_true",
+                    help="tests only: answer misses from precomputed rows filtered by liveness")
     ap.add_argument("--records", action="store_true",
                     help="write per-request records next to the result (recal/records.py)")
     ap.add_argument("--log-served", action="store_true",

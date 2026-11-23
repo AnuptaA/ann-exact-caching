@@ -83,7 +83,7 @@ def test_q4_dimensions_and_the_update_job_contract():
     updates = [x for x in lines if "/updates/" in x]
     assert len(updates) == 144
     live = [x for x in updates if "--backend pgvector" in x]
-    assert len(live) == 36 and all("--pg-dsn @$PG_CLONES/" in x for x in live)
+    assert len(live) == 144 and all("--pg-dsn @$PG_CLONES/" in x for x in live)
     ids = [x.split("/updates/")[1].split("/")[0] for x in updates]
     assert len(set(ids)) == 144
     one = [x for x in live if "spacev-0.99_uniform1_recal_s0" in x][0]

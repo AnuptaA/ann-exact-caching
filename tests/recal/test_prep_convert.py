@@ -99,7 +99,7 @@ def test_update_schedule_converts_for_recal_and_the_aker_formats(world, tmp_path
     res = tmp_path / "aker_updates"
     monkeypatch.setattr(sys, "argv", ["x", "--prep", str(prep), "--stream", "abrupt", "--method", "aker",
                                       "--budget", "0.3", "--k", "5", "--batch", "300", "--data-change", "churn",
-                                      "--out", str(res)])
+                                      "--precomputed-answers", "--out", str(res)])
     online_sim.main()
     result = json.loads((res / "aker.json").read_text())
     assert sum(b["events"] for b in result["log"]) > 0
