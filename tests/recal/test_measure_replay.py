@@ -171,7 +171,7 @@ def fake_backend(jobs, done, stop, delay=0.0):
     return t
 
 
-def run_fake(n=20, background=(), audit=None, procs=None, timeout=10.0):
+def run_fake(n=20, background=(), audit=None, procs=None, timeout=10.0, fetch=None):
     jobs, done = queue.Queue(), queue.Queue()
     stop = threading.Event()
     sent = []
@@ -181,7 +181,7 @@ def run_fake(n=20, background=(), audit=None, procs=None, timeout=10.0):
     hit = np.arange(n) % 2 == 0
     try:
         r = tr.run_arm("x", hit, np.zeros(n), np.arange(n), 4, jobs, done, procs or [FakeProc()],
-                       time.monotonic() + timeout, audit=audit, k_miss=10, background=background)
+                       time.monotonic() + timeout, audit=audit, k_miss=10, background=background, fetch=fetch)
     finally:
         stop.set()
     return r, sent
@@ -320,3 +320,81 @@ def test_node_cache_bytes_reads_header_and_handles_missing(tmp_path):
     head = struct.pack("<ii", 100, 1) + struct.pack("<QQQQ", 5000, 768, 7, 3200)
     (tmp_path / "ann_disk.index").write_bytes(head + b"\0" * 64)
     assert tr.node_cache_bytes(tmp_path, 100) == 320000
+
+
+def logged_run(batches=4, size=5, fetched_per_batch=7):
+    log = [{"t": size * (b + 1), "fetched": fetched_per_batch * b, "samp_new": b, "samp_fetched": 3 * b}
+           for b in range(batches)]
+    return {"log": log}
+
+
+def test_reread_batches_use_samp_new_and_drop_the_first_batch():
+    end, count = tr.reread_batches(logged_run())
+    assert list(end) == [9, 14, 19]
+    assert list(count) == [8, 8, 8]
+    assert tr.reread_batches({"log": []}) is None
+    assert tr.reread_batches({"log": [{"t": 5}]}) is None
+
+
+def test_reread_plan_places_batches_at_their_end_on_a_contiguous_stream():
+    reread = tr.reread_batches(logged_run())
+    positions = np.arange(5, 20)
+    fe = tr.reread_plan(reread, positions)
+    assert fe.sum() == 24
+    assert [int(positions[i]) for i in np.flatnonzero(fe)] == [9, 14, 19]
+
+
+def test_reread_plan_scales_a_sparse_sample():
+    reread = tr.reread_batches(logged_run())
+    positions = np.arange(5, 20, 3)           # one in three requests
+    fe = tr.reread_plan(reread, positions)
+    assert 0 < fe.sum() <= 24 / 3 + 1
+
+
+def test_no_reread_flag_and_missing_log_disable_rereads():
+    t = {"reread": tr.reread_batches(logged_run())}
+    positions = np.arange(5, 20)
+    assert tr.arm_rereads(False, t, positions) is None          # --no-reread or no --io-complete
+    assert tr.arm_rereads(True, {"reread": None}, positions) is None
+    assert tr.arm_rereads(True, t, positions).sum() == 24
+
+
+def test_run_arm_schedules_rereads_in_chunks_and_waits_for_them():
+    n = 20
+    fetch = np.zeros(n, np.int64)
+    fetch[4], fetch[10] = 130, 5
+    r, sent = run_fake(n, fetch=fetch)
+    jobs = [j for j in sent if j[0] == tr.REREAD_JOB]
+    assert sorted(j[1] for j in jobs) == [2, 5, 64, 64]
+    # the O_DIRECT SectorReader itself needs a Linux index file: needs cluster check
+    assert r["vector_rereads"] == 135
+    assert run_fake(n)[0]["vector_rereads"] == 0
+
+
+class CountingReader:
+    made = []
+
+    def __init__(self):
+        self.reads = []
+        CountingReader.made.append(self)
+
+    def read(self, m):
+        self.reads.append(m)
+
+
+def test_shared_backend_serves_rereads_with_one_index_and_a_reader_per_thread():
+    CountingReader.made = []
+    backend, opened = make_shared(lambda: time.sleep(0.001), threads=3)
+    backend.reader_factory = CountingReader
+    backend.start()
+    for _ in backend.procs:
+        backend.done.get(timeout=5)
+    for i in range(30):
+        backend.jobs.put((tr.REREAD_JOB, 4, 0))
+    got = [backend.done.get(timeout=5) for _ in range(30)]
+    backend.stop()
+    assert all(m[0] == "bg" for m in got)
+    assert backend.instances == 1 and len(opened) == 1
+    assert sum(sum(r.reads) for r in CountingReader.made) == 120
+    assert 1 <= len(CountingReader.made) <= 3
+    assert backend.index.calls == []                           # re-reads do not search the index

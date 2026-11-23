@@ -1500,6 +1500,7 @@ class Sim:
                              "cached": cache.n_cached(), "entries": len(cache.entries),
                              # cumulative vectors read for the cache (ball members; shell samples, core only), doc 9as
                              "fetched": int(cache.vectors_fetched), "samp_fetched": int(getattr(cache, "samp_fetched", 0)),
+                             "samp_new": int(getattr(cache, "samp_new", 0)),
                              "events": n_ev, "audit_rate": rate})
             if getattr(a, "pool_stats", False):
                 self.log[-1].update({f"pool_{k_}": v_ for k_, v_ in self._pool.items()})

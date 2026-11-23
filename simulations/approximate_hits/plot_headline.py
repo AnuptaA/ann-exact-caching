@@ -37,8 +37,9 @@ STYLE = {"aker_paper": ("Aker, paper default (a_T .25, a_L 1.1)", "#0072B2", "D"
          "ours_online": ("Ours, continuous greedy", "#7F3F00", "P", 1.8),
          "lru": ("LRU", "#6B6B6B", "^", 1.6),
          "aker": ("Aker, tuned by hand to the target", "#0072B2", "D", 1.6),
-         "qvcache": ("QVCache, tuned by hand to the target", "#009E73", "s", 1.6)}
-JITTER = {"ours": 1.0, "ours_drift": 1.04, "ours_online": 0.97, "lru": 0.93, "aker": 1.07, "qvcache": 1.14, "aker_paper": 1.07, "qvcache_paper": 1.14}     # x offsets (log axis)
+         "qvcache": ("QVCache, tuned by hand to the target", "#009E73", "s", 1.6),
+         "ours_final": ("Ours, final config (mini cache 2%, deep list = search list, max 128 or 500)", "#E69F00", "*", 2.4)}
+JITTER = {"ours_final": 1.02, "ours": 1.0, "ours_drift": 1.04, "ours_online": 0.97, "lru": 0.93, "aker": 1.07, "qvcache": 1.14, "aker_paper": 1.07, "qvcache_paper": 1.14}     # x offsets (log axis)
 # (title, prep, stream, uses real Aker?)
 LAYOUT = [
     [("SPACEV, Zipf 0.3", "spacev-aker-0.3", "trace", True),
@@ -52,6 +53,8 @@ LAYOUT = [
      ("TripClick real health-search log", "tripclick-ip", "trace", True),
      ("ESCI (no repeated queries)", "esci1m", "random", True)],
 ]
+import os as _os
+SHOW_FINAL = bool(_os.environ.get("HEADLINE_FINAL", "1") != "0")   # doc 9at: the final config's line (HEADLINE_FINAL=0 hides it)
 LABEL_RECALL = False     # print the best recall next to hollow points (old draft style)
 OURS_NAMES = ["greedy_score_rebuild", "greedy_none", "static_default"]
 LRU_NAMES = ["lru_k10_none", "lru_k20_none", "lru_k20_all"]     # configurations kept at every budget
@@ -141,6 +144,12 @@ def collect(prep, stream, budget, real_aker):
     # the papers' own settings (doc 9q): Aker's default (alpha_T .25, alpha_L 1.1, no reserve);
     # QVCache's procedure for D (4 mini-indexes, PCA 16 x 8 buckets, alpha .9; D raised from 0
     # until the hit ratio stops improving meaningfully, here: < 5% relative gain to the next D)
+    # doc 9at: the final-config sweep (results/final/<prep>/b<size>/headline, one seed); shown only where it ran
+    out["ours_final"] = None
+    runs_f = [sim_stats(RES / "final" / prep / f"b{budget:g}" / d / "ogreedy.json") for d in ("headline", "headline_s1")]
+    runs_f = [x for x in runs_f if x]
+    if runs_f and SHOW_FINAL:
+        out["ours_final"] = pick([candidate("final", runs_f)])
     out["aker_paper"] = None
     f = RES / "aker_real" / prep / f"trace_b{budget:g}" / "at0.25_d0.json"
     if real_aker and f.exists():
@@ -165,7 +174,7 @@ def draw_panel(fig, outer, title, data, ymax_pad=1.18, speedup_axis=False, first
     inner = GridSpecFromSubplotSpec(2, 1, subplot_spec=outer, height_ratios=[3.3, 1], hspace=0.07)
     ax = fig.add_subplot(inner[0])
     st = fig.add_subplot(inner[1], sharex=ax)
-    for tech in ("aker_paper", "qvcache_paper", "lru", "qvcache", "aker", "ours_online", "ours"):
+    for tech in ("aker_paper", "qvcache_paper", "lru", "qvcache", "aker", "ours_online", "ours", "ours_final"):
         label, col, mk, lw = STYLE[tech]
         paper = tech.endswith("_paper")
         pts = [(b * JITTER[tech], data[b][tech]) for b in sorted(data) if data[b].get(tech)]
@@ -235,7 +244,7 @@ def main():
             title, prep, stream, real = cell[:4]
             data = {b: collect(prep, stream, b, real) for b in (cell[4] if len(cell) > 4 else BUDGETS)}
             draw_panel(fig, outer[r, c], title, data, speedup_axis=(c == 2), first_col=(c == 0))
-    order = ["ours", "ours_online", "lru", "aker", "aker_paper", "qvcache", "qvcache_paper"]
+    order = (["ours_final"] if SHOW_FINAL else []) + ["ours", "ours_online", "lru", "aker", "aker_paper", "qvcache", "qvcache_paper"]
     handles = [plt.Line2D([], [], color=STYLE[t][1], marker=STYLE[t][2], lw=STYLE[t][3], ms=7, label=STYLE[t][0],
                           ls=(0, (5, 2.5)) if t.endswith("_paper") else "-") for t in order]
     handles += [plt.Line2D([], [], color="k", marker="o", ls="none", mfc="white", mew=1.6,

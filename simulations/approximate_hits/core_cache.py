@@ -103,10 +103,23 @@ class CoreCache(Cache):
             self._holders.setdefault(v, set()).add(int(c))
         fresh = np.unique(ball[self._count[ball] == 0])
         self._fetched += len(fresh)
-        self.samp_fetched = getattr(self, "samp_fetched", 0) + len(samp)     # shell-sample vectors read (doc 9as)
+        self.samp_fetched = getattr(self, "samp_fetched", 0) + len(samp)     # shell-sample vectors (re)coded (doc 9as)
+        # 11-21: vectors a real cache must read for its shell sample: only ones no current entry samples already (a
+        # resized or re-added entry re-codes its sample, but those vectors are in memory)
+        if not hasattr(self, "_samp_count"):
+            self._samp_count = np.zeros(len(self._db), dtype=np.int32)
+        if len(samp):
+            su = np.unique(samp)
+            self.samp_new = getattr(self, "samp_new", 0) + int((self._samp_count[su] == 0).sum())
+            self._samp_count[su] += 1
         np.add.at(self._count, ball, 1)
 
     def _core_remove(self, c):
+        if hasattr(self, "_samp_count"):
+            _, samp = self._entry_parts(c)
+            if len(samp):
+                su = np.unique(samp)
+                self._samp_count[su] = np.maximum(self._samp_count[su] - 1, 0)
         ball, _ = self._ball_shell(int(c))
         ball = ball[ball >= 0].astype(np.int64)
         np.subtract.at(self._count, ball, 1)

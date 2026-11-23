@@ -17,7 +17,10 @@ with a recorded seed, and the residency before and after each arm is stored.
 from the recorded run's "background" stats (searches and mean depth, scaled to the replayed requests and spread
 evenly), plus misses at the recorded mean miss depth. Runs without the field behave as before (audit_pos at k 10;
 misses of arms named ours* at --k-deep). Still NOT counted: admission vector fetches, shell-sample reads and
-rebuild/greedy/eviction CPU. The backend is one index (one node cache) served by --backend-procs search threads
+rebuild/greedy/eviction CPU. --io-complete also re-reads, from the disk index with O_DIRECT, the vectors the cache read for chosen candidates
+(ball members and shell samples, from the recorded run's log; --no-reread leaves them out). QUIET_FLAG: when set, the
+file exists while the arms run, so a job runner can pause other jobs only then.
+The backend is one index (one node cache) served by --backend-procs search threads
 of this process; --legacy-workers restores the old pool of processes that each open their own index and node
 cache. Every result records index_instances and node_cache_bytes_loaded.
 Reports completed requests per second (QPS) and the latency (issue to completion) percentiles. "none" = no cache
@@ -27,6 +30,7 @@ every arm. Needs a quiet machine.
   PYTHONPATH=. .venv-ann/bin/python simulations/approximate_hits/throughput_replay.py --workload tripclick-ip \
       --arm none --arm ours=<run.json> --arm aker=<run.json> --clients 16 --n 20000
 """
+import os
 import sys
 import json
 import time
@@ -55,6 +59,31 @@ def query_file(w):
     return f if f.exists() else Path("datasets/esci/data_vectors/esci_queries.npy")
 
 
+class SectorReader:
+    """Random 4 KB reads of the disk index with O_DIRECT (no page cache), 8 at a time: the cost of re-reading
+    vectors chosen for the cache (one read per vector: an upper bound when several nodes share a sector)."""
+
+    def __init__(self, path, threads=8):
+        import mmap
+        from concurrent.futures import ThreadPoolExecutor
+        self.os = os
+        self.fd = os.open(path, os.O_RDONLY | os.O_DIRECT)
+        self.n_sec = os.fstat(self.fd).st_size // 4096
+        self.bufs = [mmap.mmap(-1, 4096) for _ in range(threads)]
+        self.pool = ThreadPoolExecutor(threads)
+        self.rng = np.random.default_rng()
+
+    def read(self, m):
+        secs = self.rng.integers(1, self.n_sec, size=int(m))
+        nb = len(self.bufs)
+        list(self.pool.map(lambda j: [self.os.preadv(self.fd, [self.bufs[j]], int(x) * 4096) for x in secs[j::nb]],
+                           range(nb)))
+
+
+REREAD_JOB = -3          # job kind: re-read qi vectors from the disk index
+REREAD_CHUNK = 64
+
+
 def worker(info, qfile, jobs, done, dtype):
     from simulations.approximate_hits.diskann_aio import open_disk_index
     q = np.load(qfile, mmap_mode="r")
@@ -62,11 +91,18 @@ def worker(info, qfile, jobs, done, dtype):
                          num_nodes_to_cache=info.get("nodes", 0), cache_mechanism=1 if info.get("nodes", 0) else 0,
                          index_prefix="ann")
     done.put(("ready", 0, 0.0))
+    reader = None
     while True:
         job = jobs.get()
         if job is None:
             return
         i, qi, k = job
+        if i == REREAD_JOB:
+            if reader is None:
+                reader = SectorReader(str(Path(info["index_dir"]) / "ann_disk.index"))
+            reader.read(qi)
+            done.put(("bg", i, time.perf_counter()))
+            continue
         # a deep list of k > L needs a search list of at least k (SPACEV / ESCI: L 100 < 128)
         ix.search(np.ascontiguousarray(q[qi], dtype=dtype), k_neighbors=k, complexity=max(info["L"], k),
                   beam_width=info["W"])
@@ -94,8 +130,10 @@ class ThreadWorker:
 class SharedBackend:
     """One index, one node cache, `threads` search threads. open_index() is called exactly once."""
 
-    def __init__(self, open_index, queries, dtype, L, W, threads):
+    def __init__(self, open_index, queries, dtype, L, W, threads, reader_factory=None):
         self.instances = 0
+        self.reader_factory = reader_factory
+        self.local = threading.local()
         self.index = open_index()
         self.instances += 1
         self.queries, self.dtype, self.L, self.W = queries, dtype, L, W
@@ -114,8 +152,18 @@ class SharedBackend:
             if job is None:
                 return
             i, qi, k = job
+            if i == REREAD_JOB:
+                self.reader().read(qi)
+                self.done.put(("bg", i, time.perf_counter()))
+                continue
             self.search(qi, k)
             self.done.put(("bg" if i < -1 else "done", i, time.perf_counter()))
+
+    def reader(self):
+        """One reader per search thread: a reader's buffers are not shared between threads."""
+        if getattr(self.local, "reader", None) is None:
+            self.local.reader = self.reader_factory()
+        return self.local.reader
 
     def start(self):
         for p in self.procs:
@@ -185,7 +233,35 @@ def load_arm(r):
         pos = warmup + np.arange(len(hit), dtype=np.int64)
         total = warmup + len(hit)
     return {"pos": pos, "hit": hit, "dt_ms": dt, "warmup": warmup, "total": total, "background": r.get("background"),
-            "audit_pos": np.asarray(r["audit_pos"], dtype=np.int64) if "audit_pos" in r else None}
+            "audit_pos": np.asarray(r["audit_pos"], dtype=np.int64) if "audit_pos" in r else None,
+            "reread": reread_batches(r)}
+
+
+def reread_batches(r):
+    """(stream position of each logged batch end, vectors the cache read for chosen candidates in that batch),
+    from the run's per-batch log; None when the run did not log them. Shell-sample vectors: samp_new (only ones no
+    entry sampled already) where logged, else samp_fetched (every re-coding counted: too many)."""
+    log = r.get("log")
+    if not log or "fetched" not in log[0]:
+        return None
+    cum = np.array([x["fetched"] + x.get("samp_new", x.get("samp_fetched", 0)) for x in log], dtype=np.int64)
+    end = np.array([x["t"] for x in log], dtype=np.int64) - 1
+    return end[1:], np.diff(cum)
+
+
+def reread_plan(reread, positions):
+    """Vectors to re-read after each replayed request: a recorded batch's count goes to the first replayed
+    request at or after the batch end; a sparse sample (positions not contiguous) gets its share of them."""
+    n = len(positions)
+    if reread is None or n == 0:
+        return np.zeros(n, np.int64)
+    end, count = reread
+    span = int(positions[-1] - positions[0] + 1)
+    scale = min(1.0, n / span)
+    keep = (end >= positions[0]) & (end <= positions[-1])
+    acc = np.zeros(n)
+    np.add.at(acc, np.searchsorted(positions, end[keep]), count[keep] * scale)
+    return np.diff(np.floor(np.cumsum(acc)), prepend=0).astype(np.int64)
 
 
 def check_alignment(arms):
@@ -248,7 +324,14 @@ def get_message(done, procs, deadline, block):
             pass
 
 
-def run_arm(name, hit, dt, qids, clients, jobs, done, procs, deadline, audit=None, k_miss=10, background=()):
+def arm_rereads(enabled, t, positions):
+    """Vectors to re-read after each replayed request of an arm, None when disabled or not recorded."""
+    if not enabled or t.get("reread") is None:
+        return None
+    return reread_plan(t["reread"], positions)
+
+
+def run_arm(name, hit, dt, qids, clients, jobs, done, procs, deadline, audit=None, k_miss=10, background=(), fetch=None):
     """audit: requests whose hit is audited (old recordings); each audit is a backend search issued as
     background work. background: [(counts per request, k)] extra backend searches issued after each request.
     Misses search with k_miss results. Wall time runs until the background work is done too."""
@@ -300,12 +383,18 @@ def run_arm(name, hit, dt, qids, clients, jobs, done, procs, deadline, audit=Non
             inflight += 1
         for counts, k in background:
             issue_bg(i, counts[i], k)
+        if fetch is not None and fetch[i] > 0:
+            m = int(fetch[i])
+            for c0 in range(0, m, REREAD_CHUNK):        # background vector re-reads, in chunks
+                jobs.put((REREAD_JOB, min(REREAD_CHUNK, m - c0), 0))
+                bg_out += 1
     while inflight > 0 or bg_out > 0:
         drain(True)
     wall = time.perf_counter() - t0
     lat = (finish - issue) * 1e3
     return {"arm": name, "n": n, "wall_s": wall, "qps": n / wall, "hit_rate": float(np.mean(hit)),
             "audits": int(audit.sum()) if audit is not None else 0, "background_searches": bg_total, "k_miss": k_miss,
+            "vector_rereads": int(fetch.sum()) if fetch is not None else 0,
             "mean_ms": float(lat.mean()), "p50_ms": float(np.percentile(lat, 50)), "p90_ms": float(np.percentile(lat, 90)),
             "p99_ms": float(np.percentile(lat, 99)), "clients": clients}
 
@@ -340,6 +429,7 @@ def main():
                     help="count the recorded background work (audits, candidate and label fetches) as backend searches; "
                          "old recordings: audit_pos at k 10 and misses of arms named ours* with k = --k-deep")
     ap.add_argument("--k-deep", type=int, default=128)
+    ap.add_argument("--no-reread", action="store_true", help="--io-complete without the vector re-reads")
     ap.add_argument("--legacy-alignment", action="store_true",
                     help="old behaviour: warm-up min(20000, len // 5), first n requests, no alignment checks")
     ap.add_argument("--no-evict", action="store_true", help="old behaviour: no page cache eviction between arms")
@@ -358,6 +448,7 @@ def main():
         post = stream[warm:]
         n = min(a.n, len(post), *[len(t["hit"]) for _, t in arms if t])
         qids = post[:n]
+        positions = warm + np.arange(n)
         sel = {name: np.arange(n) for name, _ in arms}
         starts = {name: warm for name, _ in arms}
     else:
@@ -391,7 +482,8 @@ def main():
             lambda: open_disk_index(max_wait=3600, index_directory=info["index_dir"], num_threads=2 * a.backend_procs,
                                     num_nodes_to_cache=nodes0, cache_mechanism=1 if nodes0 else 0,
                                     index_prefix="ann"),
-            np.load(query_file(w), mmap_mode="r"), dtype, info["L"], info["W"], a.backend_procs)
+            np.load(query_file(w), mmap_mode="r"), dtype, info["L"], info["W"], a.backend_procs,
+            reader_factory=lambda: SectorReader(str(Path(info["index_dir"]) / "ann_disk.index")))
         jobs, done, procs = backend.jobs, backend.done, backend.procs
         instances = backend.instances
         par = search_parallelism(lambda qi: backend.search(int(qi), 10), [int(x) for x in stream[:8 * a.backend_procs]],
@@ -403,6 +495,7 @@ def main():
     assert a.legacy_workers or instances == 1, f"{instances} index instances, expected 1"
     node_bytes = node_cache_bytes(info["index_dir"], info["nodes"])
     loaded = None if node_bytes is None else node_bytes * instances
+    flag = os.environ.get("QUIET_FLAG")
     if backend is not None:
         backend.start()
     else:
@@ -413,6 +506,9 @@ def main():
             get_message(done, procs, deadline, True)
         logger.info(f"{w.name}: {a.backend_procs} backend {'processes' if backend is None else 'threads'} ready; "
                     f"{instances} index instance(s); L {info['L']} beam {info['W']}; {n} requests")
+        if flag:                          # the arms need a quiet machine: a runner pauses other jobs while this exists
+            Path(flag).touch()
+            time.sleep(15)
 
         def warm_page_cache():
             for i in range(300):
@@ -445,7 +541,9 @@ def main():
                             km = a.k_deep if name.startswith("ours") else 10
                             if t["audit_pos"] is not None:
                                 aud = np.isin(t["pos"][sel[name]], t["audit_pos"])
-                    r = run_arm(name, hit, dt, qids, c, jobs, done, procs, deadline, audit=aud, k_miss=km, background=plan)
+                    fe = arm_rereads(a.io_complete and not a.no_reread, t, t["pos"][sel[name]]) if t is not None else None
+                    r = run_arm(name, hit, dt, qids, c, jobs, done, procs, deadline, audit=aud, k_miss=km, background=plan,
+                                fetch=fe)
                     r["nodes"] = info["nodes"]
                     r["backend_mode"] = "processes" if backend is None else "shared"
                     r["index_instances"] = instances
@@ -455,14 +553,18 @@ def main():
                     r["warmup"] = warm
                     r["page_cache"] = pagecache.record(dict(before, **state), pagecache.residency(index_paths))
                     out.append(r)
-                    logger.info(f"clients {c:3d} {name:12s} hit {100 * r['hit_rate']:5.1f}% bg {r['background_searches']} audits {r['audits']} k {km}  "
+                    logger.info(f"clients {c:3d} {name:12s} hit {100 * r['hit_rate']:5.1f}% bg {r['background_searches']} audits {r['audits']} rereads {r['vector_rereads']} k {km}  "
                                 f"{r['qps']:7.1f} QPS  mean {r['mean_ms']:.1f} ms  p50 {r['p50_ms']:.1f}  p99 {r['p99_ms']:.1f}")
+        if flag:
+            Path(flag).unlink(missing_ok=True)
         if backend is not None:
             backend.stop()
         else:
             for _ in procs:
                 jobs.put(None)
     except BaseException:
+        if flag:
+            Path(flag).unlink(missing_ok=True)
         for p in procs:
             if p.is_alive():
                 p.terminate()

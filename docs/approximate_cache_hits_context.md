@@ -4216,3 +4216,101 @@ Entries hold their k result vectors, as Aker's cache returns vectors (k vectors 
   entries' vectors (TripClick 10%: 10.4 ball + 24.1 shell-sample vectors per request, ~0.2 searches' worth of reads if re-read).
 - Queued: timed recordings (ours with the mini cache, and the best alternative) for TriviaQA 0.6 10%, SPACEV 0.6 10%, MedRAG 0.3%,
   then their replays and node-cache arms, one at a time (run_replay_io2.sh).
+
+#### 9as (cont.). Replays on the other workloads (11-21 00:15 - 08:15)
+First 20,000 requests after warm-up (MedRAG: all 8,000), 16 clients, 8 DiskANN processes, base node cache; ours = continuous
+greedy, top-128 lists, mini cache (TriviaQA / SPACEV 10% share, MedRAG none: no exact repeats), I/O-complete; QPS ratio to
+DiskANN alone in the same run:
+| cell | DiskANN QPS | ours (hit %) | best alternative (hit %) | node cache (nodes) | ours / best other |
+|---|---|---|---|---|---|
+| TripClick 10% | 87.9 | 1.27x (25.1) | Aker 1.20x (17.2) | 1.33x (154,753) | 0.96x (node cache) |
+| TriviaQA 0.6 10% | 14.1 | 1.65x (43.6) | Aker 1.23x (19.0) | 1.10x (887,421) | 1.34x |
+| SPACEV 0.6 10% | 99.4 | 1.11x (25.7) | Aker 1.09x (8.7) | 1.67x (1,650,054) | 0.66x (node cache) |
+| MedRAG 0.3% | 75.0 | 5.00x (89.2) | QVCache 1.85x (46.4) | 1.05x (43,008) | 2.70x |
+- The disk model ((1 - h) x miss cost + audits) predicts every ours / Aker / QVCache ratio within ~0.01-0.02.
+- SPACEV: DiskANN's tuned search list is 100, so top-128 misses needed L = 128: each miss cost ~1.17 searches, eating the gain.
+  Rule R = min(500, L): SPACEV with R = 100 (balls up to K 50) reaches 32.9% (vs 37.5% at R = 128) with no extra cost: disk
+  model 1.42x vs 1.31x (replay queued). The node cache is strong on SPACEV because its memory is matched in bytes to our cache,
+  which stores SPACEV's int8 vectors as float32 (4x the bytes; 1.65M nodes of 360 bytes). Storing them as int8 would quarter
+  our cache's bytes (or let it hold ~4x more vectors).
+- The 20k window is early (our hit rate still rising: TriviaQA 43.6% vs 60.7% over the stream). Whole-stream replays (none /
+  ours / alternative; node-cache ratios reused) queued: run_replay_full.sh.
+- Single-thread latency estimate over the whole stream from the same recordings (mean cache-path time + miss share x DiskANN-alone
+  mean): TripClick 10% ours 1.27x / Aker 1.21x / node cache 0.93x; TriviaQA 0.6 10% 2.12x / 1.37x / 1.00x; SPACEV 0.6 10% (R 128)
+  1.45x / 1.14x / 1.11x; MedRAG 0.3% 6.85x / QVCache 1.83x / 1.01x. (Misses charged DiskANN's mean, not their own measured time.)
+- TriviaQA hit path: 8.8 ms per hit (stage-2 serve at ef 2048 over 1M cached vectors), 1.2 ms per miss; the replay's single cache
+  thread does not bind there (~4.5 ms per request at 23 QPS).
+
+#### 9as (cont.). Whole-stream replays (11-21 08:15 - 15:20)
+Whole stream after warm-up, I/O-complete (no vector re-reads yet), 16 clients; node-cache ratios from the 20k runs:
+| cell | DiskANN QPS | ours (hit %) | best alternative | node cache | ours / best other |
+|---|---|---|---|---|---|
+| TripClick 10% | 87.6 | 1.34x (29.2) | Aker 1.22x (18.3) | 1.33x | 1.01x |
+| TriviaQA 0.6 10% | 14.1 | 2.21x (60.7) | Aker 1.38x (27.1) | 1.10x | 1.60x |
+| SPACEV 0.6 10% (R 100, K <= 50) | 99.3 | 1.40x (32.9) | Aker 1.14x (12.6) | 1.67x (float32-matched) | 0.84x |
+| MedRAG 0.3% (8,000 requests) | 75.0 | 5.00x (89.2) | QVCache 1.85x (46.4) | 1.05x | 2.70x |
+Every ours / alternative ratio is within ~0.02 of the disk model. Candidates are chosen from ids alone (greedy's marginal hits are
+set overlaps of top-K ids with past misses' top-10 ids; the radius is the distance DiskANN returns); only chosen entries need
+vectors (ball members, shell samples), so a real system keeps candidates as ids and re-reads chosen vectors: added to the replay
+(--io-complete re-reads per batch, random 4 KB O_DIRECT reads; queued for all four cells). SPACEV node cache at native int8 bytes
+(~355 MB -> ~998k nodes): queued.
+
+### 9at. Final-config sweep (11-21 15:20, Jialin away 12-24 h: fill the headline / latency / throughput plots)
+Config: continuous greedy, deep lists R = min(128, L) (TripClick / MedRAG / TriviaQA 128, SPACEV / ESCI 100 with balls up to K 50),
+mini cache at 2% of the budget (one fixed share; no online rule yet, decided with Jialin), robust 4-bit range, inserts at 200,
+fast path, tuned search lists. Runs (/tmp/mx/gen_final.py, results/final/<workload>/b<size>/{timed,headline}): 31 timed cells
+(DiskANN backend, every request timed, --log-served: gives the composed latency on the timing plot's 1-in-50 requests and the
+replay input) and 37 headline cells (exact backend). Throughput replays (with re-reads) at more sizes: TripClick 1% / 30%,
+SPACEV 0.99 10%, SPACEV 0.6 1%, TriviaQA 0.99 10%, TriviaQA 0.6 1%, MedRAG 0.1%, with the best alternative's timed recording
+(run_replay_extra.sh). quiet_tp.sh now pauses other jobs only while a replay measures (QUIET_FLAG), not while it loads.
+
+#### 9at (cont.). First results (11-21 16:30 - 20:05)
+- SPACEV 0.6 10% node cache at native int8 bytes (~998k nodes): 142.5 QPS = 1.44x DiskANN alone (1.67x when matched to float32
+  copies). Ours 1.40x without re-reads -> 0.97x of it.
+- Re-reading chosen candidates' vectors (one random 4 KB read per vector), whole stream: MedRAG 0.3% 5.00x -> 4.06x (9.3 vectors
+  per request); SPACEV 0.6 10% 1.40x -> 1.24x (14.0); TripClick 10% 1.34x -> 1.05x (34.6 vectors per request; below Aker 1.22x and
+  the node cache 1.33x). Shell samples are most of it (TripClick: 24 of 34). The counter counted every re-coding of a resized
+  entry's sample; counting only vectors no entry samples already (samp_new, fixed 20:00): 19.8 instead of 26.9 per request on
+  TripClick 10% (first 20k): the re-reads above are ~1.3x too many; the extra replays are re-recorded with the fix. Lever: count
+  intruders with DiskANN's in-memory PQ codes instead of our own 4-bit shell sample (no reads, no shell memory) - not tried.
+- Final config, headline (exact backend, one seed, retention 0.908-0.936 everywhere): above the best of Aker / QVCache in every
+  cell but TripClick 0.3% (8.9 vs Aker 9.2). At 10% caches deep lists of 128 cost hit rate vs continuous greedy with 500 (SPACEV
+  0.99 58.7 vs 66.1, TriviaQA 0.99 79.0 vs 91.4, TriviaQA 0.6 61.9 vs 68.4, ESCI 29.4 vs 33.1). TriviaQA's search list is 1,000, so
+  its rule is R = min(500, L) = 500 at no extra I/O: TriviaQA rerun with R 500 (results/final; the R 128 runs in final_R128).
+  SPACEV / ESCI (L 100) and TripClick / MedRAG (L 128) keep R = L.
+
+#### 9at (cont.). Throughput at more sizes (11-21 22:00 - 11-22 10:30)
+Whole-stream replays, I/O-complete with re-reads (corrected counter), QPS / DiskANN alone in the same run; node cache from a
+separate 20k replay (TripClick 30% node count ~3x the 10% one, SPACEV counts at native int8 bytes):
+| cell | ours (hit %, re-reads per request) | best alternative | node cache | ours / best other |
+|---|---|---|---|---|
+| TripClick 1% | 1.05x (13.1, 8.1) | Aker 1.12x | 1.10x | 0.94x |
+| TripClick 30% | 1.51x (47.7, 13.6) | Aker 1.31x | 1.82x | 0.83x |
+| SPACEV 0.99 10% | 1.94x (58.1, 4.9) | Aker 1.80x | 1.40x | 1.08x |
+| SPACEV 0.6 1% | 0.99x (18.1, 23.4) | Aker 1.04x | pending | <= 0.95x |
+| TriviaQA 0.99 10% | 4.52x (88.3, 15.9) | QVCache 2.48x | - | 1.82x |
+| MedRAG 0.1% | 3.50x (86.2, 11.6) | QVCache 1.85x | - | 1.89x |
+- Re-reads are what costs us where hit rates are low: SPACEV 0.6 1% re-reads 23 vectors per request (continuous greedy churns
+  entries at small caches) and falls to 0.99x despite 18% hits vs Aker's 3.8%. Most re-read vectors are shell samples.
+  The lever worth testing: count intruders with DiskANN's in-memory PQ codes (no reads, no shell memory), and/or charge churn
+  in greedy's exchange rule (a candidate's gain must beat its re-read cost).
+- Single-thread latency (timing plot, final config): above every alternative in most cells; losses: TripClick 10% (1.15x vs
+  Aker 1.20x), ESCI 10% (1.20x vs node cache 1.26x), SPACEV 0.99 3% (1.59x vs Aker 1.75x).
+- Headline (final config, 2 seeds): above the best of Aker / QVCache in every cell but TripClick 0.3% (8.9 vs 9.2); ratios
+  1.09x (TriviaQA 0.99 1%) to 27x (MedRAG 0.01%); retention 0.909-0.937.
+
+#### 9at (cont.). Re-runs with the corrected re-read count (11-22 17:00 - 11-23 01:00)
+Final config, whole stream, re-reads counted as vectors no entry samples already:
+| cell | ours (hit %, re-reads / request) | best alternative | node cache | ours / best other |
+|---|---|---|---|---|
+| MedRAG 0.3% | 4.12x (89.2, 8.6) | QVCache 1.85x | 1.05x | 2.22x |
+| TripClick 10% | 1.09x (29.2, 29.1) | Aker 1.22x | 1.33x | 0.82x |
+| SPACEV 0.6 10% | 1.24x (32.3, 12.7) | Aker 1.14x | 1.44x (int8) | 0.86x |
+| TriviaQA 0.6 10%, R 500 | 1.73x (58.6, 110.6) | Aker 1.38x | 1.10x | 1.26x |
+| TriviaQA 0.6 1%, R 500 | 1.18x (23.0, 52.7) | Aker 1.07x | - | 1.10x |
+- Deep lists of 500 on TriviaQA (free to search: L = 1,000) multiply the re-reads (110 vs ~14 per request with 128): 1.73x vs
+  2.14x with R 128 at the same size. Deeper lists trade hit rate for re-read I/O; for throughput R 128 is better there.
+- Where we lose (TripClick, SPACEV 0.6), the re-reads (shell samples mostly) are the gap: TripClick 10% without them 1.34x.
+  Candidate fixes (not run, need Jialin's OK): shell intruder counts from DiskANN's in-memory PQ codes (no reads, frees the
+  shell's memory), a re-read cost in greedy's exchange rule (penalize churn), or fewer shell samples per new entry.
+- Queued (run_more.sh): TripClick 3%, SPACEV 0.99 1%, TriviaQA 0.99 1%, MedRAG 0.03%, ESCI 10%.

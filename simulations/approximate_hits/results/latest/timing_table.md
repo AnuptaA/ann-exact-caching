@@ -1,5 +1,9 @@
 | trace | budget | technique | hit % | ret. hits | recall all | DiskANN ms | cache+DiskANN ms | hit ms | miss ms | p99 ms | DiskANN p99 | speedup | 1/(1-h) | env |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| SPACEV, Zipf 0.3 | 0.3% | Ours, final config | 2.49 | 0.93 | nan | 7.54 | 7.56 | 0.247 | 7.78 | 12.2 | 11.9 | 0.998 | 1.03 | composed |
+| SPACEV, Zipf 0.3 | 1% | Ours, final config | 7.3 | 0.923 | nan | 7.54 | 7.47 | 1.48 | 7.97 | 12.6 | 11.9 | 1.01 | 1.08 | composed |
+| SPACEV, Zipf 0.3 | 3% | Ours, final config | 18.3 | 0.916 | nan | 7.54 | 6.65 | 0.726 | 8.01 | 12.3 | 11.9 | 1.13 | 1.22 | composed |
+| SPACEV, Zipf 0.3 | 10% | Ours, final config | 23.3 | 0.914 | nan | 7.54 | 6.31 | 0.737 | 8.06 | 12.4 | 11.9 | 1.2 | 1.3 | composed |
 | SPACEV, Zipf 0.3 | 0.3% | Ours | 0 | - | nan | 7.54 | 7.63 | - | 7.63 | 12 | 11.9 | 0.988 | 1 | composed |
 | SPACEV, Zipf 0.3 | 1% | Ours | 0 | - | nan | 7.54 | 7.67 | - | 7.67 | 12.1 | 11.9 | 0.983 | 1 | composed |
 | SPACEV, Zipf 0.3 | 3% | Ours | 0 | - | nan | 7.54 | 7.72 | - | 7.72 | 12.1 | 11.9 | 0.978 | 1 | composed |
@@ -24,6 +28,10 @@
 | SPACEV, Zipf 0.3 | 1% | QVCache | 0.726 | 0.947 | nan | 7.54 | 8.21 | 0.656 | 8.24 | 12.6 | 11.9 | 0.919 | 1.01 | composed |
 | SPACEV, Zipf 0.3 | 3% | QVCache | 3.94 | 0.92 | nan | 7.54 | 8.13 | 0.921 | 8.43 | 12.8 | 11.9 | 0.928 | 1.04 | composed |
 | SPACEV, Zipf 0.3 | 10% | QVCache | 5.55 | 0.911 | nan | 7.54 | 7.29 | 0.137 | 7.69 | 12.1 | 11.9 | 1.03 | 1.06 | composed |
+| SPACEV, Zipf 0.6 | 0.3% | Ours, final config | 11.5 | 0.923 | nan | 7.11 | 6.61 | 0.379 | 7.34 | 11.3 | 11.1 | 1.08 | 1.13 | composed |
+| SPACEV, Zipf 0.6 | 1% | Ours, final config | 18.1 | 0.915 | nan | 7.11 | 6.37 | 1.17 | 7.46 | 11.4 | 11.1 | 1.12 | 1.22 | composed |
+| SPACEV, Zipf 0.6 | 3% | Ours, final config | 29.5 | 0.909 | nan | 7.11 | 5.94 | 1.57 | 7.62 | 11.5 | 11.1 | 1.2 | 1.42 | composed |
+| SPACEV, Zipf 0.6 | 10% | Ours, final config | 32.3 | 0.908 | nan | 7.11 | 5.51 | 0.832 | 7.58 | 11.4 | 11.1 | 1.29 | 1.48 | composed |
 | SPACEV, Zipf 0.6 | 0.3% | Ours | 7.74 | 0.926 | nan | 7.11 | 6.74 | 0.179 | 7.26 | 11.3 | 11.1 | 1.06 | 1.08 | composed |
 | SPACEV, Zipf 0.6 | 1% | Ours | 9.7 | 0.928 | nan | 7.11 | 6.72 | 0.617 | 7.31 | 11.3 | 11.1 | 1.06 | 1.11 | composed |
 | SPACEV, Zipf 0.6 | 3% | Ours | 13.9 | 0.911 | nan | 7.11 | 6.53 | 0.962 | 7.37 | 11.4 | 11.1 | 1.09 | 1.16 | composed |
@@ -48,6 +56,10 @@
 | SPACEV, Zipf 0.6 | 1% | QVCache | 3.57 | 0.968 | nan | 7.11 | 7.61 | 0.739 | 7.85 | 11.9 | 11.1 | 0.934 | 1.04 | composed |
 | SPACEV, Zipf 0.6 | 3% | QVCache | 10.4 | 0.922 | nan | 7.11 | 7.25 | 0.912 | 8 | 12 | 11.1 | 0.981 | 1.12 | composed |
 | SPACEV, Zipf 0.6 | 10% | QVCache | 10.6 | 0.95 | nan | 7.11 | 6.77 | 0.435 | 7.53 | 11.6 | 11.1 | 1.05 | 1.12 | composed |
+| SPACEV, Zipf 0.99 | 0.3% | Ours, final config | 46.6 | 0.926 | nan | 7.24 | 4.16 | 0.229 | 7.74 | 11.9 | 12 | 1.74 | 1.87 | composed |
+| SPACEV, Zipf 0.99 | 1% | Ours, final config | 55.6 | 0.913 | nan | 7.24 | 3.62 | 0.408 | 7.7 | 11.7 | 12 | 2 | 2.25 | composed |
+| SPACEV, Zipf 0.99 | 3% | Ours, final config | 44.8 | 0.921 | nan | 7.24 | 4.55 | 0.597 | 7.78 | 12 | 12 | 1.59 | 1.81 | composed |
+| SPACEV, Zipf 0.99 | 10% | Ours, final config | 58.1 | 0.915 | nan | 7.24 | 3.6 | 0.595 | 7.79 | 11.9 | 12 | 2.01 | 2.39 | composed |
 | SPACEV, Zipf 0.99 | 0.3% | Ours | 44.5 | 0.912 | nan | 7.24 | 4.24 | 0.165 | 7.59 | 11.8 | 12 | 1.7 | 1.8 | composed |
 | SPACEV, Zipf 0.99 | 1% | Ours | 47.6 | 0.912 | nan | 7.24 | 4.06 | 0.291 | 7.58 | 11.8 | 12 | 1.78 | 1.91 | composed |
 | SPACEV, Zipf 0.99 | 3% | Ours | 52.6 | 0.907 | nan | 7.24 | 3.84 | 0.625 | 7.65 | 11.8 | 12 | 1.88 | 2.11 | composed |
@@ -72,6 +84,8 @@
 | SPACEV, Zipf 0.99 | 1% | QVCache | 40.9 | 0.92 | nan | 7.24 | 4.91 | 0.669 | 8.03 | 12.3 | 12 | 1.47 | 1.69 | composed |
 | SPACEV, Zipf 0.99 | 3% | QVCache | 41.2 | 0.974 | nan | 7.24 | 4.63 | 0.409 | 7.77 | 12.1 | 12 | 1.56 | 1.7 | composed |
 | SPACEV, Zipf 0.99 | 10% | QVCache | 41.2 | 0.978 | nan | 7.24 | 4.53 | 0.307 | 7.67 | 12.1 | 12 | 1.6 | 1.7 | composed |
+| TriviaQA, Zipf 0.3 | 1% | Ours, final config | 12 | 0.919 | nan | 73.7 | 66.4 | 4.24 | 75.3 | 83.2 | 81.6 | 1.11 | 1.14 | composed |
+| TriviaQA, Zipf 0.3 | 10% | Ours, final config | 48.8 | 0.909 | nan | 73.7 | 45.4 | 13.5 | 77.2 | 84.8 | 81.6 | 1.62 | 1.95 | composed |
 | TriviaQA, Zipf 0.3 | 1% | Ours | 5.78 | 0.921 | nan | 73.7 | 69.7 | 2.04 | 74.6 | 82.4 | 81.6 | 1.06 | 1.06 | composed |
 | TriviaQA, Zipf 0.3 | 10% | Ours | 29.9 | 0.904 | nan | 73.7 | 56.3 | 12.1 | 76.8 | 84.3 | 81.6 | 1.31 | 1.43 | composed |
 | TriviaQA, Zipf 0.3 | 1% | Ours (continuous greedy) | 9.28 | 0.919 | nan | 73.7 | 67.8 | 3.28 | 75 | 82.8 | 81.6 | 1.09 | 1.1 | composed |
@@ -82,6 +96,8 @@
 | TriviaQA, Zipf 0.3 | 10% | Aker | 15.3 | 0.958 | nan | 73.7 | 62 | 0.0248 | 73.8 | 81.6 | 81.6 | 1.19 | 1.18 | composed |
 | TriviaQA, Zipf 0.3 | 1% | QVCache | 2.21 | 0.831 | nan | 73.7 | 74.7 | 2.19 | 75.9 | 84 | 81.6 | 0.987 | 1.02 | composed |
 | TriviaQA, Zipf 0.3 | 10% | QVCache | 15.6 | 0.87 | nan | 73.7 | 63.6 | 0.859 | 74.6 | 82.4 | 81.6 | 1.16 | 1.18 | composed |
+| TriviaQA, Zipf 0.6 | 1% | Ours, final config | 23 | 0.916 | nan | 73.5 | 58.7 | 2.51 | 74.5 | 82.3 | 81.9 | 1.25 | 1.3 | composed |
+| TriviaQA, Zipf 0.6 | 10% | Ours, final config | 58.6 | 0.909 | nan | 73.5 | 37.3 | 10.6 | 75.3 | 82.4 | 81.9 | 1.97 | 2.42 | composed |
 | TriviaQA, Zipf 0.6 | 1% | Ours | 15 | 0.918 | nan | 73.5 | 63.8 | 2.07 | 74.5 | 82.7 | 81.9 | 1.15 | 1.18 | composed |
 | TriviaQA, Zipf 0.6 | 10% | Ours | 40.7 | 0.909 | nan | 73.5 | 49.6 | 11.7 | 75.7 | 83.9 | 81.9 | 1.48 | 1.68 | composed |
 | TriviaQA, Zipf 0.6 | 1% | Ours (continuous greedy) | 20.8 | 0.919 | nan | 73.5 | 59.5 | 3.5 | 74.9 | 82.8 | 81.9 | 1.23 | 1.26 | composed |
@@ -92,6 +108,8 @@
 | TriviaQA, Zipf 0.6 | 10% | Aker | 27.1 | 0.915 | nan | 73.5 | 54.4 | 0.0277 | 73.5 | 81.3 | 81.9 | 1.35 | 1.37 | composed |
 | TriviaQA, Zipf 0.6 | 1% | QVCache | 6.5 | 0.922 | nan | 73.5 | 71.5 | 2.03 | 75.6 | 84.3 | 81.9 | 1.03 | 1.07 | composed |
 | TriviaQA, Zipf 0.6 | 10% | QVCache | 24.6 | 0.885 | nan | 73.5 | 56.7 | 0.824 | 74.2 | 82.2 | 81.9 | 1.3 | 1.33 | composed |
+| TriviaQA, Zipf 0.99 | 1% | Ours, final config | 64.1 | 0.914 | nan | 74.3 | 28.6 | 3.38 | 76.5 | 82.9 | 84.6 | 2.6 | 2.79 | composed |
+| TriviaQA, Zipf 0.99 | 10% | Ours, final config | 88.3 | 0.909 | nan | 74.3 | 14.6 | 7.08 | 76.2 | 80.4 | 84.6 | 5.11 | 8.58 | composed |
 | TriviaQA, Zipf 0.99 | 1% | Ours | 59.9 | 0.911 | nan | 74.3 | 30.5 | 2.4 | 75.6 | 82.4 | 84.6 | 2.44 | 2.5 | composed |
 | TriviaQA, Zipf 0.99 | 10% | Ours | 74.8 | 0.907 | nan | 74.3 | 26.8 | 11.4 | 76.4 | 82.6 | 84.6 | 2.77 | 3.96 | composed |
 | TriviaQA, Zipf 0.99 | 1% | Ours (continuous greedy) | 63.4 | 0.911 | nan | 74.3 | 28.7 | 3.61 | 76 | 82.4 | 84.6 | 2.59 | 2.73 | composed |
@@ -102,6 +120,10 @@
 | TriviaQA, Zipf 0.99 | 10% | Aker | 59.2 | 0.937 | nan | 74.3 | 29.1 | 0.0205 | 74.5 | 81.6 | 84.6 | 2.55 | 2.45 | composed |
 | TriviaQA, Zipf 0.99 | 1% | QVCache | 34.7 | 0.954 | nan | 74.3 | 49.5 | 2 | 76.5 | 85.5 | 84.6 | 1.5 | 1.53 | composed |
 | TriviaQA, Zipf 0.99 | 10% | QVCache | 59.7 | 0.916 | nan | 74.3 | 28.8 | 0.384 | 74.8 | 81.7 | 84.6 | 2.59 | 2.48 | composed |
+| MedRAG-Zipf (Proximity) | 0.01% | Ours, final config | 52.6 | 0.911 | nan | 11.5 | 5.47 | 0.267 | 11.8 | 14.8 | 15.1 | 2.1 | 2.11 | composed |
+| MedRAG-Zipf (Proximity) | 0.03% | Ours, final config | 67.5 | 0.91 | nan | 11.5 | 3.89 | 0.471 | 11.9 | 14.6 | 15.1 | 2.96 | 3.07 | composed |
+| MedRAG-Zipf (Proximity) | 0.1% | Ours, final config | 86.2 | 0.908 | nan | 11.5 | 2.1 | 0.681 | 12 | 14.1 | 15.1 | 5.47 | 7.25 | composed |
+| MedRAG-Zipf (Proximity) | 0.3% | Ours, final config | 89.2 | 0.907 | nan | 11.5 | 1.85 | 0.582 | 11.9 | 13.7 | 15.1 | 6.2 | 9.29 | composed |
 | MedRAG-Zipf (Proximity) | 0.01% | Ours | 42.5 | 0.922 | nan | 11.5 | 6.77 | 0.145 | 11.8 | 14.9 | 15.1 | 1.7 | 1.74 | composed |
 | MedRAG-Zipf (Proximity) | 0.03% | Ours | 56.7 | 0.905 | nan | 11.5 | 4.89 | 0.298 | 12 | 14.8 | 15.1 | 2.35 | 2.31 | composed |
 | MedRAG-Zipf (Proximity) | 0.1% | Ours | 63.3 | 0.927 | nan | 11.5 | 4.81 | 0.722 | 12.2 | 15 | 15.1 | 2.39 | 2.72 | composed |
@@ -122,6 +144,10 @@
 | MedRAG-Zipf (Proximity) | 0.03% | QVCache | 29.7 | 0.9 | nan | 11.5 | 8.72 | 0.766 | 12.2 | 15.4 | 15.1 | 1.32 | 1.42 | composed |
 | MedRAG-Zipf (Proximity) | 0.1% | QVCache | 46.4 | 0.956 | nan | 11.5 | 6.61 | 0.264 | 11.7 | 14.9 | 15.1 | 1.74 | 1.86 | composed |
 | MedRAG-Zipf (Proximity) | 0.3% | QVCache | 46.4 | 0.956 | nan | 11.5 | 6.53 | 0.183 | 11.6 | 14.8 | 15.1 | 1.76 | 1.86 | composed |
+| TripClick real health-search log | 0.3% | Ours, final config | 9.03 | 0.934 | nan | 9.42 | 8.93 | 0.191 | 9.78 | 14.1 | 13.6 | 1.06 | 1.1 | composed |
+| TripClick real health-search log | 1% | Ours, final config | 13.1 | 0.919 | nan | 9.42 | 8.53 | 0.285 | 9.81 | 14 | 13.6 | 1.1 | 1.15 | composed |
+| TripClick real health-search log | 3% | Ours, final config | 18.7 | 0.919 | nan | 9.42 | 8.36 | 0.775 | 10.1 | 14.3 | 13.6 | 1.13 | 1.23 | composed |
+| TripClick real health-search log | 10% | Ours, final config | 29.2 | 0.913 | nan | 9.42 | 7.65 | 0.894 | 10.3 | 14.5 | 13.6 | 1.23 | 1.41 | composed |
 | TripClick real health-search log | 0.3% | Ours (continuous greedy) | 4.33 | 0.928 | nan | 9.42 | 9.16 | 0.212 | 9.6 | 13.9 | 13.6 | 1.03 | 1.05 | composed |
 | TripClick real health-search log | 1% | Ours (continuous greedy) | 6.45 | 0.925 | nan | 9.42 | 9.13 | 0.396 | 9.73 | 14 | 13.6 | 1.03 | 1.07 | composed |
 | TripClick real health-search log | 3% | Ours (continuous greedy) | 10.4 | 0.921 | nan | 9.42 | 8.94 | 0.748 | 9.87 | 14.2 | 13.6 | 1.05 | 1.12 | composed |
@@ -138,6 +164,10 @@
 | TripClick real health-search log | 1% | QVCache | 8.33 | 0.783 | nan | 9.42 | 9.87 | 1.06 | 10.6 | 14.6 | 13.6 | 0.954 | 1.09 | composed |
 | TripClick real health-search log | 3% | QVCache | 10.4 | 0.801 | nan | 9.42 | 9.37 | 0.764 | 10.3 | 14.3 | 13.6 | 1.01 | 1.12 | composed |
 | TripClick real health-search log | 10% | QVCache | 13.9 | 0.874 | nan | 9.42 | 10.3 | 1.95 | 11.5 | 15.6 | 13.6 | 0.917 | 1.16 | composed |
+| ESCI (no repeated queries) | 0.3% | Ours, final config | 6.34 | 0.925 | nan | 6.73 | 6.53 | 0.215 | 6.9 | 10.1 | 9.87 | 1.03 | 1.07 | composed |
+| ESCI (no repeated queries) | 1% | Ours, final config | 8.69 | 0.923 | nan | 6.73 | 6.47 | 0.564 | 6.99 | 10.1 | 9.87 | 1.04 | 1.1 | composed |
+| ESCI (no repeated queries) | 3% | Ours, final config | 15.2 | 0.91 | nan | 6.73 | 6.12 | 0.376 | 7.07 | 10.1 | 9.87 | 1.1 | 1.18 | composed |
+| ESCI (no repeated queries) | 10% | Ours, final config | 26.7 | 0.909 | nan | 6.73 | 5.61 | 0.792 | 7.26 | 10.4 | 9.87 | 1.2 | 1.36 | composed |
 | ESCI (no repeated queries) | 0.3% | Ours | 6.71 | 0.894 | nan | 6.73 | 6.44 | 0.124 | 6.83 | 9.97 | 9.87 | 1.04 | 1.07 | composed |
 | ESCI (no repeated queries) | 1% | Ours | 9.16 | 0.905 | nan | 6.73 | 6.34 | 0.295 | 6.89 | 10 | 9.87 | 1.06 | 1.1 | composed |
 | ESCI (no repeated queries) | 3% | Ours | 12.6 | 0.899 | nan | 6.73 | 6.22 | 0.261 | 6.97 | 10.1 | 9.87 | 1.08 | 1.14 | composed |
