@@ -16,7 +16,7 @@ def test_dry_run_lists_every_step_and_changes_nothing():
     for step in ("base", "limits", "venvs", "core", "aker", "links", "smoke"):
         assert f"{step}: PASS" in out
     assert "fs.aio-max-nr=1048576" in out and "setup_instance.sh" in out and "aker_real/build.sh" in out
-    assert "datasets/aker" in out and "simulations/approximate_hits/results" in out
+    assert "mkdir -p /data/datasets/aker" in out and "links: PASS" in out
     assert "data fetch skipped" in out and "[dry-run]" in out
 
 
