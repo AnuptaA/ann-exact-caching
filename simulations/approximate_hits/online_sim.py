@@ -1340,6 +1340,18 @@ class Sim:
                  lam_start=np.nan if getattr(self, "lam_start", None) is None else self.lam_start)
         logger.info(f"saved cache state to {path}")
 
+    def _record_batch(self, start, serve, y_exact, b_rec, method) -> None:
+        """Per-request records; re-reads are k fetched vectors per miss for the online baselines."""
+        from recal.records import MAIN, MINI, MISS
+        admits = method in ("aker", "qvcache")
+        for j in range(len(serve)):
+            if serve[j]:
+                path = MINI if self._tmask[j] else MAIN
+                self.records.add(start + j, self.k, path, float(y_exact[j]))
+            else:
+                self.records.add(start + j, self.k, MISS, float(b_rec[j]), backend_kind=1,
+                                 backend_depth=self.k, rereads=self.k if admits else 0)
+
     def run(self, method):
         a, rng, cache = self.a, self.rng, self.cache
         self.warmup()
@@ -1349,6 +1361,10 @@ class Sim:
         self.og_credit, self.og_miss, self.og_log, self.og_fresh_log = [], [], [], []
         self.og_pred, self.og_phi_log = {}, []
         self.served_pos, self.audit_pos = [], []
+        self.records = None
+        if getattr(a, "records", False):
+            from recal.records import Records
+            self.records = Records({"method": method, "K": self.k, "history_len": a.warmup})
         from collections import OrderedDict
         xt = getattr(a, "mini_cache_share", 0.0)
         self.mini = OrderedDict() if xt > 0 else None
@@ -1484,6 +1500,8 @@ class Sim:
                 for q in qb[audit].tolist():
                     if q not in self.mini:
                         self._mini_admit(q)
+            if self.records is not None:
+                self._record_batch(s, serve, y_exact, b_rec, method)
             if getattr(a, "log_served", False):      # doc 9as: per-request hit / audit positions (stream index)
                 self.served_pos.extend((s + np.flatnonzero(serve)).tolist())
                 self.audit_pos.extend((s + np.flatnonzero(audit)).tolist())
@@ -1856,6 +1874,8 @@ def make_parser():
     ap.add_argument("--save-state", type=str, default=None,
                     help="save the cache state after warm-up (for eval_timing.py)")
     ap.add_argument("--tag", type=str, default="", help="suffix of the output file name")
+    ap.add_argument("--records", action="store_true",
+                    help="write per-request records next to the result (recal/records.py)")
     ap.add_argument("--log-served", action="store_true",
                     help="record the stream positions of hits and audited hits (doc 9as: offline mini-cache oracle)")
     ap.add_argument("--seed", type=int, default=0)
@@ -1891,9 +1911,11 @@ def main():
         from simulations.approximate_hits import online_baselines as ob
         cls = (ob.AkerRealSim if getattr(args, "aker_real", False) else ob.Aker) if args.method == "aker" else (
             ob.QVCacheCore if getattr(args, "cache_impl", "python") == "core" else ob.QVCache)
-        res = dict(cls(D, stream, args).run(), method=args.method, args=vars(args))
+        sim = cls(D, stream, args)
+        res = dict(sim.run(), method=args.method, args=vars(args))
     else:
-        res = Sim(D, stream, args).run(args.method)
+        sim = Sim(D, stream, args)
+        res = sim.run(args.method)
     if "backend_recall_measured" in D:
         res["backend"] = dict(D["backend_recall_measured"],
                               target=args.backend_target if args.backend_file
@@ -1912,6 +1934,8 @@ def main():
         atomic_write_json(out / name, stamp_result(res))
     except ImportError:
         (out / name).write_text(json.dumps(res))
+    if args.records and sim.records is not None:
+        sim.records.save(out / f"{args.method}{args.tag}_records.npz")
     logger.info(f"wrote {out / name}")
 
 

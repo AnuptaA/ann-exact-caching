@@ -144,6 +144,7 @@ struct Result {
     int best_entry = -1;
     int n_read = 0;
     int n_candidates = 0;
+    int n_contrib = -1;  // entries read that list a served vector; -1 unless tracked
 };
 
 class Core {
@@ -639,6 +640,13 @@ class Core {
     }
 
     int n_entries() const { return (int)entries_.size(); }
+    void set_track_contributing(bool on) { track_contrib_ = on; }
+    std::vector<int32_t> entry_sizes() const {
+        std::vector<int32_t> out;
+        out.reserve(entries_.size());
+        for (const auto& e : entries_) out.push_back((int32_t)e.resp.size());
+        return out;
+    }
     int n_data_slots() const { return (int)rev_.size(); }  // live slots
     int n_dead_slots() const { return (int)(data_id_.size() - rev_.size()); }
 
@@ -703,8 +711,9 @@ class Core {
 
     double mean_[3] = {0, 0, 0}, scale_[3] = {1, 1, 1}, coef_[3] = {0, 0, 0}, intercept_ = 0;
 
-    std::vector<uint32_t> dstamp_, sstamp_;
-    uint32_t depoch_ = 0, sepoch_ = 0;
+    std::vector<uint32_t> dstamp_, sstamp_, kstamp_;
+    uint32_t depoch_ = 0, sepoch_ = 0, kepoch_ = 0;
+    bool track_contrib_ = false;
 
     size_t mini_capacity_ = 0;
     std::list<std::pair<uint64_t, MiniEntry>> mini_lru_;
@@ -857,6 +866,26 @@ class Core {
         std::stable_sort(out.begin(), out.end());
     }
 
+    void count_contributing(const std::vector<std::pair<double, int32_t>>& cand, int K,
+                            const std::vector<std::pair<double, int>>& read, Result& r) {
+        if (kstamp_.size() < data_id_.size()) kstamp_.resize(data_id_.size(), 0);
+        if (++kepoch_ == 0) {
+            std::fill(kstamp_.begin(), kstamp_.end(), 0);
+            kepoch_ = 1;
+        }
+        for (int t = 0; t < K; t++) kstamp_[cand[t].second] = kepoch_;
+        int n = 0;
+        for (const auto& re : read) {
+            for (int32_t s : entries_[re.second].resp) {
+                if (kstamp_[s] == kepoch_) {
+                    n++;
+                    break;
+                }
+            }
+        }
+        r.n_contrib = n;
+    }
+
     void main_path(const float* q, int K, int m, Result& r) {
         std::vector<std::pair<double, int>> read;
         nearest_entries(q, m, read);
@@ -885,6 +914,7 @@ class Core {
             r.ids[t] = data_id_[cand[t].second];
             r.dists[t] = (float)cand[t].first;
         }
+        if (track_contrib_) count_contributing(cand, K, read, r);
         double nr = std::max(cand[K - 1].first, EPS);
         // best-fit entry among those read
         double best = std::numeric_limits<double>::infinity();
@@ -952,7 +982,8 @@ PYBIND11_MODULE(_recal_core, mod) {
         .def_readonly("count", &Result::count)
         .def_readonly("best_entry", &Result::best_entry)
         .def_readonly("n_read", &Result::n_read)
-        .def_readonly("n_candidates", &Result::n_candidates);
+        .def_readonly("n_candidates", &Result::n_candidates)
+        .def_readonly("n_contrib", &Result::n_contrib);
     mod.attr("MISS_K_MAX") = (int)MISS_K_MAX;
     mod.attr("MINI_HIT") = (int)MINI_HIT;
     mod.attr("MAIN_HIT") = (int)MAIN_HIT;
@@ -963,6 +994,8 @@ PYBIND11_MODULE(_recal_core, mod) {
         .def(py::init<int, int>(), py::arg("dim"), py::arg("k_max"))
         .def("set_quantizer", &Core::set_quantizer)
         .def("set_budget", &Core::set_budget)
+        .def("set_track_contributing", &Core::set_track_contributing)
+        .def("entry_sizes", [](const Core& c) { auto v = c.entry_sizes(); return py::array_t<int32_t>(v.size(), v.data()); })
         .def("set_external_bytes", &Core::set_external_bytes)
         .def("set_model", &Core::set_model)
         .def("add_entry", &Core::add_entry, py::arg("center"), py::arg("K"), py::arg("j"), py::arg("ids"),

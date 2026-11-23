@@ -22,6 +22,7 @@ import numpy as np
 from recal.backend import ExactBackend
 from recal.measure.jobs_util import add_hash_flag, register_args, stamp_result
 from recal.params import Params
+from recal.records import Records, add_response
 from recal.stored import StoredAnswers
 from recal.system import ReCal
 from recal import accounting, history_mode
@@ -55,7 +56,7 @@ def make_backend(kind: str, db, q, top, stream_idx, args):
     return StoredAnswers(db, q[u], z[f"deep_{args.backend_target}"][u], shallow=z[f"answer_{args.backend_target}"][u])
 
 
-def run(args) -> dict:
+def run(args, records: Records | None = None) -> dict:
     prep = Path(args.prep)
     db, q, top, streams = load_prep(prep)
     idx = np.asarray(streams[args.stream], dtype=np.int64)
@@ -69,6 +70,8 @@ def run(args) -> dict:
                     cold_start=args.cold_start, H=args.history, min_ess=args.min_ess)
     work = tempfile.mkdtemp(prefix="recal_sim_")
     system = ReCal(backend, params, M, work)
+    if records is not None:
+        system.enable_records()
     log, ev_pos, audit_pos, timing = [], [], [], {"request_ids": [], "hit": [], "dt_ms": []}
     batch = {"n": 0, "served": 0, "ret": 0.0, "audited": 0}
     first_construction, t0 = None, time.time()
@@ -82,9 +85,13 @@ def run(args) -> dict:
         r = system.serve(vec, K)
         served = r.source in ("mini", "main")
         batch["n"] += 1
+        truth = None
+        if served or records is not None:
+            truth = top[qi, :K] if top is not None else backend.search(vec, K, kind="eval")[0]
+        if records is not None:
+            add_response(records, pos, K, r, truth)
         if served:
             batch["served"] += 1
-            truth = top[qi, :K] if top is not None else backend.search(vec, K, kind="eval")[0]
             batch["ret"] += float(np.isin(truth, r.ids).mean())
             if args.log_served:
                 ev_pos.append(pos)
@@ -116,6 +123,10 @@ def run(args) -> dict:
         "info": [getattr(system.built, "info", None)] if system.built else [], "seconds": time.time() - t0,
     }
     history_mode.stamp(out, len(idx), history_len)
+    if records is not None:
+        records.constructions = system.construction_log
+        records.meta.update(method="recal", K=K, history_len=history_len, M=M,
+                            T=params.T, n_scored=len(idx) - history_len)
     if args.log_served:
         out["served_pos"], out["audit_pos"] = ev_pos, audit_pos
     if args.timing:
@@ -154,9 +165,11 @@ def parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = parser().parse_args()
     register_args(args)
-    result = stamp_result(run(args))
+    records = Records()
+    result = stamp_result(run(args, records))
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    records.save(out / f"recal{args.tag}_records.npz")
     tmp = out / f".recal{args.tag}.json.tmp"
     tmp.write_text(json.dumps(result, default=str))
     tmp.replace(out / f"recal{args.tag}.json")

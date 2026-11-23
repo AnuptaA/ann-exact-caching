@@ -26,6 +26,10 @@ class Response:
     background: list = field(default_factory=list)   # backend work caused by the request: (kind, depth)
     audited: bool = False
     cache_ms: float = 0.0              # cache-path time of the request (hash, mini lookup, probe, score)
+    cand_ids: np.ndarray | None = None  # main-path candidate answer, before the serve decision
+    n_read: int = -1                   # entries read on the main path
+    n_contrib: int = -1                # entries read that list a vector of the candidate answer
+    lam_used: float | None = None      # threshold in force when the request arrived
 
 
 class ReCal:
@@ -50,6 +54,8 @@ class ReCal:
         self.signals = Signals(params, self.updater) if signals is None else signals
         self.rebuild_requested: str | None = None
         self.first_construction_bytes: dict | None = None
+        self.construction_log: list[dict] = []
+        self.track_contributing = False
 
     def _bare_core(self) -> Core:
         core = Core(self.backend.dim, self.p.k_max)
@@ -59,6 +65,11 @@ class ReCal:
         core.mini_set_capacity(max(self.p.mini_floor, int(self.p.mini_cap * self.M // entry)))   # at its cap until the first construction
         return core
 
+    def enable_records(self) -> None:
+        """Count the entries that contribute to each candidate answer (extra work per request)."""
+        self.track_contributing = True
+        self.core.set_track_contributing(True)
+
     # ---- serving ---------------------------------------------------------------------------------
 
     def serve(self, q: np.ndarray, K: int) -> Response:
@@ -67,7 +78,8 @@ class ReCal:
         self.log.append_hash(self.core.hash_vector(q))
         m = 0 if self.p.idealized else (self.built.m if self.built else 0)
         t0 = time.perf_counter()
-        res = self.core.lookup(q, K, self.lam, m, True)
+        lam_used = self.lam
+        res = self.core.lookup(q, K, lam_used, m, True)
         cache_ms = (time.perf_counter() - t0) * 1e3
         if res.path == MINI_HIT:                      # a mini hit touches nothing else
             self.counts["mini_hits"] += 1
@@ -80,6 +92,11 @@ class ReCal:
         self.window and self.window.expire(self.t)
         response = self._main_path(q, K, res)
         response.cache_ms = cache_ms
+        response.lam_used = lam_used
+        response.n_read = res.n_read
+        response.n_contrib = res.n_contrib
+        if res.n_candidates >= K:
+            response.cand_ids = res.ids
         self.status.record(self.lam)
         self.signals.after_request(self, response.score if response.score is not None and res.has_score else None)
         if self.rebuild_requested:
@@ -159,6 +176,7 @@ class ReCal:
         for h, ids, dists in self.core.mini_dump():
             built.core.mini_put_hash(h, ids, dists)
         self.core, self.built = built.core, built
+        self.core.set_track_contributing(self.track_contributing)
         self.window, self.lam, self.certified, self.h0 = built.window, built.lam, built.certified, max(built.h0, 1e-3)
         self.status = policy.Status(int(self.p.drop_window * self.p.H))
         self.status.margin_unreachable = built.margin_unreachable
@@ -167,7 +185,18 @@ class ReCal:
         self.signals.after_construction(self)
         if self.first_construction_bytes is None:
             self.first_construction_bytes = dict(self.bytes_by_structure())
+        self._log_construction(built)
         return built
+
+    def _log_construction(self, built: builder.Built) -> None:
+        sizes, counts = np.unique(self.core.entry_sizes(), return_counts=True)
+        self.construction_log.append({
+            "request": self.requests, "t": self.t, "m": built.m, "R": built.R, "h0": float(built.h0),
+            "W": built.W, "lambda": self.lam, "entries": built.n_entries,
+            "entries_by_size": {int(s): int(c) for s, c in zip(sizes, counts)},
+            "bytes": {k: float(v) for k, v in self.bytes_by_structure().items()},
+            "background": {k: dict(v) for k, v in self.backend.stats.items()},
+        })
 
     # ---- reports ---------------------------------------------------------------------------------
 

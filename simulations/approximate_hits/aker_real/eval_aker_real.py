@@ -243,7 +243,7 @@ class World:
         return ids[ins], ids[~ins]
 
 
-def run_quality(args, db, q, world, stream):
+def run_quality(args, db, q, world, stream, records=None):
     """Replay the stream against World (truth, backend answers, data changes)."""
     k, delta = args.k, args.delta
     n_neigh = k + delta
@@ -299,6 +299,8 @@ def run_quality(args, db, q, world, stream):
             if measure:
                 got = ids - 1
                 r = np.isin(got, world.truth(qi, k)).mean()
+                if records is not None:
+                    records.add(i, k, 1, float(r), cache_ms=t_look * 1e3)
                 cur["served"] += 1
                 cur["ret"] += r
                 cur["ret_b"] += np.isin(got, world.answer(qi, k)).mean()
@@ -319,6 +321,10 @@ def run_quality(args, db, q, world, stream):
             if measure:
                 lat["lookup_miss"].append(t_look)
                 lat["insert"].append(t_ins)
+                if records is not None:
+                    served = np.isin(world.truth(qi, k), nid[:k]).mean()
+                    records.add(i, k, 2, float(served), backend_kind=1, backend_depth=n_neigh,
+                                rereads=n_neigh if ok else 0, cache_ms=t_look * 1e3)
         if changing:
             # write-log slow path, called after each request as in the Aker authors' driver
             tp = ak.process()
@@ -535,7 +541,11 @@ def main():
         if args.out:
             write_result(args.out, res, indent=1)
         return 0
-    res = run_quality(args, db, q, World(args, prep, top), stream)
+    records = None
+    if args.out:
+        from recal.records import Records
+        records = Records({"method": "aker_real", "K": args.k, "history_len": args.warmup})
+    res = run_quality(args, db, q, World(args, prep, top), stream, records)
     if args.history_frac:
         from recal import history_mode
         history_mode.stamp(res, n_stream, args.warmup)
@@ -554,6 +564,8 @@ def main():
                 f"{s['seconds']:.0f} s")
     if args.out:
         write_result(args.out, res)
+        if records is not None:
+            records.save(Path(args.out).with_name(f"{Path(args.out).stem}_records.npz"))
     return 0
 
 

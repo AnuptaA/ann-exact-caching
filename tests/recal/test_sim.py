@@ -112,3 +112,27 @@ def test_baseline_gets_the_same_history_as_warmup(prep, tmp_path, monkeypatch):
     cmd = seen["cmd"]
     assert cmd[cmd.index("--warmup") + 1] == str(history_mode.history_length(n, 0.3))
     assert (res["history_len"], res["first_scored"], res["n_scored"]) == (1260, 1260, n - 1260)
+
+
+def test_records_file_rows_match_the_run(prep, tmp_path):
+    from recal import records as rec
+    args = sim.parser().parse_args(["--prep", str(prep), "--stream", "random", "--budget", "0.6", "--k", "5",
+                                    "--backend", "exact", "--history-frac", "0.3", "--history", "3000",
+                                    "--min-ess", "30", "--out", str(tmp_path / "o")])
+    records = rec.Records()
+    r = sim.run(args, records)
+    path = records.save(tmp_path / "r_records.npz")
+    cols, constructions, meta = rec.load(path)
+    assert len(cols["index"]) == r["n_scored"] and cols["index"][0] == r["first_scored"]
+    n_logged = sum(b["n"] for b in r["log"])
+    served = np.isin(cols["path"], (rec.MINI, rec.MAIN))
+    assert served[:n_logged].sum() == sum(b["served"] for b in r["log"])
+    assert (cols["path"] == rec.MINI).sum() == r["counts"]["mini_hits"]
+    assert (cols["path"] == rec.MAIN).sum() == r["counts"]["main_hits"]
+    ret = sum(b["served_retention_sum"] for b in r["log"])
+    assert np.isclose(cols["recall"][:n_logged][served[:n_logged]].sum(), ret, rtol=1e-3)
+    main = cols["path"] != rec.MINI
+    assert np.isfinite(cols["cand_recall"][main]).sum() > 0
+    assert (cols["n_contrib"][cols["path"] == rec.MAIN] >= 1).all()
+    assert len(constructions) == r["constructions"] and "entries_by_size" in constructions[0]
+    assert meta["history_len"] == r["history_len"]

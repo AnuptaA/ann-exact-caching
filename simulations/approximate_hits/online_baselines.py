@@ -71,6 +71,23 @@ class Base:
         self.n_c = 0            # distinct cached vectors
         self.ev = D.get("events")
         self.ev_i = 0
+        self.records = None
+        if getattr(args, "records", False):
+            from recal.records import Records
+            self.records = Records({"method": getattr(args, "method", "baseline"), "K": self.k,
+                                    "history_len": args.warmup})
+
+    def _record_batch(self, start, served, ret_x, answer, truth_x, keep) -> None:
+        """Per-request records of the scored requests; a miss admits k fetched vectors."""
+        from recal.records import MAIN, MISS
+        exact = answer if truth_x is None else truth_x
+        for j in np.flatnonzero(keep):
+            if served[j]:
+                self.records.add(start + j, self.k, MAIN, float(ret_x[j]))
+            else:
+                recall = float(np.isin(exact[j], answer[j]).mean())
+                self.records.add(start + j, self.k, MISS, recall, backend_kind=1,
+                                 backend_depth=self.k, rereads=self.k)
 
     def _acquire(self, ids):
         new = int((self.ref[ids] == 0).sum())
@@ -129,6 +146,8 @@ class Base:
             self.cost["topk"] += int((~served).sum())
             if s + len(qb) > a.warmup:
                 keep = np.arange(len(qb)) + s >= a.warmup
+                if self.records is not None:
+                    self._record_batch(s, served, ret_x, truth, truth_x, keep)
                 self.log.append({"t": s + len(qb), "n": int(keep.sum()),
                                  "served": int(served[keep].sum()),
                                  "served_retention_sum": float(ret[served & keep].sum()),

@@ -24,6 +24,7 @@ import numpy as np
 
 from recal import accounting, history_mode, sim
 from recal.measure.jobs_util import register_args, stamp_result
+from recal.records import Records
 
 SIM = "simulations/approximate_hits/online_sim.py"
 SIM_METHOD = {"prototype": "static", "aker": "aker", "qvcache": "qvcache"}
@@ -48,7 +49,8 @@ def stream_length(a) -> int:
 
 def run_simulator(method: str, a, fraction: float, tag: str) -> Path:
     cmd = [sys.executable, SIM, "--prep", a.prep, "--stream", a.stream, "--method", SIM_METHOD[method],
-           "--budget", f"{fraction:.6g}", "--k", str(a.k), "--out", a.out, "--tag", tag]
+           "--budget", f"{fraction:.6g}", "--k", str(a.k), "--out", a.out, "--tag", tag,
+           "--records"]
     if a.max_requests:
         cmd += ["--max-queries", str(a.max_requests)]
     if a.history_frac:
@@ -74,6 +76,7 @@ def run_baseline(method: str, a, attempts: int = 6) -> dict:
     M = accounting.budget_bytes(n, d, a.budget)
     fraction = a.budget * 4 * d / (4 * d + 8 + 40)        # first guess: the per-vector charge plus a share of entries
     runs, best, lo, hi = [], None, None, None
+    sim_name = SIM_METHOD[method]
     for attempt in range(attempts):
         path = run_simulator(method, a, fraction, f"{a.tag}_try{attempt}")
         res = json.loads(path.read_text())
@@ -82,18 +85,22 @@ def run_baseline(method: str, a, attempts: int = 6) -> dict:
         if used["total"] <= M:
             lo = fraction if lo is None else max(lo, fraction)
             if best is None or used["total"] > best[0]["total"]:
-                best = (used, res, fraction)
+                best = (used, res, fraction, f"{a.tag}_try{attempt}")
             if used["total"] >= 0.95 * M:
                 break
         else:
             hi = fraction if hi is None else min(hi, fraction)
         fraction = next_fraction(fraction, used["total"], M, lo, hi)
-    used, res, fraction = best if best is not None else (used, res, fraction)
+    used, res, fraction, best_tag = best if best is not None else (
+        used, res, fraction, f"{a.tag}_try{len(runs) - 1}")
+    kept = Path(a.out) / f"{sim_name}{best_tag}_records.npz"
+    if kept.exists():
+        kept.replace(Path(a.out) / f"{method}{a.tag}_records.npz")
     n = stream_length(a)
     history_mode.stamp(res, n, history_mode.history_length(n, a.history_frac))
     res.update({"bytes": used, "M": M, "within_M": bool(used["total"] <= M), "byte_runs": runs,
                 "vector_fraction": fraction, "method": method})
-    for p in Path(a.out).glob(f"*{a.tag}_try*.json"):
+    for p in list(Path(a.out).glob(f"*{a.tag}_try*.json")) + list(Path(a.out).glob(f"*{a.tag}_try*_records.npz")):
         p.unlink()
     return res
 
@@ -108,7 +115,12 @@ def main() -> None:
                          "(make q1-run-proximity-p0.1-b5, or aker_real with --prox-frac)")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    result = sim.run(a) if a.method == "recal" else run_baseline(a.method, a)
+    if a.method == "recal":
+        records = Records()
+        result = sim.run(a, records)
+        records.save(out / f"recal{a.tag}_records.npz")
+    else:
+        result = run_baseline(a.method, a)
     stamp_result(result)
     tmp = out / f".{a.method}{a.tag}.json.tmp"
     tmp.write_text(json.dumps(result, default=str))
