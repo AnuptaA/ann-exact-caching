@@ -1,6 +1,6 @@
 # ReCal
 
-ReCal is a recall-certified result cache for top-K vector search, as specified in system design v10. It has two tiers: a mini cache for exact repeats and a main cache of spheres around past queries. A main-cache answer is served only when a calibrated score says the expected recall of the answer is at least the target T, with confidence 1 - delta. This package is the implementation of that specification. The advisor's earlier prototype stays available unchanged under `simulations/approximate_hits/` for comparison.
+ReCal is a recall-certified result cache for top-K vector search. It has two tiers: a mini cache for exact repeats and a main cache of spheres around past queries. A main-cache answer is served only when a calibrated score says the expected recall of the answer is at least the target T, with confidence 1 - delta. This package is the implementation of that specification. The advisor's earlier prototype stays available unchanged under `simulations/approximate_hits/` for comparison.
 
 ## Layout
 
