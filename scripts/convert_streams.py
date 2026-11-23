@@ -4,8 +4,9 @@
   # shifts: one prep per kind and seed
   python -m scripts.convert_streams shift --stream shift_abrupt_seed0.npz --kind abrupt --official q.npy \\
       --base base.npy --out preps/abrupt_seed0 [--append-zero] [--k-mixed] [--groups 10000 --group-size 50]
-  # updates: adds updates.npz and the files the real Aker driver reads to an existing prep
-  python -m scripts.convert_streams updates --prep preps/abrupt_seed0 --schedule data_targeted5.npz --base base.npy
+  # updates: adds updates.npz and the files the real Aker driver reads, in an own folder linked to the prep
+  python -m scripts.convert_streams updates --prep preps/abrupt_seed0 --schedule data_targeted5.npz --base base.npy \\
+      --out preps/abrupt_seed0_targeted5
 
 Request vectors come from the existing official vectors (SPACEV official queries, or TriviaQA's DPR-space
 question vectors) through the group universe; no encoder runs.
@@ -41,7 +42,7 @@ def shift_command(a) -> int:
 
 def updates_command(a) -> int:
     base = np.load(a.base, mmap_mode="r")
-    prep_convert.convert_updates(a.prep, dict(np.load(a.schedule)), base, a.depth)
+    prep_convert.convert_updates(a.prep, dict(np.load(a.schedule)), base, a.depth, out=a.out)
     return 0
 
 
@@ -69,6 +70,7 @@ def main(argv=None) -> int:
     u.add_argument("--schedule", type=Path, required=True)
     u.add_argument("--base", type=Path, required=True)
     u.add_argument("--depth", type=int, default=1000)
+    u.add_argument("--out", type=Path, help="own prep folder for this schedule (links the shared files of --prep)")
     a = ap.parse_args(argv)
     return shift_command(a) if a.command == "shift" else updates_command(a)
 

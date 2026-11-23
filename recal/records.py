@@ -69,6 +69,14 @@ class Records:
         return path
 
 
+def timing_section(cols: dict, history_len: int) -> dict:
+    """The timing section the throughput replay reads (request ids, hit, cache time, re-reads), from records."""
+    hit = np.isin(cols["path"], (MINI, MAIN))
+    dt = np.nan_to_num(cols["cache_ms"].astype(np.float64), nan=0.0)
+    return {"request_ids": cols["index"].tolist(), "hit": hit.tolist(), "dt_ms": dt.tolist(),
+            "rereads": cols["rereads"].tolist(), "every": 1, "n_timed": int(len(hit)), "history_len": history_len}
+
+
 def load(path: str | Path) -> tuple[dict[str, np.ndarray], list[dict], dict]:
     with np.load(path, allow_pickle=False) as data:
         arrays = {name: data[name] for name in FIELDS}

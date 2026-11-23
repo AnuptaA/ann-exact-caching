@@ -417,3 +417,16 @@ def test_load_arm_carries_recorded_rereads():
     assert arm["reread_each"].tolist() == [0, 4, 0] and arm["pos"].tolist() == [2, 3, 4]
     assert tr.arm_rereads(True, arm, arm["pos"]).tolist() == [0, 4, 0]
     assert tr.arm_rereads(False, arm, arm["pos"]) is None
+
+
+def test_replay_arm_can_come_from_a_records_file(tmp_path):
+    from recal import records as rec
+    r = rec.Records({"history_len": 100})
+    for i, (path, rereads) in enumerate([(rec.MAIN, 0), (rec.MISS, 4), (rec.MINI, 0)]):
+        r.add(100 + i, 5, path, 1.0, rereads=rereads, cache_ms=0.5)
+    r.save(tmp_path / "recal_records.npz")
+    run = {"records_file": "recal_records.npz"}
+    arm = tr.load_arm(tr.with_records_timing(run, tmp_path / "recal.json"))
+    assert arm["pos"].tolist() == [100, 101, 102] and arm["hit"].tolist() == [True, False, True]
+    assert arm["reread_each"].tolist() == [0, 4, 0] and arm["warmup"] == 100
+    assert tr.with_records_timing({"timing": {}}, tmp_path / "x.json") == {"timing": {}}

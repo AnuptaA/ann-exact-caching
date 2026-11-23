@@ -7,54 +7,100 @@ from scripts import gen_matrix
 
 CONFIG = Path(__file__).resolve().parents[2] / "experiments" / "matrix.example.json"
 
+# the design: cells per experiment (2 seeds unless noted)
+DESIGN = {"q1": 1050, "q2": 128, "q3": 552, "q4": 320}
+
 
 def cfg():
     return json.loads(CONFIG.read_text())
 
 
-def test_example_config_counts_per_experiment():
+def test_cells_per_experiment_follow_the_design_and_the_table():
     lines = matrix.all_lines(cfg())
-    assert len(lines["q1"]) == 25 * 2 * 11 and len(lines["q2"]) == 3 * 8 * 2
-    assert len(lines["q3"]) == 6 + 8 + 2 + 1 + 1
-    assert all(ju.is_job_line(line) for line in lines["q1"] + lines["q2"] + lines["q4"])
+    table = matrix.design_table(cfg())
+    for name, expected in DESIGN.items():
+        assert len(lines[name]) == table[name]["cells"] == expected, name
+    assert table["total"]["cells"] == sum(DESIGN.values())
 
 
-def test_q1_cells_cover_targets_modes_and_baselines():
-    lines = matrix.q1_lines(cfg())
-    first = [x for x in lines if "/spacev/zipf0.3/" in x and "_b0.01_s0" in x]
-    assert len(first) == 11
-    assert sum("--idealized" in x for x in first) == 4 and sum("--method aker " in x for x in first) == 1
-    assert any("--prox-percentile 0.1 --tag _p0.1" in x and "proximity_p0.1.json" in x for x in first)
-    assert all("--history-frac" not in x and "--coord-bytes 1" in x for x in first)
-    assert {f"--target {t}" for t in ("0.8", "0.85", "0.9", "0.95")} <= {
-        f"--target {t}" for x in first for t in ("0.8", "0.85", "0.9", "0.95") if f"--target {t} " in x}
-
-
-def test_q2_has_default_and_every_ablation():
-    lines = matrix.q2_lines(cfg())
-    one = [x for x in lines if "/spacev/zipf0.99/" in x and "_s0" in x]
-    labels = {x.split("/")[4].split(" ")[0] for x in one}
-    assert len(one) == 8 and "default_s0" in labels and "lru_s0" in labels and "no-mini-cache_s0" in labels
-
-
-def test_q3_and_q4_reference_their_inputs():
+def test_q1_design_dimensions():
     c = cfg()
-    q3 = matrix.q3_lines(c)
-    assert any("--nodes 100000" in x and "--arm nodecache" not in x for x in q3)
-    assert any("recal_s50=" in x and "--nodes 100000" in x for x in q3)
-    q4 = matrix.q4_lines(c)
-    assert any("--no-rebuild-signals" in x for x in q4) and any("--no-mini-cache" in x for x in q4)
-    assert any("--updates data/upd_targeted5.npz" in x for x in q4)
+    pairs = sum(len(w["budgets"]) for w in c["workloads"].values())
+    assert len(c["workloads"]) == 8 and pairs == 25
+    systems = matrix.q1_systems(c)
+    labels = [s[0] for s in systems]
+    assert len(systems) == 21 and sum(l.startswith("recal_") for l in labels) == 8
+    for system in ("aker", "proximity-a", "proximity-b", "qvcache"):
+        assert {f"{system}_exact", f"{system}_diskann"} <= set(labels)
+    assert sum(l.startswith("qvcache-d") for l in labels) == 5
+    medrag = c["workloads"]["medrag"]["budgets"]
+    assert medrag == [0.0001, 0.0003, 0.001, 0.003]
 
 
-def test_cli_writes_files_manifest_and_counts(tmp_path, capsys):
-    gen_matrix.main(["--config", str(CONFIG), "--out", str(tmp_path), "--only", "q2"])
+def test_q1_lines_carry_backend_flags_history_default_and_stored_precision():
+    lines = matrix.q1_lines(cfg())
+    one = [x for x in lines if "/spacev-0.3/" in x and "_b0.01_s0" in x]
+    assert len(one) == 21 and all("--coord-bytes 1" in x and "--history-frac" not in x for x in one)
+    diskann = [x for x in one if "aker_diskann" in x][0]
+    assert "--backend file --backend-file results/backends/spacev-aker-0.3/diskann.npz --backend-target 0.95" in diskann
+    assert any("--prox-percentile 0.1 --tag _p0.1" in x and "proximity_p0.1.json" in x for x in one)
+    assert sum("--idealized" in x for x in one) == 4
+    sweep = [x for x in one if "qvcache-d" in x]
+    assert len(sweep) == 5 and all("--backend exact" in x and "--deviation-factor" in x for x in sweep)
+    assert all(ju.is_job_line(x) for x in lines)
+
+
+def test_q2_has_the_default_and_every_ablation_at_the_q2_budget():
+    c = cfg()
+    lines = matrix.q2_lines(c)
+    medrag = [x for x in lines if "/q2/medrag/" in x]
+    assert len(medrag) == 16 and all("--budget 0.001 " in x for x in medrag)
+    labels = {x.split("/")[3].rsplit("_s", 1)[0] for x in lines}
+    assert labels == {"default", "no-union", "no-expansion", "no-shells", "lru", "no-calibration",
+                      "no-recalibration", "no-mini-cache"}
+
+
+def test_q3_lines_cover_splits_the_chosen_split_and_five_throughput_systems():
+    c = cfg()
+    lines = matrix.q3_lines(c)
+    mine = [x for x in lines if "/q3/spacev-0.3/b0.05/" in x]
+    assert sum("recal_s" in x and "recal.cells" in x for x in mine) == 12 and any("recal_chosen_s1" in x for x in mine)
+    assert any("recal.system_benefit.choose run" in x for x in mine)
+    throughput = [x for x in mine if "throughput_replay.py" in x]
+    assert len(throughput) == 5 and all("--clients 1 2 4 8 16 32 64" in x and "--repetitions 3" in x for x in throughput)
+    assert any("--arm none" in x for x in throughput)
+    assert any("recal=" in x and "--nodes $(" in x for x in throughput)
+    assert any("--budget $(" in x and "recal_budget_fraction" in x for x in mine)
+    assert sum("pgvector.json" in x and "depth_latency_pgvector" in x for x in lines) == 8
+
+
+def test_q4_dimensions_and_the_update_job_contract():
+    c = cfg()
+    lines = matrix.q4_lines(c)
+    assert not [x for x in lines if "/q4/medrag/" in x and "updates" not in x]
+    assert sum("--no-rebuild-signals" in x for x in lines) == 30
+    updates = [x for x in lines if "/updates/" in x]
+    assert len(updates) == 180
+    live = [x for x in updates if "--backend pgvector" in x]
+    assert len(live) == 72 and all("--pg-dsn @$PG_CLONES/" in x for x in live)
+    ids = [x.split("/updates/")[1].split("/")[0] for x in updates]
+    assert len(set(ids)) == 180
+    one = [x for x in live if "spacev-0.99_uniform1_recal_s0" in x][0]
+    assert "$PG_CLONES/spacev-0.99_uniform1_recal_s0.dsn" in one and "results/updates/preps/spacev-0.99_uniform1" in one
+    assert all("--budget 0.001 " in x for x in updates if "/medrag/" in x)
+    bursts = [x for x in lines if "burst_b" in x]
+    assert len(bursts) == 12 and sum("--no-mini-cache" in x for x in bursts) == 6
+    grid = [x for x in lines if "/q4/tripclick/" in x and "recal_b" in x]
+    assert len(grid) == 16
+
+
+def test_cli_table_writes_files_manifest_and_counts(tmp_path, capsys):
+    gen_matrix.main(["--config", str(CONFIG), "--table"])
     out = capsys.readouterr().out
-    assert "q2: 48 cells" in out and "total: 48 cells" in out
-    assert len((tmp_path / "q2.txt").read_text().splitlines()) == 48
-    assert json.loads((tmp_path / "manifest.json").read_text())["counts"] == {"q2": 48}
-    gen_matrix.main(["--config", str(CONFIG), "--dry-run"])
-    assert not (tmp_path / "q1.txt").exists()
+    assert "q1: 1050 cells = 25 (workload, budget) x 21 systems x 2 seeds" in out and "total: 2050 cells" in out
+    gen_matrix.main(["--config", str(CONFIG), "--out", str(tmp_path), "--only", "q2"])
+    assert json.loads((tmp_path / "manifest.json").read_text())["counts"] == {"q2": 128}
+    assert len((tmp_path / "q2.txt").read_text().splitlines()) == 128
 
 
 def test_a_generated_line_has_a_config_hash_that_follows_its_arguments():

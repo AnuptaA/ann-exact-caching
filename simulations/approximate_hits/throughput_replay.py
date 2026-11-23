@@ -211,6 +211,17 @@ def spin(seconds):
         pass
 
 
+def with_records_timing(r, path):
+    """A run without a timing section but with a records file (records_file next to the result) replays from it."""
+    if "timing" in r or not r.get("records_file"):
+        return r
+    from recal import records
+    cols, _, meta = records.load(Path(path).with_name(r["records_file"]))
+    r = dict(r, timing=records.timing_section(cols, meta.get("history_len", 0)))
+    r.setdefault("args", {}).setdefault("warmup", int(meta.get("history_len", 0)))
+    return r
+
+
 def load_arm(r):
     """Aligned view of a recorded run: stream positions, hit, dt_ms, warmup, audit positions, background stats."""
     t = r["timing"]
@@ -426,7 +437,7 @@ def build_arms(specs):
             arms.append(("none", None))
         else:
             name, path = spec.split("=", 1)
-            arms.append((name, load_arm(json.loads(Path(path).read_text()))))
+            arms.append((name, load_arm(with_records_timing(json.loads(Path(path).read_text()), Path(path)))))
     return arms
 
 

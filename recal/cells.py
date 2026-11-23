@@ -121,6 +121,8 @@ def real_aker_command(a, scale: float, out_file: Path) -> list[str]:
         cmd += ["--max-requests", str(a.max_requests)]
     if a.backend == "file":
         cmd += ["--backend-file", a.backend_file, "--backend-target", a.backend_target]
+    if a.updates:
+        cmd += ["--data-change", "churn"]
     if a.method == "proximity":
         cmd += ["--prox-percentile", f"{a.prox_percentile:g}"]
     return cmd
@@ -170,6 +172,9 @@ def main() -> None:
     else:
         result = run_baseline(a.method, a)
     stamp_result(result)
+    records_name = f"{a.method}{a.tag}_records.npz"
+    if (out / records_name).exists():
+        result["records_file"] = records_name
     tmp = out / f".{a.method}{a.tag}.json.tmp"
     tmp.write_text(json.dumps(result, default=str))
     tmp.replace(out / f"{a.method}{a.tag}.json")

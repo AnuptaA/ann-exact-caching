@@ -33,8 +33,9 @@ def test_grid_lines_cover_the_budgets_histories_and_seeds():
 def test_k_and_shift_lines():
     k = robustness.k_lines("prep", "random", "w")
     assert len(k) == 5 * 2 and any("--k 10 --k-mixed" in line for line in k)
-    sh = robustness.shift_lines("prep", "w")
+    sh = robustness.shift_lines("shifts", "w")
     assert len(sh) == 3 * 2 * 5 and sum("--no-rebuild-signals" in line for line in sh) == 15
+    assert any("--prep shifts/w_abrupt_seed3 --stream abrupt" in line for line in sh)
 
 
 def test_k_sequence_fixed_and_mixed():
@@ -63,11 +64,9 @@ def test_mixed_k_run_records_each_requests_k(tmp_path):
     assert set(ks.tolist()) == {5, 10} and len(ks) == out["n_scored"] and out["constructions"] >= 1
 
 
-def test_burst_and_update_lines():
-    b = robustness.burst_lines("p", "s", "w")
-    assert len(b) == 4 and sum("--no-mini-cache" in x for x in b) == 2
-    u = robustness.update_lines("p", "s", "w", {"targeted5": "u.npz", "uniform1": "v.npz"})
-    assert len(u) == 2 * 2 * 2 and all("--updates" in x for x in u)
+def test_burst_lines_cover_budgets_with_and_without_the_mini_cache():
+    b = robustness.burst_lines("p", "s", "w", budgets=(0.01, 0.05, 0.1))
+    assert len(b) == 3 * 2 * 2 and sum("--no-mini-cache" in x for x in b) == 6
 
 
 def test_make_shift_streams_script_on_small_arrays(tmp_path):

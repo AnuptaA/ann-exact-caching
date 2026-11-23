@@ -112,3 +112,32 @@ def test_history_runs_give_hit_rates_and_background(tmp_path):
     assert runs[0.0]["hit_rate"] == 0.0 and runs[0.5]["n_scored"] == 900
     assert runs[1.0]["hit_rate"] >= runs[0.5]["hit_rate"] and runs[1.0]["within_M"]
     assert "candidate" in runs[1.0]["background"]
+
+
+def test_choose_split_from_history_runs_and_read_back(tmp_path, capsys):
+    import json
+    from recal.system_benefit import choose
+    from tests.recal.test_system import make_stream, make_world
+    from recal.backend import ExactBackend
+    rng, data, centers = make_world(seed=5)
+    stream = make_stream(rng, centers, 4200, repeat_share=0.2)
+    uniq, inverse = np.unique(np.stack(stream), axis=0, return_inverse=True)
+    np.save(tmp_path / "db.npy", data)
+    np.save(tmp_path / "q.npy", uniq.astype(np.float32))
+    np.save(tmp_path / "top500.npy", ExactBackend(data).search(uniq.astype(np.float32), 100)[0].astype(np.int32))
+    np.savez(tmp_path / "streams.npz", random=inverse.astype(np.int64).ravel())
+    (tmp_path / "meta.json").write_text(json.dumps({"kind": "files", "db": str(tmp_path / "db.npy"), "q": str(tmp_path / "q.npy")}))
+    total = 0.6 * data.size * 4
+    curve = {"rows": [{"cache_bytes": 0.0, "reads_per_search": 100.0}, {"cache_bytes": total, "reads_per_search": 60.0}]}
+    (tmp_path / "curve.json").write_text(json.dumps(curve))
+    out = tmp_path / "chosen.json"
+    choose.main(["run", "--prep", str(tmp_path), "--stream", "random", "--k", "5", "--backend", "exact", "--history", "3000",
+                 "--min-ess", "30", "--total-fraction", "0.6", "--curve", str(tmp_path / "curve.json"),
+                 "--n-vectors", str(len(data)), "--dim", str(data.shape[1]), "--degree", "16", "--coord-bytes", "4",
+                 "--out", str(out)])
+    chosen = json.loads(out.read_text())
+    assert chosen["best_split"] in split.SPLITS and len(chosen["table"]) == 7
+    assert chosen["recal_budget_fraction"] == pytest.approx(chosen["best_split"] * 0.6)
+    assert chosen["node_cache_nodes"] >= 0 and chosen["history_len"] == int(0.3 * 4200)
+    choose.main(["get", str(out), "recal_budget_fraction"])
+    assert float(capsys.readouterr().out) == pytest.approx(chosen["recal_budget_fraction"])

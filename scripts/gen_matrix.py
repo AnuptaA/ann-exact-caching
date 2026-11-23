@@ -22,9 +22,14 @@ def main(argv=None) -> int:
     ap.add_argument("--out", type=Path)
     ap.add_argument("--only", nargs="+", choices=sorted(matrix.EXPERIMENTS))
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--table", action="store_true", help="print the cells and dimensions of every experiment")
     ap.add_argument("--hashes", action="store_true")
     a = ap.parse_args(argv)
     cfg = json.loads(a.config.read_text())
+    if a.table:
+        for name, row in matrix.design_table(cfg).items():
+            print(f"{name}: {row['cells']} cells = {row['dimensions']}")
+        return 0
     lines = matrix.all_lines(cfg, a.only)
     counts = {name: len(v) for name, v in lines.items()}
     for name, n in counts.items():

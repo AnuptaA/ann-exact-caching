@@ -51,6 +51,14 @@ def load_prep(prep: Path):
 def make_backend(kind: str, db, q, top, stream_idx, args):
     if kind == "exact":
         return ExactBackend(db)
+    if kind == "pgvector":
+        if not args.pg_dsn:
+            raise SystemExit("--backend pgvector needs --pg-dsn (the database clone of this job)")
+        dsn = Path(args.pg_dsn[1:]).read_text().strip() if args.pg_dsn.startswith("@") else args.pg_dsn
+        import psycopg
+        from harness.backend.pgvector import with_keepalives
+        from harness.backend.pgvector_live import LivePgvectorBackend
+        return LivePgvectorBackend(psycopg.connect(with_keepalives(dsn)), db.shape[1], len(db))
     if top is None:
         raise SystemExit("this backend needs top500.npy in the prep folder")
     if kind == "stored":
@@ -81,10 +89,13 @@ def run(args, records: Records | None = None) -> dict:
         ks = np.load(prep / "k.npy")[:len(idx)]
     updates = None
     if args.updates:
-        if args.backend != "exact":
-            raise SystemExit("--updates needs --backend exact (or the live pgvector backend)")
+        if args.backend not in ("exact", "pgvector"):
+            raise SystemExit("--updates needs --backend exact or pgvector")
         updates = UpdateStream(dict(np.load(args.updates)))
-        backend = ExactBackend(db[updates.present], np.flatnonzero(updates.present))
+        if args.backend == "exact":
+            backend = ExactBackend(db[updates.present], np.flatnonzero(updates.present))
+        else:
+            backend = make_backend("pgvector", db, q, top, idx, args)
     else:
         backend = make_backend(args.backend, db, q, top, idx, args)
     M = accounting.budget_bytes(len(db), d, args.budget, args.coord_bytes)
@@ -182,7 +193,8 @@ def parser() -> argparse.ArgumentParser:
                     "deletes applied while the stream is replayed; truth is filtered to the live vectors")
     ap.add_argument("--coord-bytes", type=float, default=4.0,
                     help="bytes per coordinate of the stored vectors (SPACEV: 1); M and the cache charge use it")
-    ap.add_argument("--backend", choices=["exact", "stored", "file"], default="stored")
+    ap.add_argument("--backend", choices=["exact", "stored", "file", "pgvector"], default="stored")
+    ap.add_argument("--pg-dsn", default=None, help="pgvector backend: DSN of this job's own database clone, or @file with the DSN")
     ap.add_argument("--backend-file", default=None)
     ap.add_argument("--backend-target", default="0.95")
     ap.add_argument("--batch", type=int, default=1000)
@@ -211,6 +223,7 @@ def main() -> None:
     register_args(args)
     records = Records()
     result = stamp_result(run(args, records))
+    result["records_file"] = f"recal{args.tag}_records.npz"
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     records.save(out / f"recal{args.tag}_records.npz")

@@ -63,9 +63,24 @@ def convert_shift(out: Path, kind: str, shift: dict, uni, official, base, base_p
     return out
 
 
-def convert_updates(prep: Path, schedule: dict, base, depth: int = 1000, device: str = "numpy") -> Path:
-    """Add an update schedule to a prep folder, for ReCal and for the real Aker driver and the simulators."""
+def convert_updates(prep: Path, schedule: dict, base, depth: int = 1000, device: str = "numpy",
+                    out: Path | None = None) -> Path:
+    """Add an update schedule to a prep folder, for ReCal and for the real Aker driver and the simulators.
+
+    With out, the schedule goes to its own folder that links the shared files of prep, so several schedules
+    on one stream (mode, rate) run as independent jobs.
+    """
     prep = Path(prep)
+    if out is not None:
+        out = Path(out)
+        out.mkdir(parents=True, exist_ok=True)
+        for name in ("q.npy", "streams.npz", "top500.npy", "k.npy"):
+            link = out / name
+            if not link.exists():
+                link.symlink_to((prep / name).resolve())
+        meta = json.loads((prep / "meta.json").read_text())
+        (out / "meta.json").write_text(json.dumps(meta))
+        prep = out
     np.savez(prep / "updates.npz", **schedule)
     insert = schedule["insert"].astype(bool)
     ins_ids, ins_t = schedule["id"][insert], schedule["t"][insert]
