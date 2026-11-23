@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# One-time setup of a fresh Ubuntu 24.04 x86_64 instance for the evaluation. Run as root. Idempotent.
+#   sudo bash scripts/ec2_bootstrap.sh [--dry-run] [--only STEP ...] [--skip STEP ...] [--no-data] [--no-smoke]
+#
+# Steps, in order:
+#   base        harness/deploy/setup_instance.sh: system packages, pinned CMake, Boost and FAISS, PostgreSQL 16 with
+#               pgvector 0.8.0 (isolated cluster), the harness venv, the Q1 drivers, preflight
+#   limits      raises fs.aio-max-nr (DiskANN and the replay open many AIO contexts)
+#   venvs       .venv-core (Python 3.11) and .venv-ann from envs/ (diskannpy in .venv-ann)
+#   core        builds the ReCal core and the cache core
+#   aker        the vendored Aker library, standard and Proximity modes, against the pinned Boost and FAISS
+#   links       points datasets/{aker,medrag,tripclick} and simulations/approximate_hits/results at the data volume
+#   data        scripts/fetch_data.sh --all (skipped with --no-data)
+#   smoke       tests, matrix dry run, a small ReCal cell with every ablation, library and backend checks
+#               (skipped with --no-smoke)
+#
+# Environment:
+#   DATA_DIR      data volume (default /data); datasets and answer tables go to $DATA_DIR/datasets
+#   RESULTS_DIR   results (default $DATA_DIR/results); linked to simulations/approximate_hits/results
+#   TP            third-party build prefix (default $DATA_DIR/third_party); Aker builds there
+#   PYTHON311     interpreter for .venv-core (default python3.11; installed from the deadsnakes PPA if missing)
+# Every step prints PASS or FAIL in the summary; a failed step does not stop independent ones.
+set -uo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+DATA_DIR="${DATA_DIR:-/data}"
+RESULTS_DIR="${RESULTS_DIR:-$DATA_DIR/results}"
+TP="${TP:-$DATA_DIR/third_party}"
+PYTHON311="${PYTHON311:-python3.11}"
+DRY=0
+SMOKE=1
+DATA=1
+ONLY=()
+SKIP=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run) DRY=1 ;;
+        --no-data) DATA=0 ;;
+        --no-smoke) SMOKE=0 ;;
+        --only) shift; ONLY+=("$1") ;;
+        --skip) shift; SKIP+=("$1") ;;
+        *) echo "unknown argument: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+log() { printf '[bootstrap] %s\n' "$*"; }
+run() {
+    if [ "$DRY" -eq 1 ]; then printf '[dry-run] %s\n' "$*"; return 0; fi
+    "$@"
+}
+selected() {
+    local s
+    for s in "${SKIP[@]:-}"; do [ "$s" = "$1" ] && return 1; done
+    [ "${#ONLY[@]}" -eq 0 ] && return 0
+    for s in "${ONLY[@]}"; do [ "$s" = "$1" ] && return 0; done
+    return 1
+}
+
+step_preconditions() {
+    [ "$DRY" -eq 1 ] && return 0
+    [ "$(uname -s)" = "Linux" ] || { log "not Linux"; return 1; }
+    [ "$(id -u)" -eq 0 ] || { log "run as root"; return 1; }
+    grep -q 'VERSION_ID="24.04"' /etc/os-release || log "warning: not Ubuntu 24.04"
+}
+
+step_base() {
+    run mkdir -p "$DATA_DIR" "$RESULTS_DIR"
+    Q1_DATA="${Q1_DATA:-$DATA_DIR/q1}" run bash "$root/harness/deploy/setup_instance.sh"
+}
+
+step_limits() {
+    run sysctl -w fs.aio-max-nr=1048576
+    run bash -c "echo 'fs.aio-max-nr = 1048576' > /etc/sysctl.d/99-recal-aio.conf"
+}
+
+step_venvs() {
+    if ! command -v "$PYTHON311" > /dev/null 2>&1; then
+        run add-apt-repository -y ppa:deadsnakes/ppa
+        run apt-get update -qq
+        run apt-get install -y -qq python3.11 python3.11-venv python3.11-dev
+    fi
+    run "$PYTHON311" -m venv "$root/.venv-core"
+    run "$root/.venv-core/bin/pip" install --quiet -r "$root/envs/core.txt" pybind11 pytest
+    run "$PYTHON311" -m venv "$root/.venv-ann"
+    run "$root/.venv-ann/bin/pip" install --quiet -r "$root/envs/ann.txt" pytest
+}
+
+step_core() {
+    run sh "$root/recal/core/build.sh"
+    run sh "$root/simulations/approximate_hits/cachecore/build.sh"
+}
+
+step_aker() {
+    # the pinned Boost and FAISS of the harness toolchain, installed where aker_real/build.sh looks for them
+    run mkdir -p "$TP"
+    local tools="${Q1_TOOLS:-/opt/q1}"
+    # the toolchain leaves Boost empty when the system one is new enough: then the system prefix is used
+    local boost_prefix="$tools/boost"
+    [ -d "$boost_prefix" ] || boost_prefix=/usr
+    [ -e "$TP/boost-install" ] || run ln -s "$boost_prefix" "$TP/boost-install"
+    [ -e "$TP/faiss-install" ] || run ln -s "$tools/faiss" "$TP/faiss-install"
+    TP="$TP" AKER_SRC=vendored run sh "$root/simulations/approximate_hits/aker_real/build.sh"
+}
+
+step_links() {
+    local rel
+    for rel in datasets/aker datasets/medrag datasets/tripclick; do
+        run mkdir -p "$DATA_DIR/$rel"
+        [ -e "$root/$rel" ] || run ln -s "$DATA_DIR/$rel" "$root/$rel"
+    done
+    run mkdir -p "$RESULTS_DIR"
+    [ -e "$root/simulations/approximate_hits/results" ] || \
+        run ln -s "$RESULTS_DIR" "$root/simulations/approximate_hits/results"
+}
+
+step_data() {
+    [ "$DATA" -eq 1 ] || { log "data fetch skipped (--no-data)"; return 0; }
+    RECAL_REPO="$root" run sh "$root/scripts/fetch_data.sh" --all
+}
+
+step_smoke() {
+    [ "$SMOKE" -eq 1 ] || { log "smoke test skipped (--no-smoke)"; return 0; }
+    run "$root/.venv-core/bin/python" -m pytest -q "$root/tests/recal" "$root/tests/test_cachecore.py"
+    run "$root/.venv-core/bin/python" -m scripts.gen_matrix --config "$root/experiments/matrix.example.json" --dry-run
+    run env PYTHONPATH="$root" "$root/.venv-core/bin/python" -m scripts.smoke_cells --out "$RESULTS_DIR/smoke"
+}
+
+summary=()
+failed=0
+for name in preconditions base limits venvs core aker links data smoke; do
+    if ! selected "$name"; then summary+=("$name: NOT RUN"); continue; fi
+    log "step $name"
+    if (cd "$root" && "step_$name"); then summary+=("$name: PASS"); else summary+=("$name: FAIL"); failed=1; fi
+done
+printf '\n[bootstrap] summary\n'
+printf '  %s\n' "${summary[@]}"
+exit "$failed"
