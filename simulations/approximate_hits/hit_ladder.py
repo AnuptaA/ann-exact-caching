@@ -39,6 +39,10 @@ class Table:
     def __init__(self, path):
         z = np.load(path, allow_pickle=False)
         self.z = {k: z[k] for k in z.files}
+        aug5 = Path(path).with_suffix(".aug5.npz")
+        if aug5.exists():                # hit_table_aug5.py: full-shell counts from DiskANN's PQ codes / float (doc 9au)
+            a = np.load(aug5)
+            self.z.update({k: a[k] for k in a.files})
         aug4 = Path(path).with_suffix(".aug4.npz")
         if aug4.exists():
             a = np.load(aug4)
@@ -146,6 +150,9 @@ class Table:
         if "exact_cnt" in z:
             V["probe: 3 balls + exact intruder count"] = (np.hstack([B3, np.log1p(z["exact_cnt"].astype(float))[:, None]]), z["y"], "probe")
             V["probe: 1 ball + exact intruder count"] = (np.hstack([self.balls(1), np.log1p(z["exact_cnt"].astype(float))[:, None]]), z["y"], "probe")
+        if "pq_shell10" in z:            # doc 9au: the backend's compressed codes instead of our shell sample
+            V["pq: 10 best-fit balls, whole shell, DiskANN PQ codes"] = (np.hstack([B3, np.log1p(z["pq_shell10"].astype(float))[:, None]]), z["y"], "pq")
+            V["pq: 10 best-fit balls, whole shell, float (ceiling)"] = (np.hstack([B3, np.log1p(z["f_shell10"].astype(float))[:, None]]), z["y"], "pq")
         # serving from one entry instead of the whole cache (features as ref)
         V["serve: best-fit entry only"] = (V[next(iter(V))][0], z["y_single_fit"], "serve")
         for mm in (1, 3, 10, 30, 100):
