@@ -25,7 +25,7 @@ from recal.params import Params
 from recal.records import Records, add_response
 from recal.stored import StoredAnswers
 from recal.system import ReCal
-from recal import accounting, history_mode, ksets
+from recal import accounting, history_mode, ksets, modes
 from recal.update_schedule import UpdateStream, live_truth
 
 
@@ -77,6 +77,12 @@ def ablations(args) -> dict:
 
 
 def run(args, records: Records | None = None) -> dict:
+    mode = modes.mode_of(args.idealized)
+    if args.strict_modes:
+        try:
+            modes.check_mode_backend(mode, args.backend)
+        except ValueError as e:
+            raise SystemExit(str(e))
     prep = Path(args.prep)
     db, q, top, streams = load_prep(prep)
     idx = np.asarray(streams[args.stream], dtype=np.int64)
@@ -168,6 +174,7 @@ def run(args, records: Records | None = None) -> dict:
         "info": [getattr(system.built, "info", None)] if system.built else [], "seconds": time.time() - t0,
     }
     history_mode.stamp(out, len(idx), history_len)
+    out.update(mode=mode, backend=modes.backend_kind(args.backend))
     if records is not None:
         records.constructions = system.construction_log
         records.meta.update(method="recal", K=K, history_len=history_len, M=M,
@@ -210,6 +217,9 @@ def parser() -> argparse.ArgumentParser:
     for name in ABLATIONS:
         ap.add_argument("--" + name.replace("_", "-"), dest=name, action="store_true",
                         help="ReCal ablation (see recal/README.md)")
+    ap.add_argument("--strict-modes", action="store_true",
+                    help="refuse a mode and backend that do not belong together (deployable: DiskANN or pgvector, "
+                         "idealized: exact); on in every generated line")
     ap.add_argument("--timing", action="store_true", help="record hit and cache-path time per request")
     ap.add_argument("--log-served", action="store_true")
     ap.add_argument("--tag", default="")

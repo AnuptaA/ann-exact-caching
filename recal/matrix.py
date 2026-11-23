@@ -6,7 +6,7 @@ experiments/matrix.example.json. design_table() gives the cell count and the dim
 experiment; tests compare it with the line counts and with the design.
 """
 
-from recal import robustness
+from recal import modes, robustness
 from recal.system_benefit import jobs as q3jobs
 from recal.system_benefit.split import SPLITS
 
@@ -36,7 +36,8 @@ def q1_systems(cfg: dict) -> list[tuple]:
     q1, out = cfg["q1"], []
     for t in q1["targets"]:
         for mode, flag in (("deployable", ""), ("idealized", "--idealized")):
-            out.append((f"recal_{mode}_t{t:g}", "recal", "recal", q1["recal_backend"], f"--target {t:g} {flag}"))
+            out.append((f"recal_{mode}_t{t:g}", "recal", "recal", modes.recal_backend(mode),
+                        f"--target {t:g} {flag} --strict-modes"))
     for backend in q1["backends"]:
         out.append((f"aker_{backend}", "aker", "aker", backend, ""))
         out.append((f"proximity-a_{backend}", "proximity", "proximity_p0.1", backend,
@@ -66,8 +67,8 @@ def q2_lines(cfg: dict) -> list[str]:
         for label, flag in [("default", "")] + [(f.lstrip("-"), f) for f in ABLATIONS]:
             for seed in cfg["seeds"]:
                 d = f"{ROOT}/q2/{name}/{label}_s{seed}"
-                out.append(cell(d, "recal", "recal", w, w["q2_budget"], f"{backend_flags(w, cfg['q1']['recal_backend'])} "
-                                f"--target {q2['target']:g} {flag} --seed {seed}"))
+                out.append(cell(d, "recal", "recal", w, w["q2_budget"], f"{backend_flags(w, modes.recal_backend('deployable'))} "
+                                f"--target {q2['target']:g} {flag} --strict-modes --seed {seed}"))
     return out
 
 
@@ -103,11 +104,11 @@ def q3_lines(cfg: dict) -> list[str]:
                     continue
                 for seed in cfg["seeds"]:
                     out.append(cell(f"{b}/recal_s{q3jobs.pct(s)}_s{seed}", "recal", "recal", w, s * budget,
-                                    f"{backend_flags(w, 'diskann')} --target {q3['target']:g} --seed {seed}"))
+                                    f"{backend_flags(w, 'diskann')} --target {q3['target']:g} --strict-modes --seed {seed}"))
             share = f"$({PY} -m recal.system_benefit.choose get {b}/chosen.json recal_budget_fraction)"
             for seed in cfg["seeds"]:
                 out.append(cell(f"{b}/recal_chosen_s{seed}", "recal", "recal", w, share,
-                                f"{backend_flags(w, 'diskann')} --target {q3['target']:g} --seed {seed}"))
+                                f"{backend_flags(w, 'diskann')} --target {q3['target']:g} --strict-modes --seed {seed}"))
             for system in ("aker", "qvcache"):
                 out.append(cell(f"{b}/{system}_chosen", system, system, w, share,
                                 f"{backend_flags(w, 'diskann')} --seed 0"))

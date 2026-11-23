@@ -325,7 +325,6 @@
    0.9,
    0.95
   ],
-  "recal_backend": "exact",
   "backends": [
    "exact",
    "diskann"

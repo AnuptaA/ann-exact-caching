@@ -38,7 +38,8 @@ def grid_lines(prep: str, stream: str, name: str, budgets=BUDGETS, histories=HIS
         for seed in seeds:
             d = f"simulations/approximate_hits/results/q4/{name}/{method}_b{b:g}_h{h}_s{seed}"
             out.append(f"[ -f {d}/{method}.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u -m "
-                       f"recal.cells --method {method} --prep {prep} --stream {stream} --budget {b:g} "
+                       f"recal.cells --method {method} {'--strict-modes ' if method == 'recal' else ''}--prep {prep} "
+                       f"--stream {stream} --budget {b:g} "
                        f"{hist}--seed {seed} {extra} --out {d} "
                        f"> {d}/log.txt 2>&1; }}  # recal.cells")
     return out
@@ -52,7 +53,7 @@ def k_lines(prep: str, stream: str, name: str, budget: float = 0.05, seeds=(0, 1
         for seed in seeds:
             d = f"simulations/approximate_hits/results/q4/{name}/{label}_s{seed}"
             out.append(f"[ -f {d}/recal.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u -m "
-                       f"recal.cells --method recal --prep {prep} --stream {stream} --budget {budget:g} {flags} "
+                       f"recal.cells --method recal --strict-modes --prep {prep} --stream {stream} --budget {budget:g} {flags} "
                        f"--seed {seed} {extra} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
     return out
 
@@ -70,7 +71,7 @@ def shift_lines(prep_dir: str, name: str, shifts=("abrupt", "gradual", "correlat
                 d = f"results/q4/{name}/shift_{kind}_{tag}_s{seed}"
                 flag = "" if on else "--no-rebuild-signals"
                 out.append(f"[ -f {d}/recal.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u -m "
-                           f"recal.cells --method recal --prep {prep} --stream {kind} --budget {budget:g} "
+                           f"recal.cells --method recal --strict-modes --prep {prep} --stream {kind} --budget {budget:g} "
                            f"--seed {seed} {flag} {extra} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
     return out
 
@@ -84,7 +85,7 @@ def burst_lines(prep: str, stream: str, name: str, budgets=(0.05,), seeds=(0, 1)
             for seed in seeds:
                 d = f"results/q4/{name}/burst_b{budget:g}_{label}_s{seed}"
                 out.append(f"[ -f {d}/recal.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u -m "
-                           f"recal.cells --method recal --prep {prep} --stream {stream} --budget {budget:g} "
+                           f"recal.cells --method recal --strict-modes --prep {prep} --stream {stream} --budget {budget:g} "
                            f"--seed {seed} {flag} {extra} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
     return out
 
@@ -121,7 +122,8 @@ def update_lines(w: dict, name: str, q4: dict, seeds) -> list[str]:
                     backend = (f"--backend pgvector --pg-dsn @$PG_CLONES/{job}.dsn --updates {prep}/updates.npz"
                                if live else f"--backend exact --updates {prep}/updates.npz")
                     out.append(f"[ -f {d}/{stem}.json ] || {{ mkdir -p {d} && PYTHONPATH=. .venv-core/bin/python -u "
-                               f"-m recal.cells --method {method} --prep {prep} --stream {w['stream']} "
+                               f"-m recal.cells --method {method} {'--strict-modes ' if method == 'recal' else ''}--prep {prep} "
+                               f"--stream {w['stream']} "
                                f"--budget {w['q2_budget']:g} --coord-bytes {w['coord_bytes']:g} {backend} {flags} "
                                f"--seed {seed} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
     return out
