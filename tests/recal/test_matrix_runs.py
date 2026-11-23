@@ -96,3 +96,20 @@ def test_cli_writes_deduplicated_jobs_and_the_mapping(tmp_path, capsys):
     assert sum(len(v["cells"]) for v in mapping.values()) == 2014
     gen_matrix.main(["--config", str(CONFIG), "--table"])
     assert "cells shared with another experiment" in capsys.readouterr().out
+
+
+def test_prunability_stats_cover_every_cell_and_reductions_only_remove_runs():
+    from scripts import prunability_stats as ps
+    c = cfg()
+    data = ps.collect(c)
+    rows = ps.summarize(data["cells"])
+    assert sum(r["cells"] for r in rows.values()) == 2014 == len(data["cells"])
+    runs, units = ps.total_units(data["cells"])
+    assert runs == len(matrix.runs(c)["runs"]) and units > 0
+    effects = {name: ps.effect(data["cells"], fn) for name, fn in ps.rules(c).items()}
+    assert all(e["runs_after"] <= e["runs_before"] and e["units_saved"] >= 0 for e in effects.values())
+    assert sum(r["owned"] for r in rows.values()) == runs
+    updates = [e for n, e in effects.items() if n.startswith("Q4 updates")][0]
+    assert updates["dropped_cells"] == 96
+    through = [e for n, e in effects.items() if n.startswith("Q3 throughput")][0]
+    assert through["dropped_cells"] == 84
