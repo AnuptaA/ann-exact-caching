@@ -551,7 +551,7 @@ def main():
     ap.add_argument("--progress", type=int, default=5000, help="log every this many requests")
     ap.add_argument("--out", type=str, default=None)
     ap.add_argument("--print-config-hash", action="store_true", help="print the config hash and exit")
-    ap.add_argument("--stream", choices=["trace", "random", "shift", "multishift"],
+    ap.add_argument("--stream", choices=["trace", "random", "shift", "multishift", "abrupt", "gradual", "correlated"],
                     default="trace", help="request stream of the prep (streams.npz)")
     ap.add_argument("--data-change", choices=["none", "churn", "drift"], default="none",
                     help="database inserts / deletes (online_prepare_data.py)")

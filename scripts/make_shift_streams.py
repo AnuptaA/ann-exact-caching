@@ -29,6 +29,7 @@ def main(argv=None) -> int:
     ap.add_argument("--held-out", type=float, default=0.05, help="share of base vectors held out for inserts")
     ap.add_argument("--n-inserts", type=int, default=0, help="correlated inserts (default: all held-out new-cluster ones)")
     ap.add_argument("--sample", type=int, default=100_000)
+    ap.add_argument("--allow-numpy-kmeans", action="store_true", help="tests only: numpy k-means without faiss")
     ap.add_argument("--seeds", type=int, nargs="+", default=[0])
     ap.add_argument("--out-dir", type=Path, required=True)
     a = ap.parse_args(argv)
@@ -37,7 +38,7 @@ def main(argv=None) -> int:
     rng = np.random.default_rng(shifts.SEED)
     sample = np.asarray(base[np.sort(rng.choice(len(base), min(a.sample, len(base)), replace=False))],
                         dtype=np.float32)
-    centroids = shifts.kmeans_centroids(sample)
+    centroids = shifts.kmeans_centroids(sample, allow_fallback=a.allow_numpy_kmeans)
     n_clusters = len(centroids)
     vector_cluster = shifts.assign(base, centroids)
     a.out_dir.mkdir(parents=True, exist_ok=True)

@@ -18,12 +18,12 @@ def clustered_points(k=8, per=30, d=4, seed=0):
 
 def test_kmeans_recovers_separated_clusters_and_assigns_nearest():
     x, centers = clustered_points()
-    cent = shifts.kmeans_centroids(x, k=8, seed=0)
+    cent = shifts.kmeans_centroids(x, k=8, seed=0, allow_fallback=True)
     labels = shifts.assign(x, cent)
     assert len(np.unique(labels)) == 8
     for c in range(8):
         assert len(np.unique(labels[c * 30:(c + 1) * 30])) == 1
-    assert np.array_equal(labels, shifts.assign(x, shifts.kmeans_centroids(x, k=8, seed=0)))
+    assert np.array_equal(labels, shifts.assign(x, shifts.kmeans_centroids(x, k=8, seed=0, allow_fallback=True)))
 
 
 def test_cluster_sets_are_disjoint_and_fixed():

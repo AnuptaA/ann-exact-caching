@@ -17,12 +17,17 @@ N_CLUSTERS = 64
 SEED = 0
 
 
-def kmeans_centroids(sample: np.ndarray, k: int = N_CLUSTERS, seed: int = SEED, niter: int = 20) -> np.ndarray:
-    """FAISS k-means when faiss is installed, else a seeded numpy Lloyd (tests and local checks)."""
+def kmeans_centroids(sample: np.ndarray, k: int = N_CLUSTERS, seed: int = SEED, niter: int = 20,
+                     allow_fallback: bool = False) -> np.ndarray:
+    """FAISS k-means (seed 0 for cluster runs). Without faiss it refuses; the seeded numpy Lloyd is for tests
+    and local checks and must be asked for."""
     sample = np.ascontiguousarray(sample, dtype=np.float32)
     try:
         import faiss
     except ImportError:
+        if not allow_fallback:
+            raise RuntimeError("faiss is required for cluster runs (faiss.Kmeans, seed 0); the numpy fallback is "
+                               "for tests: pass allow_fallback=True or --allow-numpy-kmeans")
         return _lloyd(sample, k, seed, niter)
     km = faiss.Kmeans(sample.shape[1], k, niter=niter, seed=seed, verbose=False)
     km.train(sample)

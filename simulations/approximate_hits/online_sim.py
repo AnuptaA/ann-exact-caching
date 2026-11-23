@@ -1598,7 +1598,12 @@ class Sim:
 def load(prep, args):
     meta_path = Path(prep) / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {"kind": "esci"}
-    if meta["kind"] == "trace":
+    if meta["kind"] == "files":
+        from recal.measure.jobs_util import register_data_file
+        db = np.load(meta["db"]).astype(np.float32)
+        q = np.load(meta["q"]).astype(np.float32)
+        register_data_file(meta["q"])
+    elif meta["kind"] == "trace":
         from simulations.approximate_hits.prep_io import register_trace_requests
         from simulations.approximate_hits.run_e2e_oracle_trace import load_base_f32
         register_trace_requests(meta["trace"])
@@ -1718,7 +1723,7 @@ def make_parser():
                          "(greedy only; lru always recalibrates only)")
     ap.add_argument("--oracle-cal", action="store_true",
                     help="reference: every query is labeled for calibration at no cost")
-    ap.add_argument("--stream", choices=["random", "shift", "trace", "multishift"],
+    ap.add_argument("--stream", choices=["random", "shift", "trace", "multishift", "abrupt", "gradual", "correlated"],
                     default="shift")
     ap.add_argument("--data-change", choices=["none", "churn", "drift"], default="none",
                     help="database inserts / deletes (online_prepare_data.py)")

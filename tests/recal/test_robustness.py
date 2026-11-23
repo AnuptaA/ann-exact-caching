@@ -77,7 +77,7 @@ def test_make_shift_streams_script_on_small_arrays(tmp_path):
     np.save(tmp_path / "base.npy", rng.normal(size=(2000, 4)).astype(np.float32))
     make_shift_streams.main(["--official", str(tmp_path / "official.npy"), "--base", str(tmp_path / "base.npy"),
                              "--n", "600", "--start", "200", "--span", "200", "--groups", "64", "--group-size", "4",
-                             "--sample", "500", "--held-out", "0.2", "--seeds", "0", "--out-dir", str(tmp_path / "o")])
+                             "--sample", "500", "--held-out", "0.2", "--seeds", "0", "--allow-numpy-kmeans", "--out-dir", str(tmp_path / "o")])
     names = sorted(p.name for p in (tmp_path / "o").iterdir())
     assert names == ["shift_abrupt_seed0.npz", "shift_correlated_inserts_seed0.npz", "shift_correlated_seed0.npz",
                      "shift_gradual_seed0.npz"]

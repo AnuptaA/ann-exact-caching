@@ -31,6 +31,13 @@ def load_prep(prep, native=False):
     meta_path = prep / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {"kind": "esci", "n_db": 1000000}
     top = np.load(prep / "top500.npy", mmap_mode="r")
+    if meta.get("kind") == "files":
+        try:
+            from recal.measure.jobs_util import register_data_file
+            register_data_file(meta["q"])
+        except ImportError:
+            pass
+        return np.load(meta["db"]).astype(np.float32), np.load(meta["q"]).astype(np.float32), top, "files"
     if meta.get("kind") == "trace":
         from simulations.approximate_hits.run_e2e_oracle_trace import load_base, load_base_f32
         register_trace_requests(meta["trace"])

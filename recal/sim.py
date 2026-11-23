@@ -77,6 +77,8 @@ def run(args, records: Records | None = None) -> dict:
     d, K = db.shape[1], args.k
     history_len = history_mode.history_length(len(idx), args.history_frac)
     ks = ksets.k_sequence(len(idx), K, args.k_mixed, args.k_set, args.seed)
+    if not args.k_mixed and (prep / "k.npy").exists():
+        ks = np.load(prep / "k.npy")[:len(idx)]
     updates = None
     if args.updates:
         if args.backend != "exact":
