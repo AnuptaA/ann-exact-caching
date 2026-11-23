@@ -41,6 +41,9 @@ WORKLOADS = {
     **{f"triviaqa-aker-{s}": {"base": "sphere-10m.npy",
                               "trace": [f"triviaqa-sim-100k-{s}.npy"]}
        for s in ("0.3", "0.6", "0.99")},
+    **{f"triviaqa-ip-{s}": {"base": "sphere-ip-10m.npy",
+                            "trace": [f"triviaqa-ip-sim-100k-{s}.npy"]}
+       for s in ("0.3", "0.6", "0.99")},
     "spacev-real": {"base": "spacev-10m.npy",
                     "trace": ["spacev1b/query_log.bin", "spacev1b/query.bin"]},
 }

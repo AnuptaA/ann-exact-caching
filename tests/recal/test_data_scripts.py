@@ -65,3 +65,115 @@ def test_zipf_draw_check():
     seq2 = [0] * 10_000
     assert verify_data.check_zipf_draw({"seq": seq2, "counts": np.bincount(seq2, minlength=500).tolist()})
     json.dumps({"seq": seq})
+
+
+def fetch_listing():
+    return [
+        {"path": "sphere/sphere-ip-10m.npy", "id": "s", "size": 40},
+        {"path": "sphere/sphere-ip-10m.json", "id": "j", "size": 2},
+        {"path": "triviaqa/triviaqa-ip-sim-100k-0.3.npy", "id": "t3", "size": 7},
+        {"path": "tripclick/tripclick-ip-docs.npy", "id": "a", "size": 10},
+        {"path": "ESCI/queries.npz", "id": "q", "size": 3},
+        {"path": "ESCI/data_vectors/shard_000.npz", "id": "sh", "size": 4},
+    ]
+
+
+def run_fetch(tmp_path, capsys, *flags):
+    from scripts import data_fetch
+    listing = tmp_path / "listing.json"
+    listing.write_text(json.dumps(fetch_listing()))
+    code = data_fetch.main([*flags, "--dry-run", "--root", str(tmp_path),
+                            "--listing", str(listing)])
+    return code, capsys.readouterr().out
+
+
+def test_fetch_modes_are_independent(tmp_path, capsys):
+    code, out = run_fetch(tmp_path, capsys, "--sphere")
+    assert code == 0
+    assert "sphere-ip-10m.npy" in out and "triviaqa" not in out and "spacev" not in out
+
+
+def test_all_excludes_esci_and_esci_mode_maps_paths(tmp_path, capsys):
+    _, out = run_fetch(tmp_path, capsys, "--all")
+    assert "datasets/esci" not in out and "spacev-10m.npy" in out
+    _, out = run_fetch(tmp_path, capsys, "--esci")
+    assert "datasets/esci/queries.npz" in out
+    assert "datasets/esci/data_vectors/shard_000.npz" in out
+
+
+def test_missing_drive_file_is_reported(tmp_path, capsys):
+    _, out = run_fetch(tmp_path, capsys, "--triviaqa")
+    assert out.count("missing") == 2 and "download" in out
+
+
+def test_no_corpus_skips_large_medrag_files(tmp_path, capsys):
+    _, out = run_fetch(tmp_path, capsys, "--medrag", "--no-corpus")
+    assert "medrag-ip-docs.npy" not in out and "base.json" in out
+    _, out = run_fetch(tmp_path, capsys, "--medrag")
+    assert "medrag-ip-docs.npy" in out
+
+
+def test_existing_file_with_expected_size_is_kept(tmp_path):
+    from scripts import data_fetch
+    path = tmp_path / "x.npy"
+    path.write_bytes(b"x" * 5)
+    assert data_fetch.action_for(path, 5, False) == "keep"
+    assert data_fetch.action_for(path, 6, False) == "replace"
+    assert data_fetch.action_for(path, 5, True) == "replace"
+    assert data_fetch.action_for(tmp_path / "y", 5, False) == "download"
+
+
+def test_space_floor_per_download():
+    from scripts import data_fetch
+    assert data_fetch.space_ok(5 * 2**30, 20 * 2**30)
+    assert not data_fetch.space_ok(15 * 2**30, 20 * 2**30)
+
+
+def write_npy(path, array):
+    np.save(path, array)
+
+
+def make_ip_files(directory, bad_query=False):
+    rng = np.random.default_rng(0)
+    docs = rng.normal(size=(60, 7)).astype(np.float32)
+    norms = np.linalg.norm(docs, axis=1)
+    top = float(norms.max())
+    docs = np.hstack([docs, np.sqrt(top**2 - norms**2)[:, None]]).astype(np.float32)
+    queries = np.hstack([rng.normal(size=(20, 7)), np.zeros((20, 1))]).astype(np.float32)
+    if bad_query:
+        queries[:, -1] = 1.0
+    write_npy(directory / "sphere-ip-10m.npy", docs)
+    write_npy(directory / "triviaqa-ip-sim-100k-0.3.npy", queries)
+    (directory / "sphere-ip-10m.json").write_text(json.dumps({"M": top}))
+
+
+def test_sphere_verifier_flags_wrong_shape_on_small_files(tmp_path, capsys):
+    make_ip_files(tmp_path)
+    assert verify_data.verify_sphere(tmp_path) == 1
+    assert "expected (10000000, 769)" in capsys.readouterr().out
+
+
+def test_ip_checks_on_small_files_pass_and_fail(tmp_path):
+    make_ip_files(tmp_path)
+    docs = np.load(tmp_path / "sphere-ip-10m.npy")
+    queries = np.load(tmp_path / "triviaqa-ip-sim-100k-0.3.npy")
+    meta = json.loads((tmp_path / "sphere-ip-10m.json").read_text())
+    assert verify_data.check_ip_transform(docs, queries, meta["M"])["problems"] == []
+    queries[:, -1] = 1.0
+    assert verify_data.check_ip_transform(docs, queries, meta["M"])["problems"]
+
+
+def test_spacev_verifier_reports_shape_problem(tmp_path, capsys):
+    write_npy(tmp_path / "spacev-sim-100k-0.3.npy", np.zeros((5, 100), np.int8))
+    assert verify_data.verify_spacev(tmp_path) == 1
+    assert "spacev-sim-100k-0.3.npy" in capsys.readouterr().out
+    write_npy(tmp_path / "spacev-sim-100k-0.3.npy", np.zeros((100_000, 100), np.int8))
+    assert verify_data.verify_spacev(tmp_path) == 0
+
+
+def test_manifest_lists_expected_files_not_on_disk(tmp_path):
+    out = tmp_path / "MANIFEST.md"
+    verify_data.write_manifest(out, [])
+    text = out.read_text()
+    assert "sphere-ip-10m.npy" in text and "spacev-10m.npy" in text
+    assert "triviaqa-ip-sim-100k-0.99.npy" in text

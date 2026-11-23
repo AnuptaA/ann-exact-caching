@@ -10,3 +10,13 @@ Data files are gitignored. Sizes in bytes. TripClick's terms forbid sharing the 
 | `medrag-ip-docs.npy` | - | 23888832x769 | float32 | - | expected, cluster only |
 | `base_pmids.npy` | - | 23888832 | int64 | - | expected, cluster only |
 | `medrag_pmids.npy` | - | 23895135 | int64 | - | expected, cluster only |
+| `spacev-10m.npy` | - | 10000000x100 | int8 | - | expected, cluster only |
+| `sphere-ip-10m.npy` | - | 10000000x769 | float32 | - | expected, cluster only |
+| `spacev-sim-100k-0.3.npy` | - | 100000x100 | int8 | - | expected |
+| `spacev-sim-100k-0.6.npy` | - | 100000x100 | int8 | - | expected |
+| `spacev-sim-100k-0.99.npy` | - | 100000x100 | int8 | - | expected |
+| `triviaqa-ip-sim-100k-0.3.npy` | - | 100000x769 | float32 | - | expected |
+| `triviaqa-ip-sim-100k-0.6.npy` | - | 100000x769 | float32 | - | expected |
+| `triviaqa-ip-sim-100k-0.99.npy` | - | 100000x769 | float32 | - | expected |
+
+Sources: SPACEV base vectors and streams from Aker's Hugging Face release (`sjoon-oh/aker`); SPHERE and TriviaQA inner-product files, MedRAG and TripClick from the shared Drive folder.

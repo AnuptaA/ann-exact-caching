@@ -18,6 +18,15 @@ import numpy as np
 SAMPLE = 2000
 NORM_TOL = 1e-4
 
+ZIPF = ("0.3", "0.6", "0.99")
+AKER_EXPECTED = {
+    "spacev-10m.npy": ((10_000_000, 100), "int8", "cluster only"),
+    "sphere-ip-10m.npy": ((10_000_000, 769), "float32", "cluster only"),
+    **{f"spacev-sim-100k-{z}.npy": ((100_000, 100), "int8", "local") for z in ZIPF},
+    **{f"triviaqa-ip-sim-100k-{z}.npy": ((100_000, 769), "float32", "local")
+       for z in ZIPF},
+}
+
 MEDRAG_EXPECTED = {
     "medrag-ip-docs.npy": ((23_888_832, 769), "float32", "cluster only"),
     "base_pmids.npy": ((23_888_832,), "int64", "cluster only"),
@@ -65,6 +74,62 @@ def check_zipf_draw(draw: dict, n_requests: int = 10_000, n_questions: int = 500
     if list(counts) != list(draw.get("counts", counts)):
         problems.append("counts do not match the sequence")
     return problems
+
+
+def check_shape(path: Path, shape: tuple, dtype: str) -> list[str]:
+    array = np.load(path, mmap_mode="r")
+    if array.shape != shape or str(array.dtype) != dtype:
+        return [f"{path.name} is {array.shape} {array.dtype}, expected {shape} {dtype}"]
+    rows = sample_rows(array, 200) if array.dtype.kind == "f" else array[:200]
+    if array.dtype.kind == "f" and np.isnan(rows).any():
+        return [f"NaN in a sample of {path.name}"]
+    return []
+
+
+def verify_spacev(directory: Path) -> int:
+    problems = []
+    for name, (shape, dtype, _) in AKER_EXPECTED.items():
+        if name.startswith("spacev") and (directory / name).exists():
+            problems += check_shape(directory / name, shape, dtype)
+    return report(problems)
+
+
+def verify_sphere(directory: Path) -> int:
+    path = directory / "sphere-ip-10m.npy"
+    if not path.exists():
+        return report([f"missing {path}"])
+    shape, dtype, _ = AKER_EXPECTED[path.name]
+    problems = check_shape(path, shape, dtype)
+    meta = directory / "sphere-ip-10m.json"
+    norm_max = json.loads(meta.read_text()).get("M") if meta.exists() else None
+    streams = [directory / f"triviaqa-ip-sim-100k-{z}.npy" for z in ZIPF]
+    queries = next((s for s in streams if s.exists()), None)
+    if not problems and queries is not None:
+        docs = np.load(path, mmap_mode="r")
+        problems += check_ip_transform(docs, np.load(queries, mmap_mode="r"),
+                                       norm_max)["problems"]
+    return report(problems)
+
+
+def verify_triviaqa(directory: Path) -> int:
+    problems = []
+    for z in ZIPF:
+        path = directory / f"triviaqa-ip-sim-100k-{z}.npy"
+        if not path.exists():
+            problems.append(f"missing {path.name}")
+            continue
+        shape, dtype, _ = AKER_EXPECTED[path.name]
+        problems += check_shape(path, shape, dtype)
+        queries = sample_rows(np.load(path, mmap_mode="r"), SAMPLE)
+        if np.abs(queries[:, -1]).max() != 0.0:
+            problems.append(f"last coordinate of a request in {path.name} is not 0")
+    return report(problems)
+
+
+def report(problems: list[str]) -> int:
+    for problem in problems:
+        print("PROBLEM:", problem)
+    return 1 if problems else 0
 
 
 def verify_tripclick(directory: Path) -> int:
@@ -143,9 +208,11 @@ def write_manifest(out: Path, paths: list[Path]) -> None:
         "|---|---|---|---|---|---|",
         *manifest_rows([p for p in paths if p.exists()]),
     ]
-    for name, (shape, dtype, where) in MEDRAG_EXPECTED.items():
-        if where == "cluster only":
-            lines.append(f"| `{name}` | - | {'x'.join(map(str, shape))} | {dtype} | - | expected, cluster only |")
+    on_disk = {p.name for p in paths if p.exists()}
+    for name, (shape, dtype, where) in {**AKER_EXPECTED, **MEDRAG_EXPECTED}.items():
+        if name not in on_disk:
+            status = "expected, cluster only" if where == "cluster only" else "expected"
+            lines.append(f"| `{name}` | - | {'x'.join(map(str, shape))} | {dtype} | - | {status} |")
     out.write_text("\n".join(lines) + "\n")
 
 
@@ -157,6 +224,8 @@ def main() -> int:
     medrag = sub.add_parser("medrag")
     medrag.add_argument("--dir", type=Path, default=Path("datasets/medrag"))
     medrag.add_argument("--aker-dir", type=Path, default=Path("datasets/aker"))
+    for name in ("spacev", "sphere", "triviaqa"):
+        sub.add_parser(name).add_argument("--dir", type=Path, default=Path("datasets/aker"))
     manifest = sub.add_parser("manifest")
     manifest.add_argument("--out", type=Path, default=Path("datasets/MANIFEST.md"))
     manifest.add_argument("paths", nargs="*", type=Path)
@@ -165,6 +234,9 @@ def main() -> int:
         return verify_tripclick(args.dir)
     if args.command == "medrag":
         return verify_medrag(args.dir, args.aker_dir)
+    if args.command in ("spacev", "sphere", "triviaqa"):
+        return {"spacev": verify_spacev, "sphere": verify_sphere,
+                "triviaqa": verify_triviaqa}[args.command](args.dir)
     write_manifest(args.out, args.paths)
     return 0
 
