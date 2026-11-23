@@ -591,10 +591,10 @@ class Core {
     py::dict bytes_by_structure() const {
         double data = 0, shell = 0, entries = 0, rev = 0, mini = 0, index = 0;
         size_t live = rev_.size();
-        data = (double)data_id_.size() * (4.0 * d + 8 + 4);  // dead slots stay until a sweep
+        data = (double)data_id_.size() * (coord_bytes_ * d + 8 + 4);  // dead slots stay until a sweep
         shell = (double)(shell_codes_.size() / code_bytes_) * code_bytes_ + (quantizer_set_ ? 8.0 * d : 0.0);
         for (const Entry& e : entries_)
-            entries += 4.0 * d + 20 + 4.0 * (e.resp.size() + e.shell.size());
+            entries += coord_bytes_ * d + 20 + 4.0 * (e.resp.size() + e.shell.size());
         rev = (double)live * 12.0;
         for (const auto& kv : mini_lru_) mini += mini_entry_bytes((int)kv.second.ids.size());
         if (index_) {
@@ -641,6 +641,7 @@ class Core {
 
     int n_entries() const { return (int)entries_.size(); }
     void set_track_contributing(bool on) { track_contrib_ = on; }
+    void set_coord_bytes(double b) { coord_bytes_ = b; }
     std::vector<int32_t> entry_sizes() const {
         std::vector<int32_t> out;
         out.reserve(entries_.size());
@@ -714,6 +715,7 @@ class Core {
     std::vector<uint32_t> dstamp_, sstamp_, kstamp_;
     uint32_t depoch_ = 0, sepoch_ = 0, kepoch_ = 0;
     bool track_contrib_ = false;
+    double coord_bytes_ = 4.0;  // bytes charged per stored vector coordinate
 
     size_t mini_capacity_ = 0;
     std::list<std::pair<uint64_t, MiniEntry>> mini_lru_;
@@ -995,6 +997,7 @@ PYBIND11_MODULE(_recal_core, mod) {
         .def("set_quantizer", &Core::set_quantizer)
         .def("set_budget", &Core::set_budget)
         .def("set_track_contributing", &Core::set_track_contributing)
+        .def("set_coord_bytes", &Core::set_coord_bytes)
         .def("entry_sizes", [](const Core& c) { auto v = c.entry_sizes(); return py::array_t<int32_t>(v.size(), v.data()); })
         .def("set_external_bytes", &Core::set_external_bytes)
         .def("set_model", &Core::set_model)

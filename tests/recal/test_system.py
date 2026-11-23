@@ -120,3 +120,20 @@ def test_mini_cache_without_repeats_falls_to_the_floor(tmp_path):
     first = system.first_construction_bytes
     assert first["mini_cache"] <= params.mini_floor * (40 + 8 * 5)
     assert first["total"] <= 0.6 * data.size * 4
+
+
+def test_stored_precision_charges_fewer_bytes_per_vector(tmp_path):
+    rng, data, centers = make_world(seed=7)
+    def built(coord_bytes, sub):
+        params = Params(K=5, k_max=20, H=3000, cold_start=1500, min_ess=30.0, seed=1, coord_bytes=coord_bytes)
+        system = ReCal(ExactBackend(data), params, 0.6 * data.size * 4, tmp_path / sub)
+        for q in make_stream(np.random.default_rng(3), centers, 1700, repeat_share=0.0):
+            system.serve(q, 5)
+        return system
+    four, one = built(4.0, "a"), built(1.0, "b")
+    assert four.built is not None and one.built is not None
+    b4, b1 = four.bytes_by_structure(), one.bytes_by_structure()
+    d = data.shape[1]
+    assert np.isclose(b4["data_pool"] / four.core.n_data_slots(), 4 * d + 12)
+    assert np.isclose(b1["data_pool"] / one.core.n_data_slots(), 1 * d + 12)
+    assert b1["total"] <= one.M and b4["total"] <= four.M

@@ -59,6 +59,7 @@ class ReCal:
 
     def _bare_core(self) -> Core:
         core = Core(self.backend.dim, self.p.k_max)
+        core.set_coord_bytes(self.p.coord_bytes)
         core.set_budget(self.M)
         core.finish_build()
         entry = 40.0 + 8.0 * self.p.K

@@ -193,8 +193,8 @@ class Greedy:
         self.H = np.zeros(self.n_lv)
         for k, lv in self.level_of.items():
             self.H[lv[0]] += np.sum(self.q_k == k)
-        self.entry_fixed = (4.0 * d + 20.0 + INDEX_BYTES_PER_ENTRY)
-        self.slot_bytes = 4.0 * d + 12.0 + 12.0          # data slot plus reverse map entry
+        self.entry_fixed = (p.coord_bytes * d + 20.0 + INDEX_BYTES_PER_ENTRY)
+        self.slot_bytes = p.coord_bytes * d + 12.0 + 12.0          # data slot plus reverse map entry
         self.shell_bytes = float((d + 1) // 2)
 
     def _level(self, count: np.ndarray, q: np.ndarray) -> np.ndarray:
@@ -356,6 +356,7 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
     chosen, used = greedy.select(budget, prop.entry_cand)
     # build the core: entries, then shells, then the center index
     core = Core(d, p.k_max)
+    core.set_coord_bytes(p.coord_bytes)
     pool_ids = np.unique(np.concatenate([prop.resp[e] for e in chosen])) if chosen else np.array([], np.int64)
     zone_ids = np.unique(np.concatenate([prop.zone[e] for e in chosen])) if chosen else np.array([], np.int64)
     all_ids = np.unique(np.concatenate([pool_ids, zone_ids]))

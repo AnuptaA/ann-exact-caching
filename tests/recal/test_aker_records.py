@@ -36,7 +36,9 @@ class FakeAker:
         return True, 1e-6
 
     def status(self):
-        return "Total: 1.0 MB"
+        n = len(self.cache)
+        pool_mb = self.inserted * (48 + 4 * 3) / 1e6
+        return f"  Total entries: {n}\n  Physical entries: {n}\n    Pool: {pool_mb:.6f} MB\n"
 
     def close(self):
         pass
@@ -71,7 +73,8 @@ def test_baseline_records_match_the_quality_log(monkeypatch):
     # the fake returns ids + 1 shifted back by the driver; store ids as given
     stream = rng.integers(0, 20, 400)
     args = argparse.Namespace(k=5, delta=2, budget=0.2, risk=0.1, alpha_tighten=0.25, alpha_loosen=1.1,
-                              warmup=100, batch=100, progress=10**9, max_requests=None)
+                              warmup=100, batch=100, progress=10**9, max_requests=None,
+                              equal_bytes=False, coord_bytes=4.0, pool_scale=1.0)
     db = np.zeros((50, 3), np.float32)
     q = np.zeros((20, 3), np.float32)
     records = rec.Records()
@@ -139,3 +142,22 @@ def test_sim_record_batch_marks_mini_hits_and_misses():
     assert list(cols["index"]) == [10, 11, 12]
     assert list(cols["path"]) == [rec.MINI, rec.MAIN, rec.MISS]
     assert np.allclose(cols["recall"], [1.0, 0.8, 0.9]) and cols["rereads"].sum() == 0
+
+
+def test_equal_bytes_mode_reports_bytes_and_within_m(monkeypatch):
+    mod = load_driver()
+    monkeypatch.setattr(mod, "Aker", FakeAker)
+    rng = np.random.default_rng(1)
+    rows = np.stack([rng.permutation(50)[:10] for _ in range(20)]).astype(np.int64)
+    stream = rng.integers(0, 20, 300)
+    args = argparse.Namespace(k=5, delta=0, budget=0.5, risk=0.1, alpha_tighten=0.25, alpha_loosen=1.1,
+                              warmup=50, batch=100, progress=10**9, max_requests=None,
+                              equal_bytes=True, coord_bytes=1.0, pool_scale=1.0)
+    db = np.zeros((50, 3), np.float32)
+    q = np.zeros((20, 3), np.float32)
+    res = mod.run_quality(args, db, q, FakeWorld(rows), stream)
+    from recal import accounting
+    M = accounting.budget_bytes(50, 3, 0.5, 1.0)
+    assert res["M"] == M and res["pool_slots"] == mod.pool_size(args, db)
+    assert res["bytes"]["total"] > 0 and res["within_M"] == (res["bytes"]["total"] <= M)
+    assert res["bytes"]["neighbor_pool"] >= 0 and "pool_vectors" in res["bytes"]

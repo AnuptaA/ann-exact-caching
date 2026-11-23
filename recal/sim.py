@@ -65,8 +65,8 @@ def run(args, records: Records | None = None) -> dict:
     d, K = db.shape[1], args.k
     history_len = history_mode.history_length(len(idx), args.history_frac)
     backend = make_backend(args.backend, db, q, top, idx, args)
-    M = accounting.budget_bytes(len(db), d, args.budget)
-    params = Params(K=K, seed=args.seed, split_by_query=args.split_by_query, idealized=args.idealized,
+    M = accounting.budget_bytes(len(db), d, args.budget, args.coord_bytes)
+    params = Params(K=K, coord_bytes=args.coord_bytes, seed=args.seed, split_by_query=args.split_by_query, idealized=args.idealized,
                     cold_start=args.cold_start, H=args.history, min_ess=args.min_ess)
     work = tempfile.mkdtemp(prefix="recal_sim_")
     system = ReCal(backend, params, M, work)
@@ -141,6 +141,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--stream", default="random")
     ap.add_argument("--budget", type=float, default=0.05, help="M as a fraction of the dataset's stored bytes")
     ap.add_argument("--k", type=int, default=10)
+    ap.add_argument("--coord-bytes", type=float, default=4.0,
+                    help="bytes per coordinate of the stored vectors (SPACEV: 1); M and the cache charge use it")
     ap.add_argument("--backend", choices=["exact", "stored", "file"], default="stored")
     ap.add_argument("--backend-file", default=None)
     ap.add_argument("--backend-target", default="0.95")

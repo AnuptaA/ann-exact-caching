@@ -42,6 +42,7 @@ class Params:
     split_by_query: bool = False    # option: all occurrences of a query in one role
     idealized: bool = False         # exact labels and candidates from all entries (no m cap)
     seed: int = 0
+    coord_bytes: float = 4.0        # bytes charged per vector coordinate (stored precision)
     item_bytes: int = 8             # window item: bin, recall count, weight code, request index
 
     @property

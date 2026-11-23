@@ -243,11 +243,21 @@ class World:
         return ids[ins], ids[~ins]
 
 
+def pool_size(args, db) -> int:
+    """Pool slots: --budget x N, or with --equal-bytes the pool that keeps Aker's bytes within M."""
+    if not args.equal_bytes:
+        return int(args.budget * len(db))
+    from recal import accounting
+    M = accounting.budget_bytes(len(db), db.shape[1], args.budget, args.coord_bytes)
+    pool = accounting.aker_pool_for_budget(M, db.shape[1], args.k + args.delta, args.coord_bytes)
+    return max(1, int(pool * args.pool_scale))
+
+
 def run_quality(args, db, q, world, stream, records=None):
     """Replay the stream against World (truth, backend answers, data changes)."""
     k, delta = args.k, args.delta
     n_neigh = k + delta
-    pool = int(args.budget * len(db))
+    pool = pool_size(args, db)
     ak = Aker(q.shape[1], pool, k, delta, args.risk, args.alpha_tighten, args.alpha_loosen)
     changing = world.ev is not None
     KIND = {1: "exact", 2: "approx", 4: "linked"}
@@ -259,7 +269,16 @@ def run_quality(args, db, q, world, stream, records=None):
             c[name], c["ret_" + name] = 0, 0.0
         return c
 
+    def measure_bytes():
+        if args.equal_bytes:
+            from recal import accounting
+            used = accounting.aker_bytes_from_status(ak.status(), db.shape[1], args.coord_bytes)
+            if used["total"] >= peak["total"]:
+                peak.clear()
+                peak.update(used)
+
     def flush(t):
+        measure_bytes()
         log.append({"t": t, "n": cur["n"], "served": cur["served"],
                     "served_retention_sum": cur["ret"],
                     "served_retention_backend_sum": cur["ret_b"],
@@ -268,6 +287,7 @@ def run_quality(args, db, q, world, stream, records=None):
                     **{f"retention_sum_{nm}": cur["ret_" + nm] for nm in KIND.values()}})
 
     log, cur = [], fresh()
+    peak = {"total": 0.0}
     lat = {"lookup_hit": [], "lookup_miss": [], "link": [], "insert": [], "write": [],
            "delete": [], "process": []}
     stats = {"miss": 0, "hit_exact": 0, "hit_approx": 0, "hit_linked": 0, "invalid": 0,
@@ -337,6 +357,7 @@ def run_quality(args, db, q, world, stream, records=None):
                 cur = fresh()
     if cur["n"]:
         flush(n_req)
+    measure_bytes()
     status = ak.status()
     ak.close()
     n = sum(b["n"] for b in log)
@@ -355,7 +376,13 @@ def run_quality(args, db, q, world, stream, records=None):
             "queries": n, "seconds": time.time() - t_start,
             "mean_ms": {k_: float(np.mean(v) * 1e3) if v else None for k_, v in lat.items()},
             "stats": stats}
-    return {"args": vars(args), "log": log, "summary": summ, "status": status}
+    out = {"args": vars(args), "log": log, "summary": summ, "status": status, "pool_slots": pool}
+    if args.equal_bytes:
+        from recal import accounting
+        M = accounting.budget_bytes(len(db), db.shape[1], args.budget, args.coord_bytes)
+        out.update({"bytes": {k_: float(v) for k_, v in peak.items()}, "M": M,
+                    "within_M": bool(peak["total"] <= M)})
+    return out
 
 
 def run_timing(args, db, q, top, stream):
@@ -371,7 +398,7 @@ def run_timing(args, db, q, top, stream):
     guard.start()
     k, delta = args.k, args.delta
     n_neigh = k + delta
-    pool = int(args.budget * len(db))
+    pool = pool_size(args, db)
     ak = Aker(q.shape[1], pool, k, delta, args.risk, args.alpha_tighten, args.alpha_loosen)
     for i in range(args.warmup):
         qi = int(stream[i])
@@ -467,6 +494,13 @@ def main():
     ap.add_argument("--alpha-loosen", type=float, default=1.1)
     ap.add_argument("--warmup", type=int, default=None,
                     help="warm-up requests (default: min(20000, a fifth of the full stream); 11-13: MedRAG-Zipf has 10k)")
+    ap.add_argument("--equal-bytes", action="store_true",
+                    help="--budget is a share of the dataset's stored bytes (--coord-bytes per coordinate); the "
+                         "pool is sized so Aker's bytes (library counts at stored precision) stay within it")
+    ap.add_argument("--coord-bytes", type=float, default=4.0,
+                    help="bytes per coordinate of the stored vectors (SPACEV: 1)")
+    ap.add_argument("--pool-scale", type=float, default=1.0,
+                    help="multiplier on the --equal-bytes pool (rerun with less when within_M is false)")
     ap.add_argument("--history-frac", type=float, default=0.0,
                     help="first fraction of the requests is the warm-up (sets --warmup); only the rest is scored")
     ap.add_argument("--batch", type=int, default=1000)

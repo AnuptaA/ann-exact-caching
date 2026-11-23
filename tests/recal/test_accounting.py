@@ -56,3 +56,36 @@ def test_pgvector_answer_table_adapter(tmp_path):
     stored = from_pgvector(data, queries, tmp_path)
     got, d = stored.search(queries[25], 10)
     assert got.tolist() == ids[25, :10].tolist()
+
+
+STATUS = "  Total entries: 40\n  Physical entries: 30\n    Entries: 0.003 MB\n    Pool: 0.100 MB\n"
+
+
+def test_aker_status_is_parsed_and_recharged_at_stored_precision():
+    s = accounting.parse_aker_status(STATUS)
+    assert s == {"total_entries": 40, "physical_entries": 30, "pool_mb": 0.1}
+    float_bytes = accounting.aker_bytes_from_status(STATUS, 100, 4)
+    int8_bytes = accounting.aker_bytes_from_status(STATUS, 100, 1)
+    assert float_bytes["pool_vectors"] == int8_bytes["pool_vectors"] == 223
+    assert int8_bytes["neighbor_pool"] == 223 * (48 + 100)
+    assert int8_bytes["representatives"] == 30 * 100 and int8_bytes["total"] < float_bytes["total"]
+    with pytest.raises(ValueError):
+        accounting.parse_aker_status("nothing")
+
+
+def test_aker_pool_for_budget_fits_when_entries_hold_k_vectors():
+    d, k, M = 100, 10, 2.0e6
+    for coord in (1, 4):
+        pool = accounting.aker_pool_for_budget(M, d, k, coord)
+        entries = pool // k
+        used = (pool * (accounting.AKER_POOL_META_BYTES + coord * d)
+                + entries * (accounting.AKER_ENTRY_BYTES + coord * d + accounting.AKER_FILTER_LINK_BYTES))
+        assert used <= M and used > 0.98 * M
+
+
+def test_coord_bytes_changes_every_vector_charge():
+    one = accounting.aker_bytes(100, 10, 5, 0, 8, coord_bytes=1)
+    four = accounting.aker_bytes(100, 10, 5, 0, 8)
+    assert one["neighbor_pool"] == 100 * (8 + 8) and four["neighbor_pool"] == 100 * (32 + 8)
+    assert accounting.qvcache_bytes(10, 8, coord_bytes=1)["vectors"] == 10 * 16
+    assert accounting.prototype_bytes(10, 0, 2, 5.0, 8, coord_bytes=1)["vectors"] == 10 * 16

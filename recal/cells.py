@@ -30,15 +30,16 @@ SIM = "simulations/approximate_hits/online_sim.py"
 SIM_METHOD = {"prototype": "static", "aker": "aker", "qvcache": "qvcache"}
 
 
-def counters(method: str, log: dict, d: int, args: dict) -> dict:
+def counters(method: str, log: dict, d: int, args: dict, coord_bytes: float = 4) -> dict:
     cached, entries = log["cached"], log["entries"]
     if method == "aker":
-        return accounting.aker_bytes(cached, entries, args.get("k", 10), args.get("aker_reserve", 0), d)
+        return accounting.aker_bytes(cached, entries, args.get("k", 10), args.get("aker_reserve", 0), d,
+                                     coord_bytes=coord_bytes)
     if method == "qvcache":
-        return accounting.qvcache_bytes(cached, d)
+        return accounting.qvcache_bytes(cached, d, coord_bytes=coord_bytes)
     shell = max(0.0, (log["memory"] - cached) * 32.0 / args.get("bits", 4))
     return accounting.prototype_bytes(cached, int(shell), entries, max(cached / max(entries, 1), 1.0), d,
-                                      args.get("bits", 4))
+                                      args.get("bits", 4), coord_bytes=coord_bytes)
 
 
 def stream_length(a) -> int:
@@ -73,14 +74,14 @@ def next_fraction(fraction: float, used: float, M: float, lo: float | None, hi: 
 def run_baseline(method: str, a, attempts: int = 6) -> dict:
     db, *_ = sim.load_prep(Path(a.prep))
     d, n = db.shape[1], len(db)
-    M = accounting.budget_bytes(n, d, a.budget)
-    fraction = a.budget * 4 * d / (4 * d + 8 + 40)        # first guess: the per-vector charge plus a share of entries
+    M = accounting.budget_bytes(n, d, a.budget, a.coord_bytes)
+    fraction = a.budget * a.coord_bytes * d / (a.coord_bytes * d + 8 + 40)        # first guess: the per-vector charge plus a share of entries
     runs, best, lo, hi = [], None, None, None
     sim_name = SIM_METHOD[method]
     for attempt in range(attempts):
         path = run_simulator(method, a, fraction, f"{a.tag}_try{attempt}")
         res = json.loads(path.read_text())
-        used = counters(method, res["log"][-1], d, res.get("args", {}))
+        used = counters(method, res["log"][-1], d, res.get("args", {}), a.coord_bytes)
         runs.append({"vector_fraction": fraction, "total_bytes": used["total"]})
         if used["total"] <= M:
             lo = fraction if lo is None else max(lo, fraction)
