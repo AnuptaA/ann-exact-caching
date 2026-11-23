@@ -5,14 +5,15 @@ M is a percentage of the dataset's stored bytes. ReCal charges its own structure
 simulators count the budget in vectors; here the pool is chosen so that the system's bytes by structure
 (recal.accounting) stay within M: a run is repeated with a rescaled pool when it used more than M.
 
-  python -m recal.cells --method recal|prototype|aker|aker_sim|qvcache|proximity --prep <prep> --stream random \\
+  python -m recal.cells --method recal|prototype|aker|aker_sim|qvcache|qvcache_sim|proximity --prep <prep> --stream random \\
       --budget 0.05 --out <dir>
 
-aker and proximity run the real vendored Aker library (aker_real/eval_aker_real.py, paper settings, pool sized
-to M from the library's own counts); proximity takes --prox-percentile of the history's pairwise squared
-distances (0.1 and 1). aker_sim, prototype and qvcache are the simulators of
-simulations/approximate_hits/online_baselines.py (QVCache: D 0.075, alpha 0.9, 4 mini-indexes). The real library
-needs the Linux build (needs cluster check): without libakershim.so the cell stops and says so.
+aker and proximity run the real vendored Aker library (aker_real/eval_aker_real.py, paper settings, pool capacity
+calibrated on the history so a full cache costs M); proximity takes --prox-percentile of the history's pairwise
+squared distances (0.1 and 1). qvcache runs the authors' artifact (recal/qvcache_driver.py, capacity set so a full
+cache costs M). aker_sim, qvcache_sim and prototype are the simulators of
+simulations/approximate_hits/online_baselines.py, kept as cross-checks. The real libraries need the Linux build
+(needs cluster check): without them the cell stops and says so.
 """
 
 import os
@@ -29,7 +30,7 @@ from recal.measure.jobs_util import register_args, stamp_result
 from recal.records import Records
 
 SIM = "simulations/approximate_hits/online_sim.py"
-SIM_METHOD = {"prototype": "static", "aker_sim": "aker", "qvcache": "qvcache"}
+SIM_METHOD = {"prototype": "static", "aker_sim": "aker", "qvcache_sim": "qvcache"}
 REAL_DRIVER = "simulations/approximate_hits/aker_real/eval_aker_real.py"
 REAL_METHODS = ("aker", "proximity")
 REAL_SHIM = Path("simulations/approximate_hits/aker_real/libakershim.so")
@@ -41,7 +42,7 @@ def counters(method: str, log: dict, d: int, args: dict, coord_bytes: float = 4)
     if method in ("aker", "aker_sim"):
         return accounting.aker_bytes(cached, entries, args.get("k", 10), args.get("aker_reserve", 0), d,
                                      coord_bytes=coord_bytes)
-    if method == "qvcache":
+    if method in ("qvcache", "qvcache_sim"):
         return accounting.qvcache_bytes(cached, d, coord_bytes=coord_bytes)
     shell = max(0.0, (log["memory"] - cached) * 32.0 / args.get("bits", 4))
     return accounting.prototype_bytes(cached, int(shell), entries, max(cached / max(entries, 1), 1.0), d,
@@ -153,10 +154,14 @@ def run_real_aker(a, attempts: int = 3) -> dict:
 
 def main() -> None:
     ap = sim.parser()
-    ap.add_argument("--method", choices=["recal", "prototype", "aker", "aker_sim", "qvcache", "proximity"],
+    ap.add_argument("--method", choices=["recal", "prototype", "aker", "aker_sim", "qvcache", "qvcache_sim", "proximity"],
                     required=True)
     ap.add_argument("--prox-percentile", type=float, default=0.1,
                     help="Proximity: threshold at this percentile of squared distances between history queries")
+    ap.add_argument("--deviation-factor", type=float, default=None,
+                    help="QVCache deviation factor (default: the paper's, 0.25 for SPACEV and 0.075 otherwise)")
+    ap.add_argument("--pca-points", type=int, default=10_000_000, help="QVCache: base points in its PCA training file")
+    ap.add_argument("--qvcache-threads", type=int, default=None, help="QVCache build, search and insert threads")
     ap.add_argument("--ann-python", default=".venv-ann/bin/python", help="interpreter of the real-library driver")
     a = ap.parse_args()
     register_args(a)
@@ -166,6 +171,11 @@ def main() -> None:
         records = Records()
         result = sim.run(a, records)
         records.save(out / f"recal{a.tag}_records.npz")
+    elif a.method == "qvcache":
+        from recal import qvcache_driver
+        out.mkdir(parents=True, exist_ok=True)
+        result, records = qvcache_driver.run_cell(a, out)
+        records.save(out / f"qvcache{a.tag}_records.npz")
     elif a.method in REAL_METHODS:
         out.mkdir(parents=True, exist_ok=True)
         result = run_real_aker(a)

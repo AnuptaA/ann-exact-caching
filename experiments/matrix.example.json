@@ -392,8 +392,7 @@
    "recal",
    "aker",
    "proximity-a",
-   "proximity-b",
-   "qvcache"
+   "proximity-b"
   ],
   "update_prep_dir": "results/updates/preps"
  }

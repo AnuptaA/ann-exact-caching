@@ -9,6 +9,8 @@
 #   venvs       .venv-core (Python 3.11) and .venv-ann from envs/ (diskannpy in .venv-ann)
 #   core        builds the ReCal core and the cache core
 #   aker        the vendored Aker library, standard and Proximity modes, against the pinned Boost and FAISS
+#   qvcache     the authors' QVCache artifact (pinned commit in harness/deploy/pins.env), built natively against
+#               the .venv-ann interpreter so DiskANN and pgvector stay in the same process (no extra hop)
 #   links       points datasets/{aker,medrag,tripclick} and simulations/approximate_hits/results at the data volume
 #   data        scripts/fetch_data.sh --all (skipped with --no-data)
 #   smoke       tests, matrix dry run, a small ReCal cell with every ablation, library and backend checks
@@ -103,6 +105,27 @@ step_aker() {
     TP="$TP" AKER_SRC=vendored run sh "$root/simulations/approximate_hits/aker_real/build.sh"
 }
 
+step_qvcache() {
+    # shellcheck source=../harness/deploy/pins.env
+    . "$root/harness/deploy/pins.env"
+    run apt-get install -y -qq libaio-dev libgoogle-perftools-dev libunwind-dev libboost-program-options-dev \
+        libmkl-full-dev libcpprest-dev libeigen3-dev libspdlog-dev libnuma-dev libtbb-dev
+    local src="$TP/qvcache"
+    if [ ! -d "$src/.git" ]; then
+        run mkdir -p "$TP"
+        run git init -q "$src"
+        run git -C "$src" remote add origin "$QVCACHE_REPO"
+    fi
+    run git -C "$src" fetch -q --depth 1 origin "$QVCACHE_COMMIT"
+    run git -C "$src" checkout -q "$QVCACHE_COMMIT"
+    run "$root/.venv-ann/bin/pip" install --quiet pybind11 numpy
+    run cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$root/.venv-ann/bin/python"
+    run cmake --build "$src/build" -j "$(nproc 2>/dev/null || echo 8)"
+    # make the binding importable from .venv-ann
+    run bash -c "d=\$(dirname \$(find '$src/build' -name 'qvcache*.so' | head -n1)) && \
+        echo \$d > \$('$root/.venv-ann/bin/python' -c 'import site; print(site.getsitepackages()[0])')/qvcache.pth"
+}
+
 step_links() {
     local rel
     for rel in datasets/aker datasets/medrag datasets/tripclick; do
@@ -128,7 +151,7 @@ step_smoke() {
 
 summary=()
 failed=0
-for name in preconditions base limits venvs core aker links data smoke; do
+for name in preconditions base limits venvs core aker qvcache links data smoke; do
     if ! selected "$name"; then summary+=("$name: NOT RUN"); continue; fi
     log "step $name"
     if (cd "$root" && "step_$name"); then summary+=("$name: PASS"); else summary+=("$name: FAIL"); failed=1; fi

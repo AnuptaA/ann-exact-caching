@@ -94,7 +94,6 @@ UPDATE_SYSTEMS = {
     "aker": ("aker", "aker", "", False),
     "proximity-a": ("proximity", "proximity_p0.1", "--prox-percentile 0.1 --tag _p0.1", False),
     "proximity-b": ("proximity", "proximity_p1", "--prox-percentile 1 --tag _p1", False),
-    "qvcache": ("qvcache", "qvcache", "", True),
 }
 
 
@@ -106,7 +105,7 @@ def update_lines(w: dict, name: str, q4: dict, seeds) -> list[str]:
     """Data-update cells, one independent job per (workload, mode, rate, system, seed).
 
     Job contract: each job reads its own prep folder (the schedule and its Aker-format files, written by
-    scripts/convert_streams.py updates --out) and, for the systems that search a live database (ReCal, QVCache),
+    scripts/convert_streams.py updates --out) and, for ReCal (which searches a live database),
     the DSN of its own PostgreSQL clone in $PG_CLONES/<job id>.dsn. Nothing is shared or mutated between jobs;
     results go to the job's own directory.
     """

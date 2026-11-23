@@ -8,7 +8,8 @@ from scripts import gen_matrix
 CONFIG = Path(__file__).resolve().parents[2] / "experiments" / "matrix.example.json"
 
 # the design: cells per experiment (2 seeds unless noted)
-DESIGN = {"q1": 1050, "q2": 128, "q3": 552, "q4": 320}
+# QVCache is left out of the update runs: the artifact has no update path (the paper routes updates to the backend)
+DESIGN = {"q1": 1050, "q2": 128, "q3": 552, "q4": 284}
 
 
 def cfg():
@@ -80,11 +81,11 @@ def test_q4_dimensions_and_the_update_job_contract():
     assert not [x for x in lines if "/q4/medrag/" in x and "updates" not in x]
     assert sum("--no-rebuild-signals" in x for x in lines) == 30
     updates = [x for x in lines if "/updates/" in x]
-    assert len(updates) == 180
+    assert len(updates) == 144
     live = [x for x in updates if "--backend pgvector" in x]
-    assert len(live) == 72 and all("--pg-dsn @$PG_CLONES/" in x for x in live)
+    assert len(live) == 36 and all("--pg-dsn @$PG_CLONES/" in x for x in live)
     ids = [x.split("/updates/")[1].split("/")[0] for x in updates]
-    assert len(set(ids)) == 180
+    assert len(set(ids)) == 144
     one = [x for x in live if "spacev-0.99_uniform1_recal_s0" in x][0]
     assert "$PG_CLONES/spacev-0.99_uniform1_recal_s0.dsn" in one and "results/updates/preps/spacev-0.99_uniform1" in one
     assert all("--budget 0.001 " in x for x in updates if "/medrag/" in x)
@@ -97,7 +98,7 @@ def test_q4_dimensions_and_the_update_job_contract():
 def test_cli_table_writes_files_manifest_and_counts(tmp_path, capsys):
     gen_matrix.main(["--config", str(CONFIG), "--table"])
     out = capsys.readouterr().out
-    assert "q1: 1050 cells = 25 (workload, budget) x 21 systems x 2 seeds" in out and "total: 2050 cells" in out
+    assert "q1: 1050 cells = 25 (workload, budget) x 21 systems x 2 seeds" in out and "total: 2014 cells" in out
     gen_matrix.main(["--config", str(CONFIG), "--out", str(tmp_path), "--only", "q2"])
     assert json.loads((tmp_path / "manifest.json").read_text())["counts"] == {"q2": 128}
     assert len((tmp_path / "q2.txt").read_text().splitlines()) == 128

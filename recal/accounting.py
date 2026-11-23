@@ -159,4 +159,46 @@ def capacity_for_budget(system: str, M: float, d: int, coord_bytes: float, **kwa
     """The capacity knob of a system so that its full capacity costs M (aker: objects per entry required)."""
     if system in ("aker", "proximity"):
         return aker_capacity_for_budget(M, d, coord_bytes, kwargs["objects_per_entry"])
+    if system == "qvcache":
+        return qvcache_capacity_for_budget(M, d, coord_bytes, kwargs["R"], kwargs["pca_dim"], kwargs["regions"],
+                                           kwargs.get("n_mini", 4))
     raise ValueError(f"no capacity rule for {system}")
+
+
+# QVCache (artifact qvcache-vldb26): float32 mini-indexes of FreshVamana graphs, a PCA projection and a table of
+# regional thresholds. Per cached point: the vector at stored precision, a 4-byte tag and the graph row of R
+# 4-byte neighbors. Per active region: its key and a double threshold. PCA: pca_dim x dim float32 plus the mean.
+QVCACHE_TAG_BYTES = 4
+QVCACHE_REGION_BYTES = 16
+
+
+def qvcache_unit_costs(d: int, coord_bytes: float, R: int) -> dict:
+    return {"per_point": coord_bytes * d + QVCACHE_TAG_BYTES + 4.0 * R, "per_region": QVCACHE_REGION_BYTES}
+
+
+def qvcache_fixed_bytes(d: int, pca_dim: int, regions: int) -> float:
+    return pca_dim * d * 4.0 + d * 4.0 + regions * QVCACHE_REGION_BYTES
+
+
+def qvcache_full_capacity_bytes(max_points: int, d: int, coord_bytes: float, R: int, pca_dim: int,
+                                regions: int) -> float:
+    return max_points * qvcache_unit_costs(d, coord_bytes, R)["per_point"] + qvcache_fixed_bytes(d, pca_dim, regions)
+
+
+def qvcache_capacity_for_budget(M: float, d: int, coord_bytes: float, R: int, pca_dim: int, regions: int,
+                                n_mini: int = 4) -> int:
+    """memory_index_max_points whose full cache costs M, given the active regions measured on the history.
+
+    The points are split evenly over the n_mini mini-indexes, so the result is a multiple of n_mini.
+    """
+    per_point = qvcache_unit_costs(d, coord_bytes, R)["per_point"]
+    points = int((M - qvcache_fixed_bytes(d, pca_dim, regions)) // per_point)
+    return max(n_mini, points // n_mini * n_mini)
+
+
+def qvcache_bytes_used(vectors: int, regions: int, d: int, coord_bytes: float, R: int, pca_dim: int) -> dict:
+    c = qvcache_unit_costs(d, coord_bytes, R)
+    out = {"vectors": vectors * coord_bytes * d, "tags": vectors * QVCACHE_TAG_BYTES, "graphs": vectors * 4.0 * R,
+           "pca": pca_dim * d * 4.0 + d * 4.0, "regions": regions * c["per_region"]}
+    out["total"] = sum(out.values())
+    return out

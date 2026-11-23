@@ -13,7 +13,7 @@ def dry(*args):
 
 def test_dry_run_lists_every_step_and_changes_nothing():
     out = dry("--no-data")
-    for step in ("base", "limits", "venvs", "core", "aker", "links", "smoke"):
+    for step in ("base", "limits", "venvs", "core", "aker", "qvcache", "links", "smoke"):
         assert f"{step}: PASS" in out
     assert "fs.aio-max-nr=1048576" in out and "setup_instance.sh" in out and "aker_real/build.sh" in out
     assert "mkdir -p /data/datasets/aker" in out and "links: PASS" in out
@@ -39,3 +39,11 @@ def test_smoke_cell_runs_and_reports_library_state(tmp_path):
     result = smoke_cells.run_cell(prep, tmp_path / "o", ["--no-mini-cache"])
     assert result["within_M"] and result["args"]["no_mini_cache"] and (tmp_path / "o" / "recal_records.npz").exists()
     assert set(smoke_cells.check_libraries()) == {"libakershim.so", "libakershim_prox.so", "diskannpy"}
+
+
+def test_qvcache_step_pins_the_artifact_commit_and_builds_against_the_ann_interpreter():
+    out = dry("--only", "qvcache")
+    pins = (ROOT / "harness/deploy/pins.env").read_text()
+    assert "QVCACHE_COMMIT=39731c6cfa428a8386441ffbc3c43a6bc00dc3f9" in pins and "qvcache/qvcache-vldb26" in pins
+    assert "git" in out and "checkout -q" in out and "-DPython3_EXECUTABLE=" in out and ".venv-ann/bin/python" in out
+    assert "qvcache: PASS" in out
