@@ -1,7 +1,7 @@
 """Byte accounting of every compared system against one budget M (percent of the dataset's stored bytes).
 
 Everything a system keeps in RAM to serve is charged: vectors at their stored precision, ids, graphs and
-indexes, entry metadata, models and its own caches. The formulas are nominal sizes, as in the spec (S9).
+indexes, entry metadata, models and its own caches. The formulas are nominal sizes.
 """
 
 ID_BYTES = 8
@@ -40,7 +40,7 @@ def qvcache_bytes(vectors: int, d: int, graph_degree: int = 0, regions: int = 0)
 
 
 def prototype_bytes(vectors: int, shell_samples: int, entries: int, k_mean: float, d: int, bits: int = 4) -> dict:
-    """The older prototype (online_sim.Cache): cached vectors, 4-bit shell samples, centers and id lists."""
+    """The earlier cache implementation (online_sim.Cache): cached vectors, 4-bit shell samples, centers and id lists."""
     out = {
         "vectors": vectors * (FLOAT_BYTES * d + ID_BYTES),
         "shell_samples": shell_samples * (bits * d / 8 + ID_BYTES),

@@ -1,5 +1,7 @@
 """Shared helpers for the SPHERE query investigation (read-only, no repo writes)."""
 
+import os
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -71,7 +73,6 @@ def relative_l2(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def scratch_dir() -> Path:
-    path = Path("/private/tmp/claude-501/-Users-anupta-Work-thesis/"
-                "5a04402a-0702-4832-8b75-01f7a8588141/scratchpad/p1")
+    path = Path(os.environ.get("SPHERE_SCRATCH", tempfile.gettempdir())) / "sphere_queries"
     path.mkdir(parents=True, exist_ok=True)
     return path

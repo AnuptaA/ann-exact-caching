@@ -1,4 +1,4 @@
-"""Rebuild signals (R1 to R6). All counters count main-path requests only."""
+"""Rebuild signals. All counters count main-path requests only."""
 
 from collections import deque
 
@@ -37,22 +37,22 @@ class Signals:
                 self.base.append(score)
             self.recent.append(score)
         fired = self.fired(system, since)
-        if fired and since >= self.p.min_interval * self.p.H:        # R1
+        if fired and since >= self.p.min_interval * self.p.H:
             self.events.append({"t": system.t, "since": since, "signal": fired})
             system.rebuild_requested = fired
 
     def fired(self, system, since: int) -> str | None:
         p = self.p
-        if self.pool_at_build and system.core.n_data_slots() < p.shrink * self.pool_at_build:        # R2
+        if self.pool_at_build and system.core.n_data_slots() < p.shrink * self.pool_at_build:
             return "R2 shrinking pool"
         if self.updater is not None and self.updater.frozen >= p.frozen * max(system.core.n_data_slots(), 1):
-            return "R3 frozen inserts"                                                              # R3
-        if since >= p.H:                                                                            # R4
+            return "R3 frozen inserts"
+        if since >= p.H:
             return "R4 periodic refresh"
-        if self.score_drop(since):                                                                  # R5
+        if self.score_drop(since):
             return "R5 score drop"
         full = len(system.status.flags) >= system.status.span
-        if full and system.status.share() >= p.outage:                                              # R6
+        if full and system.status.share() >= p.outage:
             return "R6 outage"
         return None
 

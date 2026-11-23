@@ -1,6 +1,6 @@
 """Where text is embedded: the audited sites are the only ones, and released vectors are never re-embedded.
 
-harness/EMBEDDING_AUDIT.md lists every site. A new one must be added there and here.
+harness/EMBEDDING_SITES.md lists every site. A new one must be added there and here.
 """
 
 import re
@@ -18,7 +18,7 @@ AUDITED_SITES = {
     "workloads/q1/datasets/triviaqa.py",
     "workloads/q1/datasets/triviaqa_evidence.py",
     "datasets/esci/build_embedding_subsample.py",
-    # advisor's scripts: not run in this repository's pipeline, their vectors are obtained precomputed
+    # not run in this repository's pipeline: their vectors are obtained precomputed
     "datasets/tripclick/build_workload.py",
     "datasets/reembed_triviaqa_queries.py",
 }

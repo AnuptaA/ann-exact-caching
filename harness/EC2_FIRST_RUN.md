@@ -1,6 +1,6 @@
 # First 30 minutes on EC2
 
-Run from a clean checkout of the audited commit. Do not edit anything on the instance. Stop at the first failed check.
+Run from a clean checkout of a pinned commit. Do not edit anything on the instance. Stop at the first failed check.
 
 ## 0. Before anything (2 min)
 

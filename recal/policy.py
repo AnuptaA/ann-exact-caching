@@ -1,7 +1,7 @@
-"""Hit policy (H1 to H11): inverse-probability-weighted labels, a normal lower bound and the lambda search.
+"""Hit policy: inverse-probability-weighted labels, a normal lower bound and the lambda search.
 
 Items of the calibration window are (score bin, recall, weight) over the labeled queries of the last W
-main-path requests. Running sums per score bin make a recalibration one pass over the bins (H7).
+main-path requests. Running sums per score bin make a recalibration one pass over the bins.
 """
 
 from collections import deque
@@ -12,7 +12,7 @@ import numpy as np
 
 
 def logistic_model(F: np.ndarray, y: np.ndarray) -> dict:
-    """Logistic regression on three standardized features with the recall as a soft label (Q6)."""
+    """Logistic regression on three standardized features with the recall as a soft label."""
     from sklearn.linear_model import LogisticRegression
     mean, scale = F.mean(axis=0), F.std(axis=0) + 1e-9
     Z = (F - mean) / scale
@@ -93,12 +93,12 @@ class CalibrationWindow:
         return len(self.items)
 
     def audited_recall(self) -> tuple[float, int]:
-        """Mean recall of the audited hits (weight above 1) in the window, for the H11 report."""
+        """Mean recall of the audited hits (weight above 1) in the window, for the status report."""
         ys = [y for _, _, y, w in self.items if w > 1.0]
         return (float(np.mean(ys)) if ys else float("nan")), len(ys)
 
     def certify(self) -> Certified:
-        """Strictest threshold first; skip low-ESS thresholds, stop at the first failure (H4, H5)."""
+        """Strictest threshold first; skip low-ESS thresholds, stop at the first failure."""
         # suffix sums over bins nb-1 .. 0 (slot b+1): items scoring at or above edge b
         suffix = np.cumsum(self.sums[:, :0:-1], axis=1)   # column t: bin nb-1-t and above
         W, S1, S2, SW2 = suffix
@@ -121,7 +121,7 @@ class CalibrationWindow:
 
 
 class Status:
-    """H10: why lambda is undefined, the share of the last 0.2H main-path requests with lambda undefined."""
+    """Why lambda is undefined, the share of the last 0.2H main-path requests with lambda undefined."""
 
     def __init__(self, span: int):
         self.span = span

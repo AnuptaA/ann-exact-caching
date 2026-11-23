@@ -1,4 +1,4 @@
-"""ReCal parameters (spec section P). Defaults are the spec's."""
+"""ReCal parameters and their defaults."""
 
 from dataclasses import dataclass
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Params:
     K: int = 10                     # neighbors per request (nominal, used for sizing)
-    k_max: int = 100                # largest K the cache answers (Q1 step 1)
+    k_max: int = 100                # largest K the cache answers (serving order, first step)
     T: float = 0.9                  # recall target
     delta: float = 0.05             # 1 - delta is the confidence
     a: float = 0.1                  # audit rate
@@ -39,7 +39,7 @@ class Params:
     drop_from: float = 0.4          # of H
     drop_se: float = 3.0
     outage: float = 0.9
-    split_by_query: bool = False    # B5 option: all occurrences of a query in one role
+    split_by_query: bool = False    # option: all occurrences of a query in one role
     idealized: bool = False         # exact labels and candidates from all entries (no m cap)
     seed: int = 0
     item_bytes: int = 8             # window item: bin, recall count, weight code, request index

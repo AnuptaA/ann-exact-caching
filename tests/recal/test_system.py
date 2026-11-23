@@ -43,7 +43,7 @@ def test_cold_start_construction_and_logs(world):
         r = system.serve(q, 5)
         assert len(r.ids) == 5 and np.all(np.diff(r.dists) >= -1e-6)
     assert system.constructions == 1 and system.built.n_entries > 0
-    # Q2: mini cache hits are in the hash log but not in the history
+    # mini cache hits are in the hash log but not in the history
     assert system.log.hash_count == system.requests == 2500
     assert system.log.count == system.t == system.requests - system.counts["mini_hits"]
     assert system.counts["mini_hits"] > 0

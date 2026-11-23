@@ -1,7 +1,7 @@
 """A backend that serves stored answers: exact top-R tables, DiskANN answer rows or a pgvector answer table.
 
 The answer of a request is looked up by the hash of its query vector. The ids come from the stored table,
-the distances are recomputed from the database vectors, so every path returns ranked ids with distances (X1).
+the distances are recomputed from the database vectors, so every path returns ranked ids with distances.
 """
 
 import numpy as np

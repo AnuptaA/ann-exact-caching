@@ -1,7 +1,7 @@
 """CPU time estimates for the compute stages, shown in notices and in preflight.
 
 Rates were measured on one machine (8-core Apple laptop, numpy with Accelerate and torch 2.15,
-2026-11-10, see harness/EMBEDDING_AUDIT.md section 6) on small samples. A server CPU with OpenBLAS
+2026-11-10, see harness/EMBEDDING_SITES.md section 5) on small samples. A server CPU with OpenBLAS
 and more cores will usually scale better, so on such a machine these estimates are conservative.
 Treat every estimate as an order of magnitude.
 """

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ReCal as a method of the experiment harness: one cell over a prepared workload.
 
-Reads a prep folder of the advisor's pipeline (results/online/<prep>: meta.json, top500.npy, streams.npz, q.npy),
+Reads a prep folder written by online_prepare.py (results/online/<prep>: meta.json, top500.npy, streams.npz, q.npy),
 runs ReCal over a stream with a backend, and writes <out>/recal<tag>.json in the shape of online_sim's results
 (method, args, log per batch, events, cost) plus bytes by structure, background work by kind and, with
 --timing, the recorded decisions and cache-path times per request (for the throughput replay).

@@ -7,7 +7,7 @@ Setup used (scratch venv with torch, transformers, pyarrow; the repo venv has no
 
     export W=<scratch dir>
     export PY=<scratch venv>/bin/python
-    export PYTHONPATH=.:/Users/anupta/Work/thesis
+    export PYTHONPATH=.:<repo root>
 
 Data sources (HF datasets): sjoon-oh/aker (sphere-10m.npy, spacev-10m.npy,
 triviaqa-sim-100k-*.npy, spacev-sim-100k-*.npy, triviaqa.txt) and mohdumar/SPHERE_100K

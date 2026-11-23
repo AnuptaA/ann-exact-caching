@@ -56,7 +56,7 @@ def test_score_drop_fires_and_respects_min_interval():
     drop = rng.normal(0.4, 0.05, size=300)
     fired = run(sig, system, np.r_[first, drop])
     assert fired == "R5 score drop"
-    assert system.t >= p.min_interval * p.H        # R1: never before 0.2H
+    assert system.t >= p.min_interval * p.H        # never before 0.2H
     assert system.t >= max(int(p.drop_from * p.H), 2 * sig.window)
 
 

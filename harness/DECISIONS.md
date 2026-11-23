@@ -3,7 +3,7 @@
 Last updated with the EC2 preparation. Differences from the Aker paper and the library are in
 `harness/aker/DIFFERENCES.md`; local library patches are in `third_party/aker/PATCHES.md`.
 
-## Decided by the project owner
+## Fixed design choices
 - Aker `release` revision (e7639a5), C++ replay driver, squared L2 into Aker, plain Euclidean everywhere else.
 - Proximity = Aker's fixed-threshold mode at the 0.1% and 1% percentiles of inter-query distances
   (squared L2, distinct queries of the first 30K requests of each stream).
@@ -19,7 +19,7 @@ Last updated with the EC2 preparation. Differences from the Aker paper and the l
   (one workload; confirm on SIFT1M if desired). Changing L reruns only the `answer_table` and `backend_recall`
   stages and the cheap `q1-run-*` cells.
 
-## Decided during implementation (approved unless noted)
+## Decided during implementation
 - Drivers are built by `harness/cpp/CMakeLists.txt` (two static executables, Release, warnings off,
   `ak_sequence_gen` excluded). Pool slots hold real float32 vectors. Linking after an approximate hit is
   reproduced in standard mode (a library no-op in Proximity).
@@ -94,4 +94,4 @@ TriviaQA encoder, backend recall and latency at ef_search >= 200 on the real dat
   above 5% (20%: +4.4).
 - Reading: {1,2,5} x K is enough for entries; the shell depth is what sets L. R=200 captures the memory-fair
   gain of R=500 on this workload, so L = 200 looks sufficient; L = 500 buys nothing memory-fair. One workload and
-  one seed. Decision (owner, 2026-11-07): entries {1,2,5} x K and L = 200.
+  one seed. Chosen: entries {1,2,5} x K and L = 200.

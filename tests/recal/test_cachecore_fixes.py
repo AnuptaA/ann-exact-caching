@@ -1,4 +1,4 @@
-"""Regression tests for the M6 fixes in the advisor's cache core (cachecore.cpp)."""
+"""Regression tests for fixes in the cache core (cachecore.cpp)."""
 import numpy as np
 import pytest
 

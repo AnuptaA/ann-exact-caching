@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ReCal on ESCI 50K with an insert and delete stream (M3 acceptance).
+"""ReCal on ESCI 50K with an insert and delete stream.
 
 The database starts with 45,000 of the 50,000 subsample vectors; every --every requests a batch of the
 remaining vectors is inserted and a few cached vectors are deleted; once, a burst deletes a large share of

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One experiment cell for any compared system, at an equal byte budget M.
 
-M is a percentage of the dataset's stored bytes. ReCal charges its own structures (recal.sim). The advisor's
+M is a percentage of the dataset's stored bytes. ReCal charges its own structures (recal.sim). The earlier
 simulators count the budget in vectors; here the pool is chosen so that the system's bytes by structure
 (recal.accounting) stay within M: a run is repeated with a rescaled pool when it used more than M.
 

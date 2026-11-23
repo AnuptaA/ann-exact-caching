@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prep folder for the ESCI 50K subsample in the layout of the advisor's online_prepare.py (local checks).
+"""Prep folder for the ESCI 50K subsample in the layout of online_prepare.py (local checks).
 
 Writes results/online/<name>/{meta.json, top500.npy, streams.npz} for the queries used as a stationary random
 stream (distinct queries, no repeats) and a Zipf-like stream with repeats. Exact top-500 by the exact backend.

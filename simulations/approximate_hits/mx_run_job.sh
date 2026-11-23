@@ -19,7 +19,7 @@
 #    max(prior, 1.2 x largest finished peak, 1.1 x largest killed peak) (a killed run's peak is a
 #    lower bound on its need, not evidence of more: kills follow the machine being full; 1.6 x
 #    ratcheted estimates up under pressure);
-#  - freshness (M5): an existing JSON counts as done only if its config_hash matches the job line's resolved settings and the code commit
+#  - freshness: an existing JSON counts as done only if its config_hash matches the job line's resolved settings and the code commit
 #    (recal.measure.jobs_util check); a stale or unreadable JSON is moved to <json>.stale and the
 #    job reruns; results without a scheme 2 hash (resolved settings plus code commit) are stale
 #    (MX_TRUST_EXISTING=1: old existence-only check). The check, the skip list and same_running run inside the admission

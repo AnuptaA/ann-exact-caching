@@ -1,4 +1,4 @@
-"""The ReCal serving loop (Q1, Q2, H2, H9, H10): mini cache, main cache, audits, history and recalibration."""
+"""The ReCal serving loop: mini cache, main cache, audits, history and recalibration."""
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,7 +34,7 @@ class ReCal:
         self.rng = np.random.default_rng(params.seed)
         width = params.k_max
         self.log = HistoryLog(Path(workdir) / "log", backend.dim, params.H, width)
-        self.t = 0                      # main-path requests so far (R1)
+        self.t = 0                      # main-path requests so far
         self.requests = 0
         self.constructions = 0
         self.built: builder.Built | None = None
@@ -56,7 +56,7 @@ class ReCal:
         core.set_budget(self.M)
         core.finish_build()
         entry = 40.0 + 8.0 * self.p.K
-        core.mini_set_capacity(max(self.p.mini_floor, int(self.p.mini_cap * self.M // entry)))   # B3: at its cap
+        core.mini_set_capacity(max(self.p.mini_floor, int(self.p.mini_cap * self.M // entry)))   # at its cap until the first construction
         return core
 
     # ---- serving ---------------------------------------------------------------------------------
@@ -69,7 +69,7 @@ class ReCal:
         t0 = time.perf_counter()
         res = self.core.lookup(q, K, self.lam, m, True)
         cache_ms = (time.perf_counter() - t0) * 1e3
-        if res.path == MINI_HIT:                      # Q2: touches nothing else
+        if res.path == MINI_HIT:                      # a mini hit touches nothing else
             self.counts["mini_hits"] += 1
             return Response(res.ids, res.dists, "mini", path=res.path, cache_ms=cache_ms)
         if res.path == MISS_K_MAX:
@@ -115,7 +115,7 @@ class ReCal:
         return Response(res.ids, res.dists, "main", float(res.score), res.path, [("audit", K)], audited=True)
 
     def _label(self, score: float, y: float, weight: float) -> None:
-        """H2, H9: a labeled query enters the window and lambda is recomputed."""
+        """A labeled query enters the window and lambda is recomputed."""
         if self.window is None:
             return
         self.window.add(self.t, score, y, weight)
@@ -129,7 +129,7 @@ class ReCal:
             self.construct()
 
     def construct(self) -> builder.Built:
-        """B4 to B12: label, build, then swap everything at once."""
+        """Label, build, then swap everything at once."""
         snap = self.log.snapshot()
         labels = builder.fetch_labels(snap, self.log, self.backend, self.backend.version)
         old = self.built
@@ -138,7 +138,7 @@ class ReCal:
             self.t, None if old is None else old.centers, None if old is None else old.center_K,
             self.h0, self.log.hash_snapshot())
         built.info["labels"] = labels
-        # B12: the new core takes over the mini cache at the size R, then everything is swapped
+        # the new core takes over the mini cache at the size R, then everything is swapped
         built.core.mini_set_capacity(built.R)
         for h, ids, dists in self.core.mini_dump():
             built.core.mini_put_hash(h, ids, dists)
@@ -156,7 +156,7 @@ class ReCal:
     # ---- reports ---------------------------------------------------------------------------------
 
     def status_report(self) -> dict:
-        """H10, H11: lambda, why it is undefined, the audited recall of the window."""
+        """Lambda, why it is undefined, the audited recall of the window."""
         cert = self.certified
         report = self.status.report(self.lam, cert.n_labeled, cert.ess, self.p.min_ess)
         if self.window is not None:

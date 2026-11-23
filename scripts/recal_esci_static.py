@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Static check of one ReCal construction on ESCI 50K against the prototype's round 3 and 4 numbers.
+"""Static check of one ReCal construction on ESCI 50K against the earlier implementation's numbers.
 
 History of 30,000 distinct ESCI queries (roles 6,000 / 12,000 / 6,000 / 6,000), 10,000 test queries, K = 10,
 T = 0.9, exact backend. Prints entries, m, the initial lambda, the hit rate and the recall of the hits on the
-test queries, and the bytes. Prototype (phase 17, A2): hit rate 8.0 / 14.4 / 20.0 percent at 1 / 5 / 10 percent,
+test queries, and the bytes. Earlier implementation: hit rate 8.0 / 14.4 / 20.0 percent at 1 / 5 / 10 percent,
 m 27 / 83 / 116, entries 59 / 242 / 421.
 
   PYTHONPATH=. .venv-core/bin/python scripts/recal_esci_static.py --budgets 0.01 0.05 0.1

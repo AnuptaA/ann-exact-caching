@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds the ReCal core extension (_recal_core*.so, next to this script) for .venv-core (Python 3.11).
 #   sh recal/core/build.sh
-# Reuses the vendored hnswlib headers of the advisor's cache core (not modified).
+# Reuses the vendored hnswlib headers of simulations/approximate_hits/cachecore (not modified).
 set -e
 cd "$(dirname "$0")"
 PY=${PY:-../../.venv-core/bin/python}

@@ -7,5 +7,5 @@
 | `prep.txt` | `.venv` | dataset preparation, embeddings, offline evaluations, plots |
 | `harness.txt` | Q1 venv | `harness/` and `workloads/q1/` (see `requirements-q1.lock` for hashes) |
 
-Only the versions recorded by the advisor (core, ann) are pinned; the rest are unpinned because none were recorded.
+Only the core and ann versions are pinned; the rest are unpinned because no versions were recorded.
 Create one with `python3.11 -m venv .venv-core && .venv-core/bin/pip install -r envs/core.txt`.

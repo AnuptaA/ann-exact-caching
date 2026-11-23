@@ -1,8 +1,8 @@
-"""History log and hash log on disk (B1, B2).
+"""History log and hash log on disk.
 
 The history holds the last H main-path requests: query vector, K, kind and the backend's response when it
 has one. The hash log holds the 64-bit hash of every request, mini cache hits included, for the last H
-requests. Both are ring buffers in memory-mapped files, so they cost no RAM against the budget (S10).
+requests. Both are ring buffers in memory-mapped files, so they cost no RAM against the budget.
 """
 
 from pathlib import Path

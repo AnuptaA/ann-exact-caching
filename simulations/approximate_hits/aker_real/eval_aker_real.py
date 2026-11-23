@@ -5,7 +5,7 @@ Run the REAL Aker (github.com/sjoon-oh/aker, libaker.so built unmodified, via
 aker_shim.cc) on our workloads. Run with .venv-ann and the LD_LIBRARY_PATH
 printed by build.sh.
 
-Request loop, as in the authors' integration: for each request of the trace,
+Request loop, as in the Aker authors' driver: for each request of the trace,
 look the query up in Aker; on an exact or approximate hit the answer is the
 first k cached neighbors (an approximate hit also links the query to its
 representative); on a miss the backend answers, and the answer is inserted.
@@ -320,7 +320,7 @@ def run_quality(args, db, q, world, stream):
                 lat["lookup_miss"].append(t_look)
                 lat["insert"].append(t_ins)
         if changing:
-            # write-log slow path, called after each request as in the authors' integration
+            # write-log slow path, called after each request as in the Aker authors' driver
             tp = ak.process()
             if measure:
                 lat["process"].append(tp)

@@ -1,8 +1,8 @@
-// ReCal storage and serving core (spec v10: S1-S5, S7-S9, Q1-Q6, X1).
+// ReCal storage and serving core.
 //
 // Data pool (full-precision vectors, ids, list counts), shell pool (4-bit codes, no ids), reverse map,
 // entries (center, K, j, response list, radius, shell list), an HNSW over the entry centers built once per
-// construction, a hash-keyed LRU mini cache, the serving order of Q1 and byte accounting per structure.
+// construction, a hash-keyed LRU mini cache, the serving order and byte accounting per structure.
 // Construction logic, training and the hit policy live in Python (recal/).
 //
 // Build: sh recal/core/build.sh
@@ -51,7 +51,7 @@ uint64_t mix64(uint64_t x) {
     return x;
 }
 
-// 64-bit hash of the vector's bytes (word-wise mix; collisions are ignored as in the spec)
+// 64-bit hash of the vector's bytes (word-wise mix; collisions are ignored)
 uint64_t hash_bytes(const float* v, size_t d) {
     const unsigned char* p = reinterpret_cast<const unsigned char*>(v);
     size_t n = d * sizeof(float);
@@ -210,7 +210,7 @@ class Core {
         return (int)entries_.size() - 1;
     }
 
-    // B10: the shell keeps the listed vectors that are not in the data pool, quantized, shared by id
+    // the shell keeps the listed vectors that are not in the data pool, quantized, shared by id
     int add_shell(int entry, py::array_t<int64_t, py::array::c_style | py::array::forcecast> ids,
                   py::array_t<float, py::array::c_style | py::array::forcecast> vecs) {
         if (entry < 0 || entry >= (int)entries_.size()) throw std::out_of_range("entry");
@@ -316,7 +316,7 @@ class Core {
         return py::make_tuple(feat, ids, dists);
     }
 
-    // Q3: entries a query must read (nearest center first) to find every true neighbor the pool holds;
+    // entries a query must read (nearest center first) to find every true neighbor the pool holds;
     // -1 when none of its neighbors is in the pool
     std::vector<int> entries_needed_batch(py::array_t<float, py::array::c_style | py::array::forcecast> Q,
                                           py::array_t<int64_t, py::array::c_style | py::array::forcecast> truth) {
@@ -442,9 +442,9 @@ class Core {
     size_t mini_size() const { return mini_lru_.size(); }
     size_t mini_capacity() const { return mini_capacity_; }
 
-    // ---- updates (U2 to U5) --------------------------------------------------------------------
+    // ---- updates --------------------------------------------------------------------
 
-    // U2: remove stale pointers and free the dead slots (called once 5% of the pool has been deleted)
+    // remove stale pointers and free the dead slots (called once 5% of the pool has been deleted)
     int sweep() {
         size_t n = data_id_.size();
         std::vector<int32_t> remap(n, -1);
@@ -494,7 +494,7 @@ class Core {
         return c;
     }
 
-    // U3 to U5: lazy batched inserts. Returns (admitted, frozen, ignored, headroom_left)
+    // lazy batched inserts. Returns (admitted, frozen, ignored, headroom_left)
     py::tuple insert_batch(py::array_t<int64_t, py::array::c_style | py::array::forcecast> ids,
                            py::array_t<float, py::array::c_style | py::array::forcecast> vecs,
                            double headroom_left, int rounds, int per_round) {
@@ -513,7 +513,7 @@ class Core {
                 ignored++;
                 continue;
             }
-            // lists that deletes shortened below their built length take the insert without displacement (U4);
+            // lists that deletes shortened below their built length take the insert without displacement;
             // the new vector still counts against the headroom
             std::vector<char> direct(joins.size());
             for (size_t i = 0; i < joins.size(); i++) direct[i] = live_len(entries_[joins[i]]) < entries_[joins[i]].built_len;
@@ -642,7 +642,7 @@ class Core {
     int n_data_slots() const { return (int)rev_.size(); }  // live slots
     int n_dead_slots() const { return (int)(data_id_.size() - rev_.size()); }
 
-    // U2: eager delete; the slot is marked dead and leaves the reverse map, list pointers stay
+    // eager delete; the slot is marked dead and leaves the reverse map, list pointers stay
     bool delete_id(int64_t id) {
         auto it = rev_.find(id);
         if (it == rev_.end()) return false;
@@ -695,7 +695,7 @@ class Core {
     std::vector<uint8_t> data_alive_;
     std::unordered_map<int64_t, int32_t> rev_;
     std::vector<uint8_t> shell_codes_;
-    std::unordered_map<int64_t, int32_t> shell_build_map_;  // transient (S10)
+    std::unordered_map<int64_t, int32_t> shell_build_map_;  // transient
     std::vector<Entry> entries_;
     std::unique_ptr<CenterSpace> space_;
     std::unique_ptr<hnswlib::HierarchicalNSW<float>> index_;
@@ -734,7 +734,7 @@ class Core {
         data_count_[slot]++;
     }
 
-    // U3: entries whose sphere holds v, found through the center index: per_round centers per round,
+    // entries whose sphere holds v, found through the center index: per_round centers per round,
     // up to `rounds` rounds, stopping after a round that adds no entry
     std::vector<int> containing_entries(const float* v, int rounds, int per_round) {
         std::vector<int> found;

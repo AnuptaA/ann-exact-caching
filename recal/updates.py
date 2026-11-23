@@ -1,4 +1,4 @@
-"""Data updates (U1 to U6): eager deletes with a sweep, lazy batched inserts with headroom and displacement.
+"""Data updates: eager deletes with a sweep, lazy batched inserts with headroom and displacement.
 
 Entries are never inserted or evicted individually. Shells and the mini cache are not touched.
 """
@@ -11,7 +11,7 @@ class Updater:
         self.s = system
         self.buffer_ids: list = []
         self.buffer_vecs: list = []
-        self.frozen = 0              # inserts refused since the last construction (R3)
+        self.frozen = 0              # inserts refused since the last construction
         self.admitted = 0
         self.ignored = 0
         self.base_bytes = 0.0        # structure bytes at the last construction
@@ -29,7 +29,7 @@ class Updater:
         grown = self._structure_bytes() - self.base_bytes
         return max(0.0, self.s.p.headroom * self.s.M - grown)
 
-    # ---- U2 --------------------------------------------------------------------------------------
+    # ---- updates --------------------------------------------------------------------------------------
 
     def delete(self, ids) -> int:
         """Delete from the database and from the cache (eager); sweep at 5% dead slots."""
@@ -42,7 +42,7 @@ class Updater:
             core.sweep()
         return hit
 
-    # ---- U3 to U5 --------------------------------------------------------------------------------
+    # ---- updates --------------------------------------------------------------------------------
 
     def insert(self, ids, vectors) -> None:
         """Buffer inserts into the database; process them in batches of max(100, 0.1% N)."""

@@ -1,4 +1,4 @@
-"""Construction of the main cache (B4 to B12): labels, roles, proposals, selection, shells, m, estimator, lambda."""
+"""Construction of the main cache: labels, roles, proposals, selection, shells, m, estimator, lambda."""
 
 from dataclasses import dataclass, field
 
@@ -13,7 +13,7 @@ MODEL_BYTES = 80.0
 EPS = 1e-9
 
 
-# ---- B4 labels --------------------------------------------------------------------------------------
+# ---- labels --------------------------------------------------------------------------------------
 
 def fetch_labels(snap: dict, log, backend, version: int, batch: int = 4096) -> dict:
     """Fetch the backend responses the history lacks; refetch all if any is older than the data version."""
@@ -34,7 +34,7 @@ def fetch_labels(snap: dict, log, backend, version: int, batch: int = 4096) -> d
     return {"fetched": fetched, "refetched_all": stale}
 
 
-# ---- B5 roles ---------------------------------------------------------------------------------------
+# ---- roles ---------------------------------------------------------------------------------------
 
 ROLE_NAMES = ("cand", "sel", "train", "cal")
 
@@ -63,7 +63,7 @@ def split_roles(n: int, fractions, rng, vectors: np.ndarray | None = None, by_qu
     return {name: np.array(sorted(v), dtype=np.int64) for name, v in out.items()}
 
 
-# ---- B6 proposals -----------------------------------------------------------------------------------
+# ---- proposals -----------------------------------------------------------------------------------
 
 @dataclass
 class Proposals:
@@ -108,10 +108,10 @@ def _first_of_each_center(centers: np.ndarray) -> np.ndarray:
     return np.array(keep, dtype=np.int64)
 
 
-# ---- B7, B8 selection -------------------------------------------------------------------------------
+# ---- selection -------------------------------------------------------------------------------
 
 def hits_from_hist(H: np.ndarray, levels: np.ndarray, T: float) -> np.ndarray:
-    """Longest prefix of the recall-ranked selection queries whose mean recall is at least T (B7).
+    """Longest prefix of the recall-ranked selection queries whose mean recall is at least T.
 
     H: (rows, n_levels) query counts per recall level, levels ascending. Returns hits per row."""
     Hd = H[:, ::-1].astype(np.float64)
@@ -133,7 +133,7 @@ def hits_from_hist(H: np.ndarray, levels: np.ndarray, T: float) -> np.ndarray:
 
 
 class Greedy:
-    """B8: add the entry that fits and gains the most hits per byte; ties go to more recall per byte.
+    """Add the entry that fits and gains the most hits per byte; ties go to more recall per byte.
 
     The selection queries' recall for a pool is the share of their true neighbors the pool holds (the K
     pooled vectors nearest to a query contain every true neighbor in the pool when the backend is exact).
@@ -276,7 +276,7 @@ class Greedy:
         return chosen, used
 
 
-# ---- B9 mini cache size -----------------------------------------------------------------------------
+# ---- mini cache size -----------------------------------------------------------------------------
 
 def mini_cache_size(hashes: np.ndarray, M: float, p) -> int:
     """R = 95th percentile of the reuse distances, at most 10% of M, at least 256 entries."""
@@ -312,7 +312,7 @@ class Built:
 def build(snap: dict, backend, p, M: float, rng, request: int, old_centers: np.ndarray | None = None,
           old_K: np.ndarray | None = None, h0_prev: float = 0.2, hashes: np.ndarray | None = None,
           passes: int = 3) -> Built:
-    """One construction from a labeled history snapshot (B5 to B11). The caller swaps the result in (B12).
+    """One construction from a labeled history snapshot. The caller swaps the result in.
 
     The window is charged to M by its size W, which depends on the hit rate h0 of the cache being built.
     The first pass uses the previous h0; when the true W makes the total exceed M, the build is repeated
@@ -335,13 +335,13 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
     vec, K, ids, dists = snap["vec"], snap["k"], snap["ids"], snap["dists"]
     rng = np.random.default_rng(seed)
     roles = split_roles(len(vec), p.roles, rng, vec, p.split_by_query)
-    # B9 mini cache size, then the byte budget of the main cache
+    # mini cache size, then the byte budget of the main cache
     R = mini_cache_size(hashes if hashes is not None else np.array([], np.uint64), M, p)
     w_est, _ = policy.window_size(p.H, p.a, max(h0_prev, 1e-3), p.window_items)
     fixed = (p.headroom * M + R * (40.0 + 8.0 * p.K) + w_est * p.item_bytes + 32.0 * (p.n_thresholds + 1)
              + MODEL_BYTES + 8.0 * d)
     budget = M - fixed
-    # B6 proposals: candidate queries plus the old centers (refetched by the search)
+    # proposals: candidate queries plus the old centers (refetched by the search)
     cand = roles["cand"]
     centers, Ks = vec[cand], K[cand]
     if old_centers is not None and len(old_centers):
@@ -350,11 +350,11 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
     if "prop" not in memo:
         memo["prop"] = propose(backend, centers, Ks, p)
     prop = memo["prop"]
-    # B7 selection queries: truth from the history labels
+    # selection queries: truth from the history labels
     sel = roles["sel"]
     greedy = Greedy(prop, ids[sel][:, :int(K.max())], K[sel], d, p)
     chosen, used = greedy.select(budget, prop.entry_cand)
-    # build the core: entries, then shells (B10), then the center index (B11)
+    # build the core: entries, then shells, then the center index
     core = Core(d, p.k_max)
     pool_ids = np.unique(np.concatenate([prop.resp[e] for e in chosen])) if chosen else np.array([], np.int64)
     zone_ids = np.unique(np.concatenate([prop.zone[e] for e in chosen])) if chosen else np.array([], np.int64)
@@ -375,7 +375,7 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
     core.finish_build(16, 200, 64, 100)
     sel_centers = prop.centers[prop.entry_cand[chosen]] if chosen else np.zeros((0, d), np.float32)
     sel_K = prop.K[prop.entry_cand[chosen]] if chosen else np.zeros(0, np.int64)
-    # Q3: m from the training queries
+    # m from the training queries
     train = roles["train"]
     Kt = int(p.K)
     tq = vec[train]
@@ -387,7 +387,7 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
     m = int(min(np.percentile(needed, p.m_percentile, method="higher"), n_entries)) if len(needed) else n_entries
     if p.idealized:
         m = 0
-    # Q6: train the recall estimator on the training queries' candidate responses
+    # train the recall estimator on the training queries' candidate responses
     feat, cand_ids, _ = core.candidates_batch(tq, Kt, m) if len(tq) else (np.zeros((0, 7)), None, None)
     ok = feat[:, 0] == 1
     F = feat[ok][:, [2, 3, 4]]
@@ -397,7 +397,7 @@ def _build_once(snap, backend, p, M, seed, request, old_centers, old_K, h0_prev,
     core.set_model(model["mean"], model["scale"], model["coef"], model["intercept"])
     train_scores = policy.score_features(F, model) if len(y) else np.array([0.0])
     edges = policy.threshold_edges(train_scores, p.n_thresholds)
-    # H8: seed the window with the calibration queries scored on the new cache, all with weight 1
+    # seed the window with the calibration queries scored on the new cache, all with weight 1
     cal = roles["cal"]
     cal = cal[K[cal] == Kt]
     cfeat, ccand, _ = core.candidates_batch(vec[cal], Kt, m) if len(cal) and chosen else (np.zeros((0, 7)), None, None)

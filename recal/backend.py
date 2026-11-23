@@ -57,7 +57,7 @@ class ExactBackend:
             self._pos = {int(v): i for i, v in enumerate(self.ids)}
         return np.array([self._pos[int(i)] for i in np.asarray(ids).ravel()], dtype=np.int64).reshape(np.shape(ids))
 
-    # ---- data changes (M3): ids are never reused after a delete (X6) ---------------------------------
+    # ---- data changes: ids are never reused after a delete ---------------------------------
 
     def insert(self, ids: np.ndarray, vectors: np.ndarray) -> None:
         ids = np.asarray(ids, dtype=np.int64)
