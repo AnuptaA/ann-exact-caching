@@ -139,8 +139,11 @@ run_steps; echo "rc=$?"; print_summary
     assert "build.sh" not in out
 
 
-def test_the_aker_step_builds_shared_faiss_and_runs_the_build_with_the_toolchain_on_the_path():
-    out = subprocess.run(["bash", str(SCRIPT), "--dry-run", "--only", "aker"], capture_output=True, text=True).stdout
+def test_the_aker_step_builds_shared_faiss_and_runs_the_build_with_the_toolchain_on_the_path(tmp_path):
+    # empty third-party and tool directories, so an installed FAISS or Boost on the machine changes nothing
+    env = dict(os.environ, TP=str(tmp_path / "tp"), Q1_TOOLS=str(tmp_path / "tools"), RECAL_TMP=str(tmp_path / "tmp"))
+    out = subprocess.run(["bash", str(SCRIPT), "--dry-run", "--only", "aker"], capture_output=True, text=True,
+                         env=env).stdout
     assert "rsync" in out and "-DBUILD_SHARED_LIBS=ON" in out and "-DCMAKE_INSTALL_LIBDIR=lib64" in out
     assert "CMAKE_PREFIX_PATH=" in out and "faiss-install" in out and "env PATH=" in out
     assert "ln -s /usr" not in out.replace("ln -sfn /usr", "")

@@ -121,6 +121,20 @@ run_steps; echo "rc=$?"
     assert "before" in out and "after" not in out and "rc=1" in out and "two: " not in out
 
 
+def test_main_fails_the_step_and_the_script_when_an_inner_command_fails(tmp_path):
+    body = """
+STEPS=(one two)
+step_one() { echo before; run false; echo after; }
+step_two() { echo two; }
+id() { if [ "${1:-}" = -u ]; then echo 0; else command id "$@"; fi; }
+finish_ownership() { :; }
+RUN_USER=nobody
+main; echo "rc=$?"
+"""
+    out = sourced(tmp_path, body).stdout
+    assert "before" in out and "after" not in out and "one: FAIL" in out and "rc=1" in out
+
+
 def test_disk_requirement_follows_the_selected_datasets():
     assert requirement("--datasets", "tripclick") < 100
     assert requirement() > 393 and requirement("--datasets", "spacev,triviaqa,medrag,tripclick") > 393

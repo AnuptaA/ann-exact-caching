@@ -65,6 +65,8 @@ RECAL_QUEUE_DIR="${RECAL_QUEUE_DIR:-/tmp/mx}"
 STATE_DIR="$RECAL_TMP/recal_bootstrap"
 ALL_DATASETS="spacev triviaqa medrag tripclick"
 STEPS=(preconditions base limits venvs core aker qvcache links store data smoke)
+CORE_MODULES="numpy scipy sklearn faiss pybind11 gdown boto3 psycopg"
+ANN_MODULES="numpy scipy faiss diskannpy"
 
 DRY=0
 ROLE=prepare
@@ -254,6 +256,12 @@ step_venvs() {
     as_user "$root/.venv-core/bin/pip" install --quiet -r "$root/envs/core.txt" pybind11 pytest
     as_user "$PYTHON311" -m venv "$root/.venv-ann"
     as_user "$root/.venv-ann/bin/pip" install --quiet -r "$root/envs/ann.txt" pytest
+    if [ "$DRY" -eq 0 ]; then
+        # shellcheck disable=SC2086
+        run python_imports "$root/.venv-core/bin/python" $CORE_MODULES
+        # shellcheck disable=SC2086
+        run python_imports "$root/.venv-ann/bin/python" $ANN_MODULES
+    fi
 }
 
 clean_venvs() { run rm -rf "$root/.venv-core" "$root/.venv-ann"; }
@@ -367,19 +375,35 @@ step_smoke() {
 # --- --check ---------------------------------------------------------------------------------------------
 CHECK_FAILED=0
 
-# check_line NAME FIX CMD...: PASS when the command succeeds, else FAIL with the fix. Nothing is changed.
+# check_line NAME FIX CMD...: PASS when the command succeeds, else FAIL with the fix and the last line the
+# command printed (what is missing). Nothing is changed.
 check_line() {
-    local name="$1" fix="$2"
+    local name="$1" fix="$2" out
     shift 2
-    if "$@" > /dev/null 2>&1; then
+    if out="$("$@" 2> /dev/null)"; then
         printf 'PASS  %s\n' "$name"
     else
-        printf 'FAIL  %s -> %s\n' "$name" "$fix"
+        out="$(printf '%s\n' "$out" | tail -n 1)"
+        printf 'FAIL  %s%s -> %s\n' "$name" "${out:+ (missing: $out)}" "$fix"
         CHECK_FAILED=1
     fi
 }
 
-python_imports() { "$1" -c "import $2"; }
+# python_imports PYTHON MODULE...: prints the modules that do not import
+python_imports() {
+    local py="$1"
+    shift
+    "$py" -I -c "
+import importlib, sys
+missing = []
+for name in sys.argv[1:]:
+    try:
+        importlib.import_module(name)
+    except Exception:
+        missing.append(name)
+print(' '.join(missing))
+sys.exit(1 if missing else 0)" "$@"
+}
 
 aker_filter_line_present() {
     "$root/.venv-core/bin/python" -I -c "
@@ -409,10 +433,16 @@ with_timeout() {
     if command -v timeout > /dev/null 2>&1; then timeout 30 "$@"; else "$@"; fi
 }
 
+# the store through recal/store.py (boto3, as the pipeline uses it); `aws s3 ls` fails on an empty prefix
 store_reachable() {
     local store="${RECAL_STORE:-}"
     case "$store" in
-        s3://*) with_timeout aws s3 ls "${store%/}/" ;;
+        s3://*)
+            with_timeout env PYTHONPATH="$root" "$root/.venv-core/bin/python" -c "
+import sys
+from recal import store
+store.open_store(sys.argv[1]).keys('.reachable')" "$store" > /dev/null
+            ;;
         "") return 1 ;;
         *) [ -d "$store" ] && [ -w "$store" ] ;;
     esac
@@ -454,10 +484,12 @@ run_checks() {
     check_line "tools make git rsync taskset" "sudo apt-get install make git rsync util-linux" test -z "$(commands_missing make git rsync taskset)"
     check_line "tool aws (store)" "install the AWS CLI v2" command -v aws
     check_line "postgresql binaries ($pgbin)" "rerun the base step (sudo -E ... --from base)" test -x "$pgbin/pg_ctl" -a -x "$pgbin/psql"
-    check_line ".venv-core imports numpy scipy sklearn faiss pybind11 gdown boto3 psycopg" \
-        "rerun the venvs step (sudo -E ... --from venvs)" python_imports "$core" "numpy, scipy, sklearn, faiss, pybind11, gdown, boto3, psycopg"
-    check_line ".venv-ann imports numpy scipy faiss diskannpy" "rerun the venvs step (sudo -E ... --from venvs)" \
-        python_imports "$ann" "numpy, scipy, faiss, diskannpy"
+    # shellcheck disable=SC2086
+    check_line ".venv-core imports $CORE_MODULES" "rerun the venvs step (sudo -E ... --from venvs)" \
+        python_imports "$core" $CORE_MODULES
+    # shellcheck disable=SC2086
+    check_line ".venv-ann imports $ANN_MODULES" "rerun the venvs step (sudo -E ... --from venvs)" \
+        python_imports "$ann" $ANN_MODULES
     check_line "ReCal core and cache core import" "rerun the core step (sudo -E ... --from core)" \
         env PYTHONPATH="$root" "$core" -c "import recal.core, simulations.approximate_hits.cachecore"
     check_line "Aker shims (standard and Proximity) load" "rerun the aker step (sudo -E ... --from aker)" shims_load
@@ -609,8 +641,9 @@ main() {
         do_clean
         return $?
     fi
-    local rc=0
-    run_steps || rc=$?
+    # a plain call: under `run_steps || ...` bash ignores set -e inside the steps
+    run_steps
+    local rc=$?
     print_summary
     finish_ownership
     return "$rc"
