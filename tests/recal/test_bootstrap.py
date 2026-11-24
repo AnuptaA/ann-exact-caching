@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -185,3 +186,29 @@ def test_clean_refuses_a_system_directory_as_the_build_prefix(tmp_path):
     env = dict(os.environ, TP="/tmp", RECAL_TMP=str(tmp_path / "tmp"))
     result = subprocess.run(["bash", str(SCRIPT), "--dry-run", "--clean"], capture_output=True, text=True, env=env)
     assert result.returncode != 0 and "refusing to remove /tmp" in result.stdout
+
+
+def test_git_status_is_clean_after_the_links_step_and_the_build_outputs(tmp_path):
+    repo, data = tmp_path / "repo", tmp_path / "data"
+    tracked = subprocess.run(["git", "ls-files", "datasets", "simulations/approximate_hits/results"], cwd=ROOT,
+                             capture_output=True, text=True, check=True).stdout.split()
+    for rel in [*tracked, ".gitignore"]:
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).touch()
+    shutil.copy(ROOT / ".gitignore", repo / ".gitignore")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(repo)]
+    subprocess.run([*git[:5], "init", "-q", str(repo)], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "x"], check=True)
+    body = f"root={repo}; DATA_DIR={data}; RESULTS_DIR={data}/results; STEPS=(links); run_steps; echo rc=$?"
+    assert "rc=0" in sourced(tmp_path, body).stdout
+    outputs = (".venv-core/bin/python", ".venv-ann/x", ".venv/x", ".venv-encode/x", ".env.local",
+               "recal/core/_recal_core.cpython-311-x86_64-linux-gnu.so",
+               "simulations/approximate_hits/cachecore/_cachecore.cpython-311-x86_64-linux-gnu.so",
+               "datasets/.drive_staging/part", "build/replay/driver", ".pytest_cache/x", "recal/__pycache__/x.pyc")
+    for rel in outputs:
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).touch()
+    assert (repo / "datasets/aker").is_symlink()
+    status = subprocess.run([*git, "status", "--porcelain"], capture_output=True, text=True).stdout
+    assert status == ""
