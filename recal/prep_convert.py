@@ -34,9 +34,9 @@ def exact_top(queries: np.ndarray, base, depth: int, device: str = "numpy", chun
     return out
 
 
-def k_sequence(n: int, k: int = 10, mixed: bool = False, seed: int = 0) -> np.ndarray:
+def k_sequence(vectors, k: int = 10, mixed: bool = False, seed: int = 0) -> np.ndarray:
     from recal import ksets
-    return ksets.k_sequence(n, k, mixed, seed=seed)
+    return ksets.k_by_vectors(vectors, seed=seed) if mixed else ksets.k_sequence(len(vectors), k)
 
 
 def convert_shift(out: Path, kind: str, shift: dict, uni, official, base, base_path: Path, centroids: np.ndarray,
@@ -55,7 +55,7 @@ def convert_shift(out: Path, kind: str, shift: dict, uni, official, base, base_p
     np.save(out / "top500.npy", exact_top(queries, base, min(depth, len(base)), device))
     np.savez(out / "streams.npz", **{kind: stream, "random": stream, f"phase_{kind}": shift["phase"],
                                      f"cluster_{kind}": shifts.assign(vectors, centroids)})
-    np.save(out / "k.npy", k_sequence(n) if k_seq is None else np.asarray(k_seq, dtype=np.int32))
+    np.save(out / "k.npy", k_sequence(vectors) if k_seq is None else np.asarray(k_seq, dtype=np.int32))
     meta = {"kind": "files", "db": str(base_path), "q": str(out / "q.npy"), "stream": kind, "n_requests": n,
             "history_len": int(history_frac * n), "top_depth": min(depth, len(base)),
             "n_clusters": int(len(centroids))}

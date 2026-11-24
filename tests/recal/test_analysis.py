@@ -2,6 +2,7 @@ import numpy as np
 
 from recal import analysis
 from recal import records as rec
+from recal.analysis.bursts import bursts_with_and_without_mini
 from recal.analysis.rates import hit_mask
 
 
@@ -54,3 +55,25 @@ def test_hit_rate_interpolation_inside_the_curve_only():
 def test_hit_mask_matches_paths():
     cols = synthetic_cols()
     assert hit_mask(cols).sum() == 8
+
+
+def test_by_k_splits_the_rates_per_k():
+    cols = synthetic_cols()
+    cols["K"] = np.array([5, 10, 5, 10, 5, 10] * 2, dtype=np.int32)
+    out = analysis.by_k(cols)
+    assert set(out) == {5, 10} and out[5]["n"] == out[10]["n"] == 6
+    assert out[5]["hit_rate"] == 1.0 and out[10]["hit_rate"] == 2 / 6
+
+
+def test_bursts_are_derived_from_two_record_sets():
+    from recal.analysis.bursts import bursts_with_and_without_mini
+    keys = np.array([1] * 6 + list(range(100, 106)))
+    a = synthetic_cols()
+    b = synthetic_cols()
+    b["path"] = np.where(a["path"] == rec.MINI, rec.MISS, a["path"]).astype(np.int8)
+    a["index"] = np.arange(12)
+    b["index"] = np.arange(12)
+    out = bursts_with_and_without_mini(a, b, keys)
+    assert out["burst_share"] == 0.5
+    assert out["with_mini"]["burst"]["n"] == 6 and out["with_mini"]["other"]["n"] == 6
+    assert out["with_mini"]["burst"]["mini_hit_rate"] > out["without_mini"]["burst"]["mini_hit_rate"] == 0.0

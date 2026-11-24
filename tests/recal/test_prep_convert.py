@@ -124,5 +124,5 @@ def test_convert_script_writes_a_shift_prep(world, tmp_path):
                           str(tmp_path / "official.npy"), "--base", str(world["tmp"] / "base.npy"), "--out",
                           str(tmp_path / "p"), "--groups", "64", "--group-size", "4", "--centroids",
                           str(tmp_path / "centroids.npy"), "--k-mixed", "--depth", "200"])
-    assert set(np.load(tmp_path / "p" / "k.npy").tolist()) == {5, 10, 50, 100}
+    assert set(np.load(tmp_path / "p" / "k.npy").tolist()) == {5, 10, 25, 50, 75, 100}
     assert json.loads((tmp_path / "p" / "meta.json").read_text())["history_len"] == 450

@@ -34,7 +34,8 @@ def shift_command(a) -> int:
         rows = np.sort(rng.choice(len(base), min(a.sample, len(base)), replace=False))
         centroids = shifts.kmeans_centroids(np.asarray(base[rows], dtype=np.float32),
                                             allow_fallback=a.allow_numpy_kmeans)
-    k_seq = prep_convert.k_sequence(len(shift["ids"]), a.k, a.k_mixed, a.seed)
+    from workloads.q1.universe import request_vectors
+    k_seq = prep_convert.k_sequence(request_vectors(uni, official, shift["ids"]), a.k, a.k_mixed, a.seed)
     prep_convert.convert_shift(a.out, a.kind, shift, uni, official, base, a.base, centroids, k_seq, a.depth,
                                append_zero=a.append_zero)
     return 0

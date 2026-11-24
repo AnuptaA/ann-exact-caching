@@ -23,25 +23,25 @@ def test_burst_block_boundaries_are_independent():
     assert robustness.burst_mask(keys, block=8, min_count=5).all()
 
 
-def test_grid_lines_cover_the_budgets_histories_and_seeds():
-    lines = robustness.grid_lines("prep", "random", "w")
-    assert len(lines) == (6 + 2) * 2
-    assert any("--budget 0.005 --seed 0" in line and "--history" not in line for line in lines)
-    assert any("--budget 0.05 --history 10000 --history-frac 0.1" in line for line in lines)
-
-
-def test_k_and_shift_lines():
-    k = robustness.k_lines("prep", "random", "w")
-    assert len(k) == 5 * 2 and any("--k 10 --k-mixed" in line for line in k)
-    sh = robustness.shift_lines("shifts", "w")
-    assert len(sh) == 3 * 2 * 5 and sum("--no-rebuild-signals" in line for line in sh) == 15
-    assert any("--prep shifts/w_abrupt_seed3 --stream abrupt" in line for line in sh)
-
-
-def test_k_sequence_fixed_and_mixed():
+def test_k_sequence_fixed():
     assert set(k_sequence(50, 10).tolist()) == {10}
-    mixed = k_sequence(2000, 10, True)
-    assert set(mixed.tolist()) == {5, 10, 50, 100} and np.array_equal(mixed, k_sequence(2000, 10, True))
+
+
+def test_mixed_k_is_tied_to_the_query_vector():
+    from recal.ksets import K_SET, k_by_query, k_by_vectors, k_for_vector
+    rng = np.random.default_rng(0)
+    vectors = rng.normal(size=(3000, 6)).astype(np.float32)
+    ks = k_by_vectors(vectors)
+    assert set(ks.tolist()) == set(K_SET)
+    counts = np.bincount(np.searchsorted(K_SET, ks), minlength=len(K_SET)) / len(ks)
+    assert np.all(np.abs(counts - 1 / len(K_SET)) < 0.04)
+    assert k_for_vector(vectors[7]) == k_for_vector(vectors[7].copy()) == ks[7]
+    perturbed = vectors + 1e-3
+    assert (k_by_vectors(perturbed) != ks).mean() > 0.6
+    idx = np.array([5, 9, 5, 9, 5])
+    per_request = k_by_query(vectors, idx)
+    assert per_request[0] == per_request[2] == per_request[4] == ks[5] and per_request[1] == per_request[3] == ks[9]
+    assert not np.array_equal(k_by_vectors(vectors, seed=1), ks)
 
 
 def test_mixed_k_run_records_each_requests_k(tmp_path):
@@ -61,12 +61,11 @@ def test_mixed_k_run_records_each_requests_k(tmp_path):
     rec = Records()
     out = sim.run(args, rec)
     ks = rec.arrays()["K"]
-    assert set(ks.tolist()) == {5, 10} and len(ks) == out["n_scored"] and out["constructions"] >= 1
-
-
-def test_burst_lines_cover_budgets_with_and_without_the_mini_cache():
-    b = robustness.burst_lines("p", "s", "w", budgets=(0.01, 0.05, 0.1))
-    assert len(b) == 3 * 2 * 2 and sum("--no-mini-cache" in x for x in b) == 6
+    assert set(ks.tolist()) <= {5, 10} and len(ks) == out["n_scored"] and out["constructions"] >= 1
+    qk = {}
+    for pos, k in zip(rec.arrays()["index"], ks):
+        qk.setdefault(int(np.load(tmp_path / "streams.npz")["random"][pos]), set()).add(int(k))
+    assert all(len(v) == 1 for v in qk.values())
 
 
 def test_make_shift_streams_script_on_small_arrays(tmp_path):

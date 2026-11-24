@@ -26,3 +26,12 @@ def rates(cols: dict) -> dict:
         "recall_of_main_hits": float(recall[path == MAIN].mean())
         if (path == MAIN).any() else float("nan"),
     }
+
+
+def by_k(cols: dict) -> dict:
+    """Rates of the requests of each K (mixed-K runs report every K so it can be compared with its fixed-K run)."""
+    out = {}
+    for k in np.unique(cols["K"]):
+        sel = cols["K"] == k
+        out[int(k)] = rates({name: values[sel] for name, values in cols.items()})
+    return out

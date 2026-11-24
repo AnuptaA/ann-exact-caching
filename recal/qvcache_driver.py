@@ -184,7 +184,7 @@ def run_cell(a, out_dir: Path, qvc=None) -> tuple[dict, Records]:
     if a.max_requests:
         idx = idx[:a.max_requests]
     from recal import ksets
-    ks = ksets.k_sequence(len(idx), a.k, a.k_mixed, a.k_set, a.seed)
+    ks = ksets.k_by_query(q, idx, a.k_set, a.seed) if a.k_mixed else ksets.k_sequence(len(idx), a.k)
     if not a.k_mixed and (Path(a.prep) / "k.npy").exists():
         ks = np.load(Path(a.prep) / "k.npy")[:len(idx)]
     backend = StoredBackend(sim.make_backend(a.backend, db, q, top, idx, a))

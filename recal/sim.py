@@ -90,7 +90,7 @@ def run(args, records: Records | None = None) -> dict:
         idx = idx[:args.max_requests]
     d, K = db.shape[1], args.k
     history_len = history_mode.history_length(len(idx), args.history_frac)
-    ks = ksets.k_sequence(len(idx), K, args.k_mixed, args.k_set, args.seed)
+    ks = ksets.k_by_query(q, idx, args.k_set, args.seed) if args.k_mixed else ksets.k_sequence(len(idx), K)
     if not args.k_mixed and (prep / "k.npy").exists():
         ks = np.load(prep / "k.npy")[:len(idx)]
     updates = None
@@ -194,7 +194,8 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--budget", type=float, default=0.05, help="M as a fraction of the dataset's stored bytes")
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--target", type=float, default=0.9, help="recall target T")
-    ap.add_argument("--k-mixed", action="store_true", help="draw K per request from --k-set")
+    ap.add_argument("--k-mixed", action="store_true",
+                    help="K tied to the query: one K per distinct query vector, drawn from --k-set by a hash of the vector")
     ap.add_argument("--k-set", type=int, nargs="+", default=list(ksets.K_SET))
     ap.add_argument("--updates", default=None, help="update schedule npz (recal/update_schedule.py): inserts and "
                     "deletes applied while the stream is replayed; truth is filtered to the live vectors")
