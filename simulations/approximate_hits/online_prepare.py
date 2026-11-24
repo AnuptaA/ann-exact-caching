@@ -206,7 +206,9 @@ def main():
                     help="run_e2e_oracle_trace workload name, e.g. spacev-aker-0.6")
     ap.add_argument("--n-db", type=int, default=1000000)
     ap.add_argument("--R", type=int, default=500)
-    ap.add_argument("--n-clusters", type=int, default=20)
+    ap.add_argument("--n-clusters", type=int, default=20,
+                    help="query clusters of the random/shift/multishift streams here; the matrix does not run "
+                         "these (Q4 shifts use 64 database clusters, workloads/q1/shifts.py)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--add-multishift", action="store_true",
                     help="only add the multishift stream to an existing --out")
