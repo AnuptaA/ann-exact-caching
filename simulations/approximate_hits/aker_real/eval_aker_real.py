@@ -49,7 +49,8 @@ logger = logging.getLogger(__name__)
 HERE = Path(__file__).parent
 RES = Path("simulations/approximate_hits/results")
 AKER = Path("datasets/aker")
-CONFIG = Path.home() / "third_party" / "aker" / "bootstrap" / "aker-standard.ini"
+# the vendored source the bootstrap builds from; AKER_CONFIG_PATH (Aker's own variable) overrides it
+CONFIG = Path(os.environ.get("AKER_CONFIG_PATH", HERE.parents[2] / "third_party/aker/bootstrap/aker-standard.ini"))
 
 #-------------------------------------------------------------------------------
 
@@ -64,8 +65,9 @@ class Aker:
         name = "libakershim_prox.so" if os.environ.get("AKER_GLOBAL_THRESH") else "libakershim.so"
         if name == "libakershim_prox.so":
             first = os.environ.get("LD_LIBRARY_PATH", "").split(":")[0]
-            if not first.endswith("aker_prox/build/lib"):
-                raise SystemExit("Proximity mode: put ~/third_party/aker_prox/build/lib first in LD_LIBRARY_PATH")
+            if not first.endswith("_prox/build/lib"):
+                raise SystemExit("Proximity mode: put the Proximity build's lib directory "
+                                 "(<third_party>/aker_vendored_prox/build/lib) first in LD_LIBRARY_PATH")
         lib = ctypes.CDLL(str(HERE / name))
         P = ctypes.c_void_p
         lib.shim_create.restype = P
@@ -643,7 +645,6 @@ def main():
         logger.info(f"Proximity mode: global threshold {args.global_thresh:.4g} "
                     f"({args.prox_percentile} percentile of squared distances between {len(history)} distinct queries)")
     if args.prox_frac is not None:
-        import os
         rows = np.random.default_rng(0).choice(len(q), min(5000, len(q)), replace=False)
         nn = np.asarray(db[np.asarray(top[rows, 0], dtype=np.int64)], dtype=np.float32)
         med = float(np.median(((q[rows] - nn) ** 2).sum(axis=1)))

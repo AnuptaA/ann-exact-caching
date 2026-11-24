@@ -29,12 +29,17 @@ from recal import accounting, history_mode, sim
 from recal.measure.jobs_util import register_args, stamp_result
 from recal.records import Records
 
-SIM = "simulations/approximate_hits/online_sim.py"
+# Absolute, so a cell runs from any working directory (a shard runner's instance directory).
+REPO = Path(__file__).resolve().parents[1]
+SIM = str(REPO / "simulations/approximate_hits/online_sim.py")
 SIM_METHOD = {"prototype": "static", "aker_sim": "aker", "qvcache_sim": "qvcache"}
-REAL_DRIVER = "simulations/approximate_hits/aker_real/eval_aker_real.py"
+REAL_DRIVER = str(REPO / "simulations/approximate_hits/aker_real/eval_aker_real.py")
 REAL_METHODS = ("aker", "proximity")
-REAL_SHIM = Path("simulations/approximate_hits/aker_real/libakershim.so")
-PROX_SHIM = Path("simulations/approximate_hits/aker_real/libakershim_prox.so")
+REAL_SHIM = REPO / "simulations/approximate_hits/aker_real/libakershim.so"
+PROX_SHIM = REPO / "simulations/approximate_hits/aker_real/libakershim_prox.so"
+# Aker build directories under the third-party root: the bootstrap's vendored build, then a clone build
+AKER_BUILDS = {"aker": ("aker_vendored", "aker"), "proximity": ("aker_vendored_prox", "aker_prox")}
+AKER_DEPENDENCY_LIBS = ("boost-install/lib", "faiss-install/lib64")
 
 
 def counters(method: str, log: dict, d: int, args: dict, coord_bytes: float = 4) -> dict:
@@ -63,7 +68,7 @@ def run_simulator(method: str, a, fraction: float, tag: str) -> Path:
         cmd += ["--max-queries", str(a.max_requests)]
     if a.history_frac:
         cmd += ["--warmup", str(history_mode.history_length(stream_length(a), a.history_frac))]
-    subprocess.run(cmd, check=True, env={**os.environ, "PYTHONPATH": "."})
+    subprocess.run(cmd, check=True, env={**os.environ, "PYTHONPATH": str(REPO)})
     return Path(a.out) / f"{SIM_METHOD[method]}{tag}.json"
 
 
@@ -115,7 +120,7 @@ def run_baseline(method: str, a, attempts: int = 6) -> dict:
 
 def real_aker_command(a, scale: float, out_file: Path) -> list[str]:
     """Command of the real-library driver for one attempt; Proximity adds the percentile threshold."""
-    cmd = [a.ann_python, REAL_DRIVER, "--prep", a.prep, "--stream", a.stream, "--budget", f"{a.budget:.6g}",
+    cmd = [str(REPO / a.ann_python), REAL_DRIVER, "--prep", a.prep, "--stream", a.stream, "--budget", f"{a.budget:.6g}",
            "--k", str(a.k), "--equal-bytes", "--coord-bytes", f"{a.coord_bytes:g}", "--pool-scale", f"{scale:.6g}",
            "--history-frac", f"{a.history_frac:g}", "--out", str(out_file)]
     if a.max_requests:
@@ -130,6 +135,17 @@ def real_aker_command(a, scale: float, out_file: Path) -> list[str]:
     return cmd
 
 
+def real_aker_env(method: str) -> dict:
+    """Environment of the real-library driver: the method's Aker build first in LD_LIBRARY_PATH (both builds
+    name their library libaker.so), then Boost and FAISS, which the shim's runpath does not cover."""
+    third_party = Path(os.environ.get("RECAL_THIRD_PARTY", Path.home() / "third_party"))
+    builds = [third_party / name / "build/lib" for name in AKER_BUILDS[method]]
+    aker_lib = next((lib for lib in builds if lib.is_dir()), None)
+    libs = ([aker_lib] if aker_lib is not None else []) + [third_party / d for d in AKER_DEPENDENCY_LIBS]
+    paths = [str(lib) for lib in libs if lib.is_dir()] + [os.environ.get("LD_LIBRARY_PATH", "")]
+    return {**os.environ, "PYTHONPATH": str(REPO), "LD_LIBRARY_PATH": ":".join(p for p in paths if p)}
+
+
 def run_real_aker(a, attempts: int = 3) -> dict:
     """Real Aker or Proximity at M: the pool is rescaled and the run repeated while it exceeds M."""
     shim = PROX_SHIM if a.method == "proximity" else REAL_SHIM
@@ -138,7 +154,7 @@ def run_real_aker(a, attempts: int = 3) -> dict:
     scale, res = 1.0, None
     for attempt in range(attempts):
         out_file = Path(a.out) / f"{a.method}{a.tag}_try{attempt}.json"
-        subprocess.run(real_aker_command(a, scale, out_file), check=True, env={**os.environ, "PYTHONPATH": "."})
+        subprocess.run(real_aker_command(a, scale, out_file), check=True, env=real_aker_env(a.method))
         res = json.loads(out_file.read_text())
         records = out_file.with_name(f"{out_file.stem}_records.npz")
         if res.get("within_M"):

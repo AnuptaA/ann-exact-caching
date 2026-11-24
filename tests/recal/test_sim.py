@@ -54,9 +54,10 @@ def test_main_writes_json_atomically(prep, tmp_path):
     assert data["bytes"]["total"] <= data["M"] and not list(out.glob(".*tmp"))
 
 
-def test_proximity_is_flagged_as_cluster_only(prep, tmp_path):
+def test_proximity_is_flagged_as_cluster_only(prep, tmp_path, monkeypatch):
     from recal import cells
     import sys
+    monkeypatch.setattr(cells, "PROX_SHIM", tmp_path / "missing.so")
     sys.argv = ["x", "--method", "proximity", "--prep", str(prep), "--out", str(tmp_path / "o")]
     with pytest.raises(SystemExit) as e:
         cells.main()
@@ -152,7 +153,7 @@ def real_args(prep, tmp_path, method, extra=()):
 def test_real_aker_and_proximity_commands(prep, tmp_path):
     from recal import cells
     aker = cells.real_aker_command(real_args(prep, tmp_path, "aker"), 0.9, tmp_path / "x.json")
-    assert aker[:2] == [".venv-ann/bin/python", cells.REAL_DRIVER] and "--prox-percentile" not in aker
+    assert aker[:2] == [str(cells.REPO / ".venv-ann/bin/python"), cells.REAL_DRIVER] and "--prox-percentile" not in aker
     assert aker[aker.index("--history-frac") + 1] == "0.3" and "--equal-bytes" in aker
     assert aker[aker.index("--coord-bytes") + 1] == "1" and aker[aker.index("--pool-scale") + 1] == "0.9"
     prox = cells.real_aker_command(real_args(prep, tmp_path, "proximity", ["--prox-percentile", "1"]), 1.0,
@@ -244,3 +245,16 @@ def test_result_records_the_request_file_hash(prep, tmp_path):
     assert entry["name"] == "q.npy"
     assert entry["sha256"] == hashlib.sha256((prep / "q.npy").read_bytes()).hexdigest()
     ju._data_files.clear()
+
+
+def test_each_real_method_puts_its_own_aker_build_first_then_boost_and_faiss(tmp_path, monkeypatch):
+    from recal import cells
+    for d in ("aker_vendored/build/lib", "aker_vendored_prox/build/lib", "boost-install/lib",
+              "faiss-install/lib64"):
+        (tmp_path / d).mkdir(parents=True)
+    monkeypatch.setenv("RECAL_THIRD_PARTY", str(tmp_path))
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/other")
+    deps = f"{tmp_path}/boost-install/lib:{tmp_path}/faiss-install/lib64:/opt/other"
+    assert cells.real_aker_env("aker")["LD_LIBRARY_PATH"] == f"{tmp_path}/aker_vendored/build/lib:{deps}"
+    assert cells.real_aker_env("proximity")["LD_LIBRARY_PATH"] == f"{tmp_path}/aker_vendored_prox/build/lib:{deps}"
+    assert cells.real_aker_env("aker")["PYTHONPATH"] == str(cells.REPO)
