@@ -40,17 +40,6 @@ def test_background_reads_count_non_miss_searches_and_rereads():
     assert reads == pytest.approx((30 + 10 * 20.0 + 4 * 140.0) / 50)
 
 
-def test_choose_split_trades_hits_against_the_node_cache():
-    curve = split.ReadsCurve([0, 1000], [100.0, 50.0])
-    hits = {0.0: 0.0, 0.10: 0.1, 0.25: 0.3, 0.50: 0.6, 0.75: 0.7, 0.90: 0.72, 1.0: 0.73}
-    out = split.choose_split(hits, curve, 1000.0, {s: 1.0 for s in hits})
-    assert len(out["table"]) == 7
-    best = min(out["table"], key=lambda r: r["expected_reads"])
-    assert out["best_split"] == best["split"] and out["best_split"] > 0.0
-    flat = split.choose_split({s: 0.0 for s in hits}, curve, 1000.0, {})
-    assert flat["best_split"] == 0.0
-
-
 def test_node_cache_curve_with_a_mock_index_and_io_counter():
     from recal.system_benefit import curves
 
@@ -80,64 +69,3 @@ def test_depth_table_format_loads_into_depth_latency(tmp_path):
     assert table["depth_latency"]["depths"] == [5, 10, 35, 70] and dl.ratio(70, 10) > 1.0
 
 
-def test_job_lines_cover_splits_clients_and_depths():
-    from recal.system_benefit import jobs
-    cells = jobs.split_cell_lines("prep", "random", 0.05, "w")
-    assert len(cells) == 6 and "recal_s10" in cells[0] and "--budget 0.005" in cells[0]
-    lines = jobs.throughput_lines("spacev", "w", {"none": "none", "recal_s50": "run.json"}, {"none": 500, "recal_s50": 100})
-    assert "--arm none" in lines[0] and "--clients 1 2 4 8 16 32 64" in lines[0] and "--nodes 500" in lines[0]
-    assert "--arm recal_s50=run.json" in lines[1]
-    assert "--clients 1 " in jobs.single_client_lines("spacev", "w", {"none": "none"})[0]
-    assert "--depths 5 10 35 70" in jobs.depth_table_lines("p", "idx", "w", [5, 10, 35, 70])[0]
-    assert "--nodes 0 100" in jobs.node_cache_curve_lines("idx", "q.npy", "w", [0, 100], 368.0)[0]
-
-
-def test_history_runs_give_hit_rates_and_background(tmp_path):
-    import json
-    from recal import sim
-    from recal.backend import ExactBackend
-    from recal.system_benefit import history_runs
-    from tests.recal.test_system import make_stream, make_world
-    rng, data, centers = make_world(seed=5)
-    stream = make_stream(rng, centers, 4200, repeat_share=0.2)
-    uniq, inverse = np.unique(np.stack(stream), axis=0, return_inverse=True)
-    np.save(tmp_path / "db.npy", data)
-    np.save(tmp_path / "q.npy", uniq.astype(np.float32))
-    np.save(tmp_path / "top500.npy", ExactBackend(data).search(uniq.astype(np.float32), 100)[0].astype(np.int32))
-    np.savez(tmp_path / "streams.npz", random=inverse.astype(np.int64).ravel())
-    (tmp_path / "meta.json").write_text(json.dumps({"kind": "files", "db": str(tmp_path / "db.npy"), "q": str(tmp_path / "q.npy")}))
-    args = sim.parser().parse_args(["--prep", str(tmp_path), "--stream", "random", "--k", "5", "--backend", "exact",
-                                    "--history", "3000", "--min-ess", "30", "--out", str(tmp_path / "o")])
-    runs = history_runs.split_runs(args, 0.6, 3000, (0.0, 0.5, 1.0))
-    assert runs[0.0]["hit_rate"] == 0.0 and runs[0.5]["n_scored"] == 900
-    assert runs[1.0]["hit_rate"] >= runs[0.5]["hit_rate"] and runs[1.0]["within_M"]
-    assert "candidate" in runs[1.0]["background"]
-
-
-def test_choose_split_from_history_runs_and_read_back(tmp_path, capsys):
-    import json
-    from recal.system_benefit import choose
-    from tests.recal.test_system import make_stream, make_world
-    from recal.backend import ExactBackend
-    rng, data, centers = make_world(seed=5)
-    stream = make_stream(rng, centers, 4200, repeat_share=0.2)
-    uniq, inverse = np.unique(np.stack(stream), axis=0, return_inverse=True)
-    np.save(tmp_path / "db.npy", data)
-    np.save(tmp_path / "q.npy", uniq.astype(np.float32))
-    np.save(tmp_path / "top500.npy", ExactBackend(data).search(uniq.astype(np.float32), 100)[0].astype(np.int32))
-    np.savez(tmp_path / "streams.npz", random=inverse.astype(np.int64).ravel())
-    (tmp_path / "meta.json").write_text(json.dumps({"kind": "files", "db": str(tmp_path / "db.npy"), "q": str(tmp_path / "q.npy")}))
-    total = 0.6 * data.size * 4
-    curve = {"rows": [{"cache_bytes": 0.0, "reads_per_search": 100.0}, {"cache_bytes": total, "reads_per_search": 60.0}]}
-    (tmp_path / "curve.json").write_text(json.dumps(curve))
-    out = tmp_path / "chosen.json"
-    choose.main(["run", "--prep", str(tmp_path), "--stream", "random", "--k", "5", "--backend", "exact", "--history", "3000",
-                 "--min-ess", "30", "--total-fraction", "0.6", "--curve", str(tmp_path / "curve.json"),
-                 "--n-vectors", str(len(data)), "--dim", str(data.shape[1]), "--degree", "16", "--coord-bytes", "4",
-                 "--out", str(out)])
-    chosen = json.loads(out.read_text())
-    assert chosen["best_split"] in split.SPLITS and len(chosen["table"]) == 7
-    assert chosen["recal_budget_fraction"] == pytest.approx(chosen["best_split"] * 0.6)
-    assert chosen["node_cache_nodes"] >= 0 and chosen["history_len"] == int(0.3 * 4200)
-    choose.main(["get", str(out), "recal_budget_fraction"])
-    assert float(capsys.readouterr().out) == pytest.approx(chosen["recal_budget_fraction"])

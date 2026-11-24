@@ -430,22 +430,48 @@ def run_arm(name, hit, dt, qids, clients, jobs, done, procs, deadline, audit=Non
             "p99_ms": float(np.percentile(lat, 99)), "clients": clients}
 
 
+def parse_arm(spec):
+    """none | name=<run json> with an optional ,nodes=N (this arm's node cache); returns name, path or None, nodes or None."""
+    nodes = None
+    if ",nodes=" in spec:
+        spec, n = spec.rsplit(",nodes=", 1)
+        nodes = int(n)
+    if spec == "none":
+        return "none", None, nodes
+    name, path = spec.split("=", 1)
+    return name, None if path == "none" else path, nodes
+
+
 def build_arms(specs):
     arms = []
     for spec in specs:
-        if spec == "none":
-            arms.append(("none", None))
+        name, path, _ = parse_arm(spec)
+        if path is None:
+            arms.append((name, None))
         else:
-            name, path = spec.split("=", 1)
             arms.append((name, load_arm(with_records_timing(json.loads(Path(path).read_text()), Path(path)))))
     return arms
+
+
+def arm_recall(spec):
+    """Mean recall of the arm's recorded run against the exact top-K (from its records file), None without one."""
+    name, path, _ = parse_arm(spec)
+    if path is None:
+        return None
+    r = json.loads(Path(path).read_text())
+    if not r.get("records_file"):
+        return None
+    from recal import records
+    from recal.analysis.rates import rates
+    cols, _, _ = records.load(Path(path).with_name(r["records_file"]))
+    return rates(cols)["system_recall"]
 
 
 def main():
     from simulations.approximate_hits.workloads import get
     ap = argparse.ArgumentParser()
     ap.add_argument("--workload", required=True)
-    ap.add_argument("--arm", action="append", required=True, help="none | name=<timed run json>")
+    ap.add_argument("--arm", action="append", required=True, help="none | name=<timed run json>[,nodes=N] (N: node cache of this arm)")
     ap.add_argument("--clients", type=int, nargs="+", default=[16])
     ap.add_argument("--backend-procs", type=int, default=8,
                     help="search threads of the shared index (processes with --legacy-workers)")
@@ -465,6 +491,8 @@ def main():
                     help="old behaviour: warm-up min(20000, len // 5), first n requests, no alignment checks")
     ap.add_argument("--no-evict", action="store_true", help="old behaviour: no page cache eviction between arms")
     ap.add_argument("--repetitions", type=int, default=1)
+    ap.add_argument("--saturation-clients", type=int, default=None,
+                    help="client count recorded in every row as the saturation point of the run")
     ap.add_argument("--seed", type=int, default=0, help="arm order and query sample")
     ap.add_argument("--timeout-s", type=float, default=6 * 3600, help="total time limit of the run")
     a = ap.parse_args()
@@ -474,6 +502,14 @@ def main():
     info["nodes"] = w.node_cache() if a.nodes is None else a.nodes
     stream = np.asarray(np.load(w.prep_dir / "streams.npz")[w.stream], dtype=np.int64)
     arms = build_arms(a.arm)
+    arm_nodes = {}
+    recall = {}
+    for spec in a.arm:
+        name, _, nodes = parse_arm(spec)
+        arm_nodes[name] = info["nodes"] if nodes is None else nodes
+        recall[name] = arm_recall(spec)
+    if a.legacy_workers and len(set(arm_nodes.values())) > 1:
+        raise SystemExit("per-arm node caches need the shared backend, not --legacy-workers")
     if a.legacy_alignment:
         warm = min(20000, len(stream) // 5)
         post = stream[warm:]
@@ -501,20 +537,24 @@ def main():
     dtype = np.int8 if w.name.startswith("spacev") else np.float32
     backend = None
     ctx = mp.get_context("fork")
+
+    def open_shared(nodes):
+        from simulations.approximate_hits.diskann_aio import open_disk_index
+        return SharedBackend(
+            lambda: open_disk_index(max_wait=3600, index_directory=info["index_dir"], num_threads=2 * a.backend_procs,
+                                    num_nodes_to_cache=nodes, cache_mechanism=1 if nodes else 0,
+                                    index_prefix="ann"),
+            np.load(query_file(w), mmap_mode="r"), dtype, info["L"], info["W"], a.backend_procs,
+            reader_factory=lambda: SectorReader(str(Path(info["index_dir"]) / "ann_disk.index")))
+
+    current_nodes = arm_nodes[parse_arm(a.arm[0])[0]]
     if a.legacy_workers:
         jobs, done = ctx.Queue(), ctx.Queue()
         procs = [ctx.Process(target=worker, args=(info, str(query_file(w)), jobs, done, dtype), daemon=True)
                  for _ in range(a.backend_procs)]
         instances = a.backend_procs
     else:
-        from simulations.approximate_hits.diskann_aio import open_disk_index
-        nodes0 = info.get("nodes", 0)
-        backend = SharedBackend(
-            lambda: open_disk_index(max_wait=3600, index_directory=info["index_dir"], num_threads=2 * a.backend_procs,
-                                    num_nodes_to_cache=nodes0, cache_mechanism=1 if nodes0 else 0,
-                                    index_prefix="ann"),
-            np.load(query_file(w), mmap_mode="r"), dtype, info["L"], info["W"], a.backend_procs,
-            reader_factory=lambda: SectorReader(str(Path(info["index_dir"]) / "ann_disk.index")))
+        backend = open_shared(current_nodes)
         jobs, done, procs = backend.jobs, backend.done, backend.procs
         instances = backend.instances
         par = search_parallelism(lambda qi: backend.search(int(qi), 10), [int(x) for x in stream[:8 * a.backend_procs]],
@@ -524,8 +564,12 @@ def main():
             raise SystemExit(f"concurrent searches overlap only {par:.2f}x: the binding holds the GIL, so a shared "
                              "index would serialize the backend; use --legacy-workers or --allow-serialized-search")
     assert a.legacy_workers or instances == 1, f"{instances} index instances, expected 1"
-    node_bytes = node_cache_bytes(info["index_dir"], info["nodes"])
-    loaded = None if node_bytes is None else node_bytes * instances
+
+    def loaded_bytes(nodes):
+        nb = node_cache_bytes(info["index_dir"], nodes)
+        return None if nb is None else nb * instances
+
+    loaded = loaded_bytes(current_nodes)
     flag = os.environ.get("QUIET_FLAG")
     if backend is not None:
         backend.start()
@@ -555,6 +599,15 @@ def main():
             for rep in range(a.repetitions):
                 order = arms if a.no_evict else pagecache.shuffled_arms(arms, a.seed, rep)
                 for name, t in order:
+                    if not a.legacy_workers and arm_nodes[name] != current_nodes:
+                        backend.stop()
+                        current_nodes = arm_nodes[name]
+                        backend = open_shared(current_nodes)
+                        jobs, done, procs = backend.jobs, backend.done, backend.procs
+                        backend.start()
+                        for _ in procs:
+                            get_message(done, procs, deadline, True)
+                        loaded = loaded_bytes(current_nodes)
                     state = {}
                     if not a.no_evict:
                         state["evict"] = pagecache.evict(index_paths)
@@ -575,7 +628,9 @@ def main():
                     fe = arm_rereads(a.io_complete and not a.no_reread, t, t["pos"][sel[name]]) if t is not None else None
                     r = run_arm(name, hit, dt, qids, c, jobs, done, procs, deadline, audit=aud, k_miss=km, background=plan,
                                 fetch=fe)
-                    r["nodes"] = info["nodes"]
+                    r["nodes"] = arm_nodes[name]
+                    r["system_recall"] = recall[name]
+                    r["saturation_clients"] = a.saturation_clients
                     r["backend_mode"] = "processes" if backend is None else "shared"
                     r["index_instances"] = instances
                     r["node_cache_bytes_loaded"] = loaded

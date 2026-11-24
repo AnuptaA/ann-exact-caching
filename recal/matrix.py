@@ -1,27 +1,56 @@
-"""The whole experiment matrix (Q1 to Q4) as job lines, from one configuration.
+"""The whole experiment matrix (Q1 to Q4) as jobs, from one configuration (the final design).
 
-Each line skips itself when its result exists and carries a marker run_jobs.py recognizes. The configuration
-names the workloads (prep folder, stream, stored precision, budgets, DiskANN files); see
-experiments/matrix.example.json. design_table() gives the cell count and the dimensions multiplied for every
-experiment; tests compare it with the line counts and with the design.
+Each job line skips itself when its result exists and carries a marker run_jobs.py recognizes. The configuration
+names the workloads (dataset, prep folder, stream, stored precision, budgets, DiskANN files); see
+experiments/matrix.example.json. MedRAG's budgets come only from medrag_budgets.json (scripts/medrag_working_set.py);
+without it no MedRAG cell is emitted.
+
+Q1 384 runs, Q2 56, Q3 128 split points (hit-rate run plus a throughput arm) and 32 thread lines, Q4 93.
 """
 
-from recal import modes, robustness
-from recal.system_benefit import jobs as q3jobs
-from recal.system_benefit.split import SPLITS
+import json
+from collections import OrderedDict
+from pathlib import Path
+
+from recal import modes
+from recal.jobspec import Job
 
 PY = ".venv-core/bin/python"
 ANN = ".venv-ann/bin/python"
 ABLATIONS = ("--no-union", "--no-expansion", "--no-shells", "--lru", "--no-calibration", "--no-recalibration",
              "--no-mini-cache")
-BACKENDS = ("exact", "diskann")
 ROOT = "results"
+STREAM_LENGTH = 100_000
+REPLAY = "simulations/approximate_hits/throughput_replay.py"
+BEST_SPLIT = "recal.system_benefit.best_split"
 
 
-def default_deviation(w: dict | None) -> str:
-    """The paper's deviation factor, written explicitly so the default cell hashes like the sweep cell at that value."""
-    if w is None:
-        return ""
+# ---- configuration and workloads -------------------------------------------------------------------------------
+
+def load_medrag_budgets(cfg: dict) -> dict | None:
+    path = cfg.get("medrag_budgets_file")
+    if path and Path(path).exists():
+        return json.loads(Path(path).read_text())
+    return None
+
+
+def plan(cfg: dict, medrag: dict | None = None) -> tuple[OrderedDict, list[str]]:
+    """workload -> {w, budgets, standin} for every workload that has its budgets, and the ones left out."""
+    medrag = load_medrag_budgets(cfg) if medrag is None else medrag
+    out, skipped = OrderedDict(), []
+    for name, w in cfg["workloads"].items():
+        if w["dataset"] == "medrag":
+            if medrag is None:
+                skipped.append(name)
+                continue
+            out[name] = {"w": w, "budgets": list(medrag["q1_budgets"]), "standin": float(medrag["standin_5pct"])}
+        else:
+            out[name] = {"w": w, "budgets": list(w["budgets"]), "standin": float(w["standin"])}
+    return out, skipped
+
+
+def default_deviation(w: dict) -> str:
+    """The paper's deviation factor (0.25 SPACEV, 0.075 otherwise), written explicitly in every QVCache cell."""
     from recal.qvcache_driver import default_deviation as paper_default
     return f"--deviation-factor {paper_default(w['coord_bytes']):g}"
 
@@ -32,216 +61,325 @@ def backend_flags(w: dict, backend: str) -> str:
     return f"--backend file --backend-file {w['diskann_file']} --backend-target 0.95"
 
 
-def cell(d: str, stem: str, method: str, w: dict, budget, flags: str) -> str:
+def needs_of(w: dict, backend: str = "diskann", extra=()) -> tuple:
+    ds = w["dataset"]
+    names = [f"{ds}/prep"] + ([f"{ds}/diskann_answers"] if backend == "diskann" else []) + [f"{ds}/{e}" for e in extra]
+    return tuple(names)
+
+
+def cell(d: str, stem: str, method: str, w: dict, budget, flags: str, prep: str | None = None,
+         stream: str | None = None) -> str:
     b = budget if isinstance(budget, str) else f"{budget:g}"
     return (f"[ -f {d}/{stem}.json ] || {{ mkdir -p {d} && PYTHONPATH=. {PY} -u -m recal.cells --method {method} "
-            f"--prep {w['prep']} --stream {w['stream']} --budget {b} --coord-bytes {w['coord_bytes']:g} "
-            f"{flags} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
+            f"--prep {prep or w['prep']} --stream {stream or w['stream']} --budget {b} "
+            f"--coord-bytes {w['coord_bytes']:g} {flags} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
 
 
-def q1_systems(cfg: dict, w: dict | None = None) -> list[tuple]:
-    """(label, method, stem, backend, flags) of every system cell of one (workload, budget, seed)."""
-    q1, out = cfg["q1"], []
-    for t in q1["targets"]:
-        for mode, flag in (("deployable", ""), ("idealized", "--idealized")):
-            out.append((f"recal_{mode}_t{t:g}", "recal", "recal", modes.recal_backend(mode),
-                        f"--target {t:g} {flag} --strict-modes"))
-    for backend in q1["backends"]:
-        out.append((f"aker_{backend}", "aker", "aker", backend, ""))
-        out.append((f"proximity-a_{backend}", "proximity", "proximity_p0.1", backend,
-                    "--prox-percentile 0.1 --tag _p0.1"))
-        out.append((f"proximity-b_{backend}", "proximity", "proximity_p1", backend, "--prox-percentile 1 --tag _p1"))
-        out.append((f"qvcache_{backend}", "qvcache", "qvcache", backend, default_deviation(w)))
-    for d in q1["qvcache_sweep"]:
-        out.append((f"qvcache-d{d:g}_exact", "qvcache", f"qvcache_d{d:g}", "exact",
-                    f"--deviation-factor {d:g} --tag _d{d:g}"))
-    return out
+def hit_job(exp: str, name: str, w: dict, label: str, stem: str, method: str, budget, backend: str, flags: str,
+            system: str, seed: int, **kw) -> Job:
+    d = f"{ROOT}/{exp}/{name}/{label}"
+    line = cell(d, stem, method, w, budget, f"{backend_flags(w, backend)} {flags} --seed {seed}", **kw)
+    return Job(line, exp, name, system, "hit", d, needs_of(w, backend, kw.pop("extra_needs", ())))
 
 
-def q1_lines(cfg: dict) -> list[str]:
+# ---- Q1, Q2 ----------------------------------------------------------------------------------------------------
+
+def q1_systems(cfg: dict, w: dict) -> list[tuple]:
+    """(label, system, method, stem, backend, flags) of the system cells of one (workload, budget, seed): 16."""
     out = []
-    for name, w in cfg["workloads"].items():
-        for budget in w["budgets"]:
-            for seed in cfg["seeds"]:
-                for label, method, stem, backend, flags in q1_systems(cfg, w):
-                    d = f"{ROOT}/q1/{name}/{label}_b{budget:g}_s{seed}"
-                    out.append(cell(d, stem, method, w, budget, f"{backend_flags(w, backend)} {flags} --seed {seed}"))
+    for t in cfg["q1"]["targets"]:
+        for mode, flag in (("deployable", ""), ("idealized", "--idealized")):
+            out.append((f"recal_{mode}_t{t:g}", f"recal_{mode}", "recal", "recal", modes.recal_backend(mode),
+                        f"--target {t:g} {flag} --strict-modes"))
+    for backend in cfg["q1"]["backends"]:
+        out.append((f"aker_{backend}", "aker", "aker", "aker", backend, ""))
+        out.append((f"proximity-a_{backend}", "proximity-a", "proximity", "proximity_p0.1", backend,
+                    "--prox-percentile 0.1 --tag _p0.1"))
+        out.append((f"proximity-b_{backend}", "proximity-b", "proximity", "proximity_p1", backend,
+                    "--prox-percentile 1 --tag _p1"))
+        out.append((f"qvcache_{backend}", "qvcache", "qvcache", "qvcache", backend, default_deviation(w)))
     return out
 
 
-def q2_lines(cfg: dict) -> list[str]:
-    q2, out = cfg["q2"], []
-    for name, w in cfg["workloads"].items():
-        for label, flag in [("default", "")] + [(f.lstrip("-"), f) for f in ABLATIONS]:
+def q1_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
+    out = []
+    for name, entry in wl.items():
+        w = entry["w"]
+        for budget in entry["budgets"]:
             for seed in cfg["seeds"]:
-                d = f"{ROOT}/q2/{name}/{label}_s{seed}"
-                out.append(cell(d, "recal", "recal", w, w["q2_budget"], f"{backend_flags(w, modes.recal_backend('deployable'))} "
-                                f"--target {q2['target']:g} {flag} --strict-modes --seed {seed}"))
+                for label, system, method, stem, backend, flags in q1_systems(cfg, w):
+                    out.append(hit_job("q1", name, w, f"{label}_b{budget:g}_s{seed}", stem, method, budget, backend,
+                                       flags, system, seed))
     return out
 
 
-def q3_nodes(w: dict, budget: float, share: float = 1.0) -> int:
-    """Node cache nodes of `share` of the total budget at stored precision (DiskANN node: vector, links, header)."""
+def q2_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
+    out = []
+    for name, entry in wl.items():
+        w = entry["w"]
+        for flag in ABLATIONS:
+            for seed in cfg["seeds"]:
+                label = flag.lstrip("-")
+                out.append(hit_job("q2", name, w, f"{label}_s{seed}", "recal", "recal", entry["standin"],
+                                   modes.recal_backend("deployable"),
+                                   f"--target {cfg['q2']['target']:g} {flag} --strict-modes", f"recal_{label}", seed))
+    return out
+
+
+# ---- Q3 --------------------------------------------------------------------------------------------------------
+
+def node_cache_nodes(w: dict, budget: float, node_share: int) -> int:
+    """Nodes of DiskANN's cache at node_share percent of the budget, at stored precision."""
     from recal.accounting import budget_bytes
     from recal.system_benefit.nodecache import nodes_for_bytes
-    return nodes_for_bytes(share * budget_bytes(w["n_vectors"], w["dim"], budget, w["coord_bytes"]), w["dim"],
-                           w["coord_bytes"], w["degree"])
+    total = budget_bytes(w["n_vectors"], w["dim"], budget, w["coord_bytes"])
+    return nodes_for_bytes(total * node_share / 100.0, w["dim"], w["coord_bytes"], w["degree"])
 
 
-def q3_lines(cfg: dict) -> list[str]:
+Q3_SYSTEMS = {
+    "recal": ("recal", "recal", "recal", "--target {t:g} --strict-modes"),
+    "aker": ("aker", "aker", "aker", ""),
+    "qvcache": ("qvcache", "qvcache", "qvcache", "{dev}"),
+}
+
+
+def q3_hit_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
+    """The hit-rate run of every split point: the result cache at its share of the 5% budget (share 100 is Q1's run)."""
     q3, out = cfg["q3"], []
-    for name, w in cfg["workloads"].items():
+    for name, entry in wl.items():
+        w = entry["w"]
+        for key in q3["systems"]:
+            system, method, stem, flags = Q3_SYSTEMS[key]
+            for ns in q3["node_shares"]:
+                budget = entry["standin"] * (100 - ns) / 100.0
+                f = flags.format(t=q3["target"], dev=default_deviation(w))
+                out.append(hit_job("q3", name, w, f"{key}_n{ns}", stem, method, budget, "diskann", f, system, 0))
+    return out
+
+
+def arm_spec(name: str, path: str, nodes) -> str:
+    return f"{name}={path},nodes={nodes}"
+
+
+def q3_followups(cfg: dict, wl: OrderedDict, hits: list[Job], owner_out) -> list[Job]:
+    """Split sweep replay, best split and thread lines per workload; they read the owners' result directories."""
+    q3, out = cfg["q3"], []
+    by_cell = {j.cell: j for j in hits}
+    sat, reps = q3["saturation_clients"], q3["repetitions"]
+    for name, entry in wl.items():
+        w, budget = entry["w"], entry["standin"]
         root = f"{ROOT}/q3/{name}"
-        nodes_dim = f"--n-vectors {w['n_vectors']} --dim {w['dim']} --degree {w['degree']}"
-        curve, depth = f"{root}/node_cache_curve/curve.json", f"{root}/depth_latency/diskann.json"
-        out += q3jobs.node_cache_curve_lines(w["index_dir"], w["queries"], f"{name}", w["curve_nodes"], w["node_bytes"])
-        out += q3jobs.depth_table_lines(w["prep"], w["index_dir"], f"{name}", w["depths"])
-        out.append(f"[ -f {root}/depth_latency/pgvector.json ] || {{ mkdir -p {root}/depth_latency && PYTHONPATH=. "
-                   f"{ANN} -u scripts/depth_latency_pgvector.py --dsn \"$PG_DSN\" --queries {w['queries']} "
-                   f"--ks {' '.join(map(str, q3['ks']))} --out {root}/depth_latency/pgvector.json "
-                   f"> {root}/depth_latency/log_pg.txt 2>&1; }}")
-        for budget in w["q3_budgets"]:
-            b = f"{root}/b{budget:g}"
-            out.append(f"[ -f {b}/chosen.json ] || {{ mkdir -p {b} && PYTHONPATH=. {PY} -u -m "
-                       f"recal.system_benefit.choose run --prep {w['prep']} --stream {w['stream']} "
-                       f"--total-fraction {budget:g} --curve {curve} --depth-table {depth} {nodes_dim} "
-                       f"--coord-bytes {w['coord_bytes']:g} {backend_flags(w, 'diskann')} --target {q3['target']:g} "
-                       f"--out {b}/chosen.json > {b}/log_choose.txt 2>&1; }}  # recal.system_benefit.choose")
-            for s in SPLITS:
-                if s == 0:
-                    continue
-                for seed in cfg["seeds"]:
-                    out.append(cell(f"{b}/recal_s{q3jobs.pct(s)}_s{seed}", "recal", "recal", w, s * budget,
-                                    f"{backend_flags(w, 'diskann')} --target {q3['target']:g} --strict-modes --seed {seed}"))
-            share = f"$({PY} -m recal.system_benefit.choose get {b}/chosen.json recal_budget_fraction)"
-            for seed in cfg["seeds"]:
-                out.append(cell(f"{b}/recal_chosen_s{seed}", "recal", "recal", w, share,
-                                f"{backend_flags(w, 'diskann')} --target {q3['target']:g} --strict-modes --seed {seed}"))
-            for system in ("aker", "qvcache"):
-                out.append(cell(f"{b}/{system}_chosen", system, system, w, share,
-                                f"{backend_flags(w, 'diskann')} --seed 0"))
-            nodes_chosen = f"$({PY} -m recal.system_benefit.choose get {b}/chosen.json node_cache_nodes)"
-            arms = {"none": ("none", None), "nodecache": ("none", q3_nodes(w, budget)),
-                    "aker": (f"{b}/aker_chosen/aker.json", nodes_chosen),
-                    "qvcache": (f"{b}/qvcache_chosen/qvcache.json", nodes_chosen),
-                    "recal": (f"{b}/recal_chosen_s0/recal.json", nodes_chosen)}
-            for label, (run, nodes) in arms.items():
-                spec = "none" if run == "none" else f"{label}={run}"
-                node_flag = "" if nodes is None else f"--nodes {nodes} "
-                clients = " ".join(map(str, q3jobs.CLIENTS))
-                d = f"{b}/throughput_{label}"
-                out.append(f"[ -f {d}/replay.json ] || {{ mkdir -p {d} && PYTHONPATH=. {ANN} -u {q3jobs.REPLAY} "
-                           f"--workload {w['replay_workload']} --arm {spec} --clients {clients} {node_flag}"
-                           f"--io-complete --repetitions {q3['repetitions']} --out {d}/replay.json "
-                           f"> {d}/log.txt 2>&1; }}  # throughput_replay.py")
+        rw = w["replay_workload"]
+        arms = [f"--arm nodeonly=none,nodes={node_cache_nodes(w, budget, 100)}"]
+        arm_args = []
+        for key in q3["systems"]:
+            stem = Q3_SYSTEMS[key][2]
+            for ns in q3["node_shares"]:
+                job = by_cell[f"{ROOT}/q3/{name}/{key}_n{ns}"]
+                path = f"{owner_out(job)}/{stem}.json"
+                spec = arm_spec(f"{key}_n{ns}", path, node_cache_nodes(w, budget, ns))
+                arms.append(f"--arm {spec}")
+                arm_args.append(f"--arm {spec}")
+        needs = (f"{w['dataset']}/diskann_index", f"{w['dataset']}/prep")
+        sweep = (f"[ -f {root}/sweep.json ] || {{ mkdir -p {root} && PYTHONPATH=. {ANN} -u {REPLAY} --workload {rw} "
+                 f"{' '.join(arms)} --clients {sat} --saturation-clients {sat} --repetitions {reps} --io-complete --out {root}/sweep.json "
+                 f"> {root}/log_sweep.txt 2>&1; }}  # throughput_replay.py")
+        best = (f"[ -f {root}/best.json ] || {{ PYTHONPATH=. {PY} -u -m {BEST_SPLIT} run --sweep {root}/sweep.json "
+                f"--clients {sat} {' '.join(arm_args)} --out {root}/best.json > {root}/log_best.txt 2>&1; }}  "
+                f"# {BEST_SPLIT}")
+        get = lambda s: f"$({PY} -m {BEST_SPLIT} get {root}/best.json {s}.spec)"  # noqa: E731
+        clients = " ".join(map(str, q3["clients"]))
+        thread_arms = " ".join([f"--arm nodeonly=none,nodes={node_cache_nodes(w, budget, 100)}"]
+                               + [f"--arm {get(k)}" for k in q3["systems"]])
+        threads = (f"[ -f {root}/threads.json ] || {{ PYTHONPATH=. {ANN} -u {REPLAY} --workload {rw} {thread_arms} "
+                   f"--clients {clients} --repetitions {reps} --io-complete --out {root}/threads.json "
+                   f"> {root}/log_threads.txt 2>&1; }}  # throughput_replay.py")
+        out += [Job(sweep, "q3", name, "split_sweep", "replay", f"{root}/sweep", needs),
+                Job(best, "q3", name, "best_split", "best_split", f"{root}/best", needs),
+                Job(threads, "q3", name, "thread_lines", "threads", f"{root}/threads", needs)]
     return out
 
 
-def q4_lines(cfg: dict) -> list[str]:
+# ---- Q4 --------------------------------------------------------------------------------------------------------
+
+def deployable_flags(cfg: dict) -> str:
+    return f"--target {cfg['q2']['target']:g} --strict-modes"
+
+
+def q4_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
     q4, out = cfg["q4"], []
-    wl = cfg["workloads"]
+    flags = deployable_flags(cfg)
+    dep = modes.recal_backend("deployable")
     for name in q4["grid_workloads"]:
-        w = wl[name]
-        out += robustness.grid_lines(w["prep"], w["stream"], name, seeds=cfg["seeds"],
-                                     extra=f"--coord-bytes {w['coord_bytes']:g} {backend_flags(w, 'diskann')}")
+        if name not in wl:
+            continue
+        w = wl[name]["w"]
+        for b in q4["grid_budgets"]:
+            out.append(hit_job("q4", name, w, f"budget_b{b:g}_s0", "recal", "recal", b, dep, flags, "recal_grid", 0))
+        for h in q4["histories"]:
+            frac = h / STREAM_LENGTH
+            out.append(hit_job("q4", name, w, f"history_h{h}_s0", "recal", "recal", 0.05, dep,
+                               f"{flags} --history {h} --history-frac {frac:g}", "recal_history", 0))
     for name in q4["shift_workloads"]:
-        w = wl[name]
-        out += robustness.shift_lines(q4["shift_prep_dir"], name, seeds=q4["shift_seeds"],
-                                      extra=f"--coord-bytes {w['coord_bytes']:g} {backend_flags(w, 'diskann')}")
+        if name not in wl:
+            continue
+        w = wl[name]["w"]
+        for kind in ("abrupt", "gradual", "correlated"):
+            for on in (True, False):
+                tag = "signals" if on else "periodic"
+                for seed in cfg["shift_seeds"]:
+                    prep = f"{q4['shift_prep_dir']}/{name}_{kind}_seed{seed}"
+                    extra = "" if on else " --no-rebuild-signals"
+                    d = f"{ROOT}/q4/{name}/shift_{kind}_{tag}_s{seed}"
+                    line = cell(d, "recal", "recal", w, 0.05, f"{backend_flags(w, dep)} {flags}{extra} --seed {seed}",
+                                prep=prep, stream=kind)
+                    out.append(Job(line, "q4", name, f"recal_shift_{tag}", "hit", d,
+                                   needs_of(w, dep, ("shift_preps",))))
     for name in q4["k_workloads"]:
-        w = wl[name]
-        out += robustness.k_lines(w["prep"], w["stream"], name, seeds=cfg["seeds"],
-                                  extra=f"--coord-bytes {w['coord_bytes']:g} {backend_flags(w, 'diskann')}")
-    for name in q4["burst_workloads"]:
-        w = wl[name]
-        out += robustness.burst_lines(w["prep"], w["stream"], name, budgets=w["q3_budgets"], seeds=cfg["seeds"],
-                                      extra=f"--coord-bytes {w['coord_bytes']:g} {backend_flags(w, 'diskann')}")
-    for name in q4["update_workloads"]:
-        out += robustness.update_lines(wl[name], name, q4, cfg["seeds"])
+        if name not in wl:
+            continue
+        w = wl[name]["w"]
+        for k in q4["fixed_k"]:
+            out.append(hit_job("q4", name, w, f"k{k}_s0", "recal", "recal", 0.05, dep, f"{flags} --k {k}",
+                               "recal_fixed_k", 0))
+        out.append(hit_job("q4", name, w, "mixed_s0", "recal", "recal", 0.05, dep, f"{flags} --k 10 --k-mixed",
+                           "recal_mixed_k", 0))
+    out += q4_update_jobs(cfg, wl)
     return out
 
 
-EXPERIMENTS = {"q1": q1_lines, "q2": q2_lines, "q3": q3_lines, "q4": q4_lines}
+UPDATE_SYSTEMS = {
+    "recal": ("recal", "recal", ""),
+    "aker": ("aker", "aker", ""),
+    "proximity-a": ("proximity", "proximity_p0.1", "--prox-percentile 0.1 --tag _p0.1"),
+    "proximity-b": ("proximity", "proximity_p1", "--prox-percentile 1 --tag _p1"),
+}
 
 
-def all_lines(cfg: dict, only=None) -> dict[str, list[str]]:
-    """Every cell of every experiment, one line each (identical runs appear once per experiment cell)."""
-    return {name: fn(cfg) for name, fn in EXPERIMENTS.items() if only is None or name in only}
+def update_job_id(name: str, mode: str, rate: float, system: str, seed: int) -> str:
+    return f"{name}_{mode}{round(100 * rate):d}_{system}_s{seed}"
 
 
-def runs(cfg: dict, only=None) -> dict:
+def update_cells(cfg: dict) -> list[tuple]:
+    """(system, mode, rate) of the update runs of one workload: ReCal and Aker on uniform and targeted at 1% and
+    10%, Proximity A and B on targeted 10% only."""
+    q4, out = cfg["q4"], []
+    for system in ("recal", "aker"):
+        out += [(system, mode, rate) for mode in q4["update_modes"] for rate in q4["update_rates"]]
+    out += [(system, "targeted", max(q4["update_rates"])) for system in ("proximity-a", "proximity-b")]
+    return out
+
+
+def q4_update_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
+    """Update runs: one independent job each, with its own prep folder and its own live pgvector clone
+    ($PG_CLONES/<job id>.dsn). Every system answers misses with live searches on that clone and applies the
+    schedule's inserts and deletes in order; ground truth is the exact top-200 filtered by liveness."""
+    q4, out = cfg["q4"], []
+    for name in q4["update_workloads"]:
+        if name not in wl:
+            continue
+        w, budget = wl[name]["w"], wl[name]["standin"]
+        for system, mode, rate in update_cells(cfg):
+            method, stem, flags = UPDATE_SYSTEMS[system]
+            if method == "recal":
+                flags = f"--target {cfg['q2']['target']:g}"
+            job = update_job_id(name, mode, rate, system, 0)
+            prep = f"{q4['update_prep_dir']}/{name}_{mode}{round(100 * rate):d}"
+            d = f"{ROOT}/q4/{name}/updates/{job}"
+            strict = " --strict-modes" if method == "recal" else ""
+            line = cell(d, stem, method, w, budget,
+                        f"--backend pgvector --pg-dsn @$PG_CLONES/{job}.dsn --updates {prep}/updates.npz "
+                        f"{flags}{strict} --seed 0", prep=prep)
+            out.append(Job(line, "q4", name, f"update_{system}", "update", d,
+                           needs_of(w, "exact", ("update_preps", "pgvector_db"))))
+    return out
+
+
+# ---- assembling ------------------------------------------------------------------------------------------------
+
+EXPERIMENTS = ("q1", "q2", "q3", "q4")
+
+
+def cell_jobs(cfg: dict, medrag: dict | None = None) -> tuple[OrderedDict, list[str]]:
+    """Jobs of the cells that do not depend on other results, per experiment (Q3 hit-rate runs included)."""
+    wl, skipped = plan(cfg, medrag)
+    return OrderedDict([("q1", q1_jobs(cfg, wl)), ("q2", q2_jobs(cfg, wl)), ("q3", q3_hit_jobs(cfg, wl)),
+                        ("q4", q4_jobs(cfg, wl))]), skipped
+
+
+def all_lines(cfg: dict, only=None, medrag: dict | None = None) -> dict[str, list[str]]:
+    """Every cell line before de-duplication (the follow-up Q3 jobs are added by runs())."""
+    jobs, _ = cell_jobs(cfg, medrag)
+    return {exp: [j.line for j in v] for exp, v in jobs.items() if only is None or exp in only}
+
+
+def runs(cfg: dict, only=None, medrag: dict | None = None) -> dict:
     """Each distinct run once, with the mapping from every experiment cell to the run that produces it.
 
-    jobs: experiment -> job lines to execute (the first experiment, in q1..q4 order, that contains a run emits it);
-    runs: hash -> {line, out (where the result is), cells: [{experiment, cell, out}]};
-    cells: experiment -> [{cell, hash}] in cell order.
+    jobs: experiment -> Jobs to execute (the first experiment, in q1..q4 order, that contains a run emits it);
+    runs: hash -> {line, out, job fields, cells: [{experiment, cell, out}]}; cells: experiment -> [{cell, hash}];
+    split_points: Q3 points {cell, workload, system, node_share, hit_hash, replay_hash, arm}; skipped: workloads left out.
     """
     from recal import matrix_hash
-    jobs, table, cells = {}, {}, {}
-    for exp, lines in all_lines(cfg, only).items():
-        jobs[exp], cells[exp] = [], []
-        for line in lines:
-            h, out = matrix_hash.cell_hash(line), matrix_hash.out_dir(line)
-            entry = table.get(h)
-            if entry is None:
-                entry = table[h] = {"line": line, "out": out, "cells": []}
-                jobs[exp].append(line)
-            entry["cells"].append({"experiment": exp, "cell": out, "out": out})
-            cells[exp].append({"cell": out, "hash": h})
-    return {"jobs": jobs, "runs": table, "cells": cells}
+    wl, skipped = plan(cfg, medrag)
+    cells, _ = cell_jobs(cfg, medrag)
+    jobs, table, listed = OrderedDict((e, []) for e in EXPERIMENTS), {}, OrderedDict((e, []) for e in EXPERIMENTS)
+
+    def add(job: Job) -> str:
+        h, out = matrix_hash.cell_hash(job.line), matrix_hash.out_dir(job.line)
+        entry = table.get(h)
+        if entry is None:
+            entry = table[h] = {"line": job.line, "out": out, "workload": job.workload, "system": job.system,
+                                "kind": job.kind, "needs": list(job.needs), "cells": []}
+            jobs[job.exp].append(job)
+        entry["cells"].append({"experiment": job.exp, "cell": out, "out": out})
+        listed[job.exp].append({"cell": out, "hash": h})
+        return h
+
+    hit_hash = {}
+    for exp, items in cells.items():
+        for job in items:
+            hit_hash[job.cell] = add(job)
+    q3_hits = cells["q3"]
+    follow = q3_followups(cfg, wl, q3_hits, lambda j: table[hit_hash[j.cell]]["out"])
+    replay = {}
+    for job in follow:
+        replay[job.cell] = add(job)
+    points = []
+    for name, entry in wl.items():
+        sweep = replay[f"{ROOT}/q3/{name}/sweep"]
+        points.append({"cell": f"q3/{name}/nodeonly", "workload": name, "system": "nodeonly", "node_share": 100,
+                       "hit_hash": None, "replay_hash": sweep, "arm": "nodeonly"})
+        for key in cfg["q3"]["systems"]:
+            for ns in cfg["q3"]["node_shares"]:
+                points.append({"cell": f"q3/{name}/{key}_n{ns}", "workload": name, "system": key, "node_share": ns,
+                               "hit_hash": hit_hash[f"{ROOT}/q3/{name}/{key}_n{ns}"], "replay_hash": sweep,
+                               "arm": f"{key}_n{ns}"})
+    keep = [e for e in EXPERIMENTS if only is None or e in only]
+    return {"jobs": {e: jobs[e] for e in keep}, "runs": table, "cells": {e: listed[e] for e in keep},
+            "split_points": points, "skipped": skipped}
 
 
-def sharing_table(cfg: dict, only=None) -> dict:
-    """Per experiment: cells, runs it executes, cells whose run is also used by another experiment, and cells
-    that repeat a run already in the same experiment."""
-    r = runs(cfg, only)
+def sharing_table(cfg: dict, only=None, medrag: dict | None = None) -> dict:
+    """Per experiment: cells, runs it executes, cells whose run is also used by another experiment, and cells that
+    repeat a run of the same experiment; Q3 also splits its cells into split points and thread lines."""
+    r = runs(cfg, only, medrag)
     out = {}
     for exp, cells in r["cells"].items():
         owners = {h: {c["experiment"] for c in r["runs"][h]["cells"]} for h in {c["hash"] for c in cells}}
-        shared = sum(1 for c in cells if len(owners[c["hash"]]) > 1)
         counts = {}
         for c in cells:
             counts[c["hash"]] = counts.get(c["hash"], 0) + 1
-        repeats = sum(n - 1 for n in counts.values())
-        out[exp] = {"cells": len(cells), "runs_emitted": len(r["jobs"][exp]), "shared_with_other": shared,
-                    "repeated_within": repeats}
-    out["total"] = {"cells": sum(v["cells"] for v in out.values()), "runs_emitted": len(r["runs"]),
-                    "shared_with_other": sum(v["shared_with_other"] for v in out.values()),
-                    "repeated_within": sum(v["repeated_within"] for v in out.values())}
+        out[exp] = {"cells": len(cells), "runs_emitted": len(r["jobs"][exp]),
+                    "shared_with_other": sum(1 for c in cells if len(owners[c["hash"]]) > 1),
+                    "repeated_within": sum(n - 1 for n in counts.values())}
+    pts = r["split_points"]
+    shared = sum(1 for p in pts if p["hit_hash"] and any(c["experiment"] != "q3" for c in r["runs"][p["hit_hash"]]["cells"]))
+    out["q3_detail"] = {"split_points": len(pts), "node_only": sum(1 for p in pts if p["hit_hash"] is None),
+                        "hit_rate_runs_shared_with_q1": shared,
+                        "hit_rate_runs_new": len([p for p in pts if p["hit_hash"]]) - shared,
+                        "thread_lines": sum(1 for j in r["jobs"].get("q3", []) if j.kind == "threads") * 4,
+                        "replay_jobs": sum(1 for j in r["jobs"].get("q3", []) if j.kind == "replay")}
+    out["total"] = {"cells": sum(v["cells"] for k, v in out.items() if k in EXPERIMENTS),
+                    "runs_emitted": len(r["runs"]), "skipped": r["skipped"]}
     return out
-
-
-def design_table(cfg: dict) -> dict:
-    """Per experiment: the number of cells and the dimensions multiplied, from the configuration alone."""
-    wl, seeds = cfg["workloads"], len(cfg["seeds"])
-    pairs = sum(len(w["budgets"]) for w in wl.values())
-    systems = len(q1_systems(cfg))
-    q3_pairs = sum(len(w["q3_budgets"]) for w in wl.values())
-    n_split = len([s for s in SPLITS if s > 0])
-    q4, q4w = cfg["q4"], cfg["q4"]
-    grid_cells = len(robustness.BUDGETS) + len([h for h in robustness.HISTORIES if h != 30_000])
-    n_updates = (len(q4["update_workloads"]) * len(q4["update_modes"]) * len(q4["update_rates"])
-                 * len(q4["update_systems"]) * seeds)
-    q3_per_pair = 1 + n_split * seeds + seeds + 2 + 5
-    table = {
-        "q1": {"cells": pairs * systems * seeds,
-               "dimensions": f"{pairs} (workload, budget) x {systems} systems x {seeds} seeds"},
-        "q2": {"cells": len(wl) * 8 * seeds, "dimensions": f"{len(wl)} workloads x 8 variants x {seeds} seeds"},
-        "q3": {"cells": q3_pairs * q3_per_pair + len(wl) * 3,
-               "dimensions": f"{q3_pairs} (workload, budget) x [1 choice + {n_split} splits x {seeds} seeds + "
-                             f"chosen x {seeds} + Aker, QVCache + 5 throughput] + {len(wl)} workloads x 3 "
-                             f"(curve, DiskANN and pgvector depth tables)"},
-        "q4": {"cells": (len(q4["grid_workloads"]) * grid_cells * seeds
-                         + len(q4["shift_workloads"]) * 3 * 2 * len(q4["shift_seeds"])
-                         + len(q4["k_workloads"]) * 5 * seeds
-                         + sum(len(wl[n]["q3_budgets"]) for n in q4["burst_workloads"]) * 2 * seeds + n_updates),
-               "dimensions": f"grid {len(q4['grid_workloads'])} x {grid_cells} x {seeds}; shifts "
-                             f"{len(q4['shift_workloads'])} x 3 x 2 x {len(q4['shift_seeds'])}; K "
-                             f"{len(q4['k_workloads'])} x 5 x {seeds}; bursts "
-                             f"{sum(len(wl[n]['q3_budgets']) for n in q4['burst_workloads'])} budgets x 2 x {seeds}; "
-                             f"updates {len(q4['update_workloads'])} x {len(q4['update_modes'])} x "
-                             f"{len(q4['update_rates'])} x {len(q4['update_systems'])} x {seeds}"},
-    }
-    table["total"] = {"cells": sum(v["cells"] for v in table.values()), "dimensions": ""}
-    del q4w
-    return table

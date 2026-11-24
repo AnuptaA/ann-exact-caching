@@ -52,7 +52,7 @@ def test_generator_never_pairs_a_mode_with_the_wrong_backend():
 
 
 def test_baselines_in_q1_run_on_both_backends():
-    labels = [s[0] for s in matrix.q1_systems(cfg())]
+    labels = [s[0] for s in matrix.q1_systems(cfg(), cfg()["workloads"]["spacev-0.3"])]
     for system in ("aker", "proximity-a", "proximity-b", "qvcache"):
         assert f"{system}_exact" in labels and f"{system}_diskann" in labels
 

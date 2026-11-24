@@ -125,7 +125,8 @@ def test_a_data_change_run_without_a_live_backend_is_refused(update_prep, tmp_pa
 def test_every_update_job_line_carries_its_own_clone_dsn():
     from recal import matrix
     cfg = json.loads(open("experiments/matrix.example.json").read())
-    updates = [x for x in matrix.q4_lines(cfg) if "/updates/" in x]
-    assert len(updates) == 144 and all("--backend pgvector --pg-dsn @$PG_CLONES/" in x for x in updates)
+    jobs = matrix.cell_jobs(cfg, {"q1_budgets": [0.001], "standin_5pct": 0.0003})[0]["q4"]
+    updates = [j.line for j in jobs if j.kind == "update"]
+    assert len(updates) == 30 and all("--backend pgvector --pg-dsn @$PG_CLONES/" in x for x in updates)
     dsns = {x.split("--pg-dsn @")[1].split(" ")[0] for x in updates}
-    assert len(dsns) == 144
+    assert len(dsns) == 30
