@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-time setup of a fresh Ubuntu 24.04 x86_64 instance for the evaluation. Safe to rerun.
 #   sudo -E bash scripts/ec2_bootstrap.sh [--role prepare|run] [--datasets LIST] [--dry-run]
-#       [--only STEP ...] [--skip STEP ...] [--from STEP] [--clean] [--no-data] [--no-smoke]
+#       [--only STEP ...] [--skip STEP ...] [--from STEP] [--clean] [--check] [--no-data] [--no-smoke]
 #
 # Run it through sudo from the normal user (-E keeps the RECAL_* variables). System steps (apt, sysctl, the
 # data directories) run as root; everything else (the harness setup with its PostgreSQL cluster, virtual
@@ -18,6 +18,8 @@
 #                    the sum of their needs plus 20%), the harness volume check and the data fetch.
 #   --from STEP      resume at STEP (earlier steps are skipped, STEP is redone)
 #   --clean          remove the state file, .venv-core, .venv-ann and the third-party builds ($TP), then exit
+#   --check          verify the result of every step without changing anything (run it as the normal user, no
+#                    sudo): one PASS or FAIL line per check, with the fix for each FAIL; exit 1 if any failed
 #
 # Steps, in order. A step runs only if the previous ones passed; on a failure the script prints the step, the
 # failed command and the last 30 lines of its output, then the summary, and stops.
@@ -43,17 +45,20 @@
 # Environment:
 #   DATA_DIR         data volume (default /data); datasets and answer tables go to $DATA_DIR/datasets
 #   RESULTS_DIR      results (default $DATA_DIR/results); linked to simulations/approximate_hits/results
-#   TP               third-party build prefix (default $DATA_DIR/third_party); Aker and QVCache build there
+#   TP               third-party build prefix (default $RECAL_THIRD_PARTY, else $DATA_DIR/third_party); Aker and
+#                    QVCache build there
 #   RECAL_TMP        scratch and state directory (default /tmp); the state is in $RECAL_TMP/recal_bootstrap
 #   RECAL_QUEUE_DIR  job queue directory (default /tmp/mx)
 #   RECAL_DRIVE_*    dataset Drive folder links for the data step (or .env.local in the checkout)
 #   PYTHON311        interpreter for .venv-core (default python3.11; installed from the deadsnakes PPA if missing)
 set -uo pipefail
+# nothing may prompt: git, pip and apt fail instead of waiting for input
+export GIT_TERMINAL_PROMPT=0 PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="${DATA_DIR:-/data}"
 RESULTS_DIR="${RESULTS_DIR:-$DATA_DIR/results}"
-TP="${TP:-$DATA_DIR/third_party}"
+TP="${TP:-${RECAL_THIRD_PARTY:-$DATA_DIR/third_party}}"
 PYTHON311="${PYTHON311:-python3.11}"
 RECAL_TMP="${RECAL_TMP:-/tmp}"
 RECAL_QUEUE_DIR="${RECAL_QUEUE_DIR:-/tmp/mx}"
@@ -66,6 +71,7 @@ ROLE=prepare
 SMOKE=1
 DATA=1
 CLEAN=0
+CHECK=0
 FROM=""
 DATASETS="$ALL_DATASETS"
 ONLY=()
@@ -90,6 +96,7 @@ run() {
 
 # apt_run CMD...: root apt call that never prompts (debconf, needrestart).
 apt_run() { run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 "$@"; }
+APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 
 # preseed_mkl: answer the Intel MKL debconf question "use libmkl_rt.so as the default BLAS/LAPACK" with no.
 preseed_mkl() {
@@ -240,8 +247,8 @@ step_limits() {
 step_venvs() {
     if ! command -v "$PYTHON311" > /dev/null 2>&1; then
         apt_run add-apt-repository -y ppa:deadsnakes/ppa
-        apt_run apt-get update -qq
-        apt_run apt-get install -y -qq python3.11 python3.11-venv python3.11-dev
+        apt_run apt-get "${APT_OPTS[@]}" update -qq
+        apt_run apt-get "${APT_OPTS[@]}" install -y -qq python3.11 python3.11-venv python3.11-dev
     fi
     as_user "$PYTHON311" -m venv "$root/.venv-core"
     as_user "$root/.venv-core/bin/pip" install --quiet -r "$root/envs/core.txt" pybind11 pytest
@@ -262,7 +269,7 @@ clean_core() {
 
 step_aker() {
     # the step installs what the harness does not (rsync, used by the Aker build), then checks every tool and library
-    apt_run apt-get install -y -qq rsync libopenblas-dev
+    apt_run apt-get "${APT_OPTS[@]}" install -y -qq rsync libopenblas-dev
     if [ "$DRY" -eq 0 ]; then aker_missing | require_missing aker; fi
     as_user mkdir -p "$TP"
     local boost
@@ -281,9 +288,14 @@ clean_aker() {
 }
 
 step_qvcache() {
+    # a complete build whose module imports is only registered again: no packages, no checks, no rebuild
+    if [ "$DRY" -eq 0 ] && qvcache_module > /dev/null && register_qvcache; then
+        log "qvcache: build already complete, module registered"
+        return 0
+    fi
     preseed_mkl
     # shellcheck disable=SC2086
-    apt_run apt-get install -y -qq $QVCACHE_PACKAGES
+    apt_run apt-get "${APT_OPTS[@]}" install -y -qq $QVCACHE_PACKAGES
     if [ "$DRY" -eq 0 ]; then
         { qvcache_missing; apt_missing $QVCACHE_PACKAGES; } | require_missing qvcache
     fi
@@ -301,8 +313,11 @@ step_qvcache() {
         -DPython3_EXECUTABLE="$root/.venv-ann/bin/python"
     as_user env "PATH=$(tool_path)" "$cmake_path" --build "$src/build" -j "$(nproc 2>/dev/null || echo 8)"
     # make the binding importable from .venv-ann
-    as_user bash -c "d=\$(dirname \$(find '$src/build' -name 'qvcache*.so' | head -n1)) && \
-        echo \$d > \$('$root/.venv-ann/bin/python' -c 'import site; print(site.getsitepackages()[0])')/qvcache.pth"
+    if [ "$DRY" -eq 1 ]; then
+        printf '[dry-run] register the qvcache module found under %s in .venv-ann (qvcache.pth) and import it\n' "$src"
+    else
+        register_qvcache
+    fi
 }
 
 clean_qvcache() { run rm -rf "$TP/qvcache/build"; }
@@ -314,12 +329,17 @@ step_links() {
         [ -e "$root/$rel" ] || as_user ln -s "$DATA_DIR/$rel" "$root/$rel"
     done
     as_user mkdir -p "$RESULTS_DIR"
+    # make prepare writes under <repo>/results; keep it on the data volume
+    [ -e "$root/results" ] || as_user ln -s "$RESULTS_DIR" "$root/results"
     [ -e "$root/simulations/approximate_hits/results" ] || \
         as_user ln -s "$RESULTS_DIR" "$root/simulations/approximate_hits/results"
 }
 
 step_store() {
-    as_user "$root/.venv-core/bin/pip" install --quiet boto3
+    # boto3 is in envs/core.txt; install it only when an older venv lacks it
+    if ! as_user "$root/.venv-core/bin/python" -c "import boto3" > /dev/null 2>&1; then
+        as_user "$root/.venv-core/bin/pip" install --quiet boto3
+    fi
     if [ "$DRY" -eq 0 ] && [ -z "${RECAL_STORE:-}${RECAL_S3_BUCKET:-}" ]; then
         log "note: set RECAL_STORE before make prepare / make run"
     fi
@@ -327,15 +347,130 @@ step_store() {
 
 step_data() {
     [ "$DATA" -eq 1 ] || { log "data fetch skipped (--no-data)"; return 0; }
+    local py="$root/.venv-core/bin/python"
+    # the fetch needs gdown and numpy in the core venv (not the system python)
+    if ! as_user "$py" -c "import gdown, numpy" > /dev/null 2>&1; then
+        as_user "$root/.venv-core/bin/pip" install --quiet gdown
+    fi
     # shellcheck disable=SC2046
-    RECAL_REPO="$root" as_user sh "$root/scripts/fetch_data.sh" $(fetch_flags)
+    RECAL_REPO="$root" FETCH_PY="$py" as_user sh "$root/scripts/fetch_data.sh" $(fetch_flags)
 }
 
 step_smoke() {
     [ "$SMOKE" -eq 1 ] || { log "smoke test skipped (--no-smoke)"; return 0; }
     as_user "$root/.venv-core/bin/python" -m pytest -q "$root/tests/recal" "$root/tests/test_cachecore.py"
     as_user "$root/.venv-core/bin/python" -m scripts.gen_matrix --config "$root/experiments/matrix.example.json" --dry-run
-    as_user env PYTHONPATH="$root" "$root/.venv-core/bin/python" -m scripts.smoke_cells --out "$RESULTS_DIR/smoke"
+    as_user env PYTHONPATH="$root" "LD_LIBRARY_PATH=$(aker_ld_library_path)" "$root/.venv-core/bin/python" \
+        -m scripts.smoke_cells --out "$RESULTS_DIR/smoke"
+}
+
+# --- --check ---------------------------------------------------------------------------------------------
+CHECK_FAILED=0
+
+# check_line NAME FIX CMD...: PASS when the command succeeds, else FAIL with the fix. Nothing is changed.
+check_line() {
+    local name="$1" fix="$2"
+    shift 2
+    if "$@" > /dev/null 2>&1; then
+        printf 'PASS  %s\n' "$name"
+    else
+        printf 'FAIL  %s -> %s\n' "$name" "$fix"
+        CHECK_FAILED=1
+    fi
+}
+
+python_imports() { "$1" -c "import $2"; }
+
+aker_filter_line_present() {
+    "$root/.venv-core/bin/python" -I -c "
+import sys
+data = open(sys.argv[1], 'rb').read()
+sys.exit(0 if b'FILTER faiss_M=' in data else 1)" "$TP/aker_vendored/build/lib/libaker.so"
+}
+
+shims_load() {
+    LD_LIBRARY_PATH="$(aker_ld_library_path)" "$root/.venv-core/bin/python" -I -c "
+import ctypes, sys
+d = sys.argv[1]
+for n in ('libakershim.so', 'libakershim_prox.so'):
+    ctypes.CDLL(d + '/' + n)" "$root/simulations/approximate_hits/aker_real"
+}
+
+pg_has_vector() {
+    "$root/.venv-core/bin/python" -I -c "
+import psycopg, sys
+with psycopg.connect(host='127.0.0.1', port=int(sys.argv[1]), user='postgres', connect_timeout=5) as c:
+    row = c.execute(\"SELECT 1 FROM pg_available_extensions WHERE name = 'vector'\").fetchone()
+sys.exit(0 if row else 1)" "${Q1_PG_PORT:-54320}"
+}
+
+# with_timeout CMD...: bounded when timeout(1) exists
+with_timeout() {
+    if command -v timeout > /dev/null 2>&1; then timeout 30 "$@"; else "$@"; fi
+}
+
+store_reachable() {
+    local store="${RECAL_STORE:-}"
+    case "$store" in
+        s3://*) with_timeout aws s3 ls "${store%/}/" ;;
+        "") return 1 ;;
+        *) [ -d "$store" ] && [ -w "$store" ] ;;
+    esac
+}
+
+drive_variables_set() {
+    "$root/.venv-core/bin/python" -I -c "
+import sys
+sys.path.insert(0, sys.argv[1])
+from scripts import data_fetch
+names = {'spacev': [], 'triviaqa': ['triviaqa'], 'medrag': ['medrag', 'medrag100k'], 'tripclick': ['tripclick']}
+folders = sorted({f for d in sys.argv[3:] for f in names[d]})
+env = data_fetch.drive_env(__import__('pathlib').Path(sys.argv[1]))
+missing = data_fetch.missing_variables(folders, env)
+print(' '.join(missing))
+sys.exit(1 if missing else 0)" "$root" x $DATASETS
+}
+
+disk_has_space() {
+    local free
+    free=$(df --output=avail -BG "$(existing_parent "$DATA_DIR")" | tail -n 1 | tr -dc '0-9')
+    [ -n "$free" ] && [ "$free" -ge "$REQUIRED_GB" ]
+}
+
+owned_by_me() {
+    local p
+    for p in "$@"; do [ -d "$p" ] && [ -w "$p" ] || return 1; done
+}
+
+run_checks() {
+    local core="$root/.venv-core/bin/python" ann="$root/.venv-ann/bin/python" pgbin="/usr/lib/postgresql/${PG_MAJOR:-16}/bin"
+    CHECK_FAILED=0
+    log "check: datasets $DATASETS, data volume $DATA_DIR (run as the normal user, not through sudo)"
+    check_line "disk: $REQUIRED_GB GB free on $DATA_DIR" "free space on the volume (bash scripts/ec2_bootstrap.sh --datasets ...)" disk_has_space
+    check_line "directories writable by $(id -un)" "sudo -E bash scripts/ec2_bootstrap.sh --from preconditions (or sudo chown -R $(id -un): $DATA_DIR $root)" \
+        owned_by_me "$DATA_DIR" "$RESULTS_DIR" "$TP" "$RECAL_QUEUE_DIR" "$root"
+    check_line "tool cmake >= $MIN_CMAKE" "rerun the base step (sudo -E ... --from base)" find_cmake
+    check_line "tool $AKER_CXX >= $MIN_GCC" "sudo apt-get install build-essential" test -z "$(compiler_missing "$AKER_CXX")"
+    check_line "tools make git rsync taskset" "sudo apt-get install make git rsync util-linux" test -z "$(commands_missing make git rsync taskset)"
+    check_line "tool aws (store)" "install the AWS CLI v2" command -v aws
+    check_line "postgresql binaries ($pgbin)" "rerun the base step (sudo -E ... --from base)" test -x "$pgbin/pg_ctl" -a -x "$pgbin/psql"
+    check_line ".venv-core imports numpy scipy sklearn faiss pybind11 gdown boto3 psycopg" \
+        "rerun the venvs step (sudo -E ... --from venvs)" python_imports "$core" "numpy, scipy, sklearn, faiss, pybind11, gdown, boto3, psycopg"
+    check_line ".venv-ann imports numpy scipy faiss diskannpy" "rerun the venvs step (sudo -E ... --from venvs)" \
+        python_imports "$ann" "numpy, scipy, faiss, diskannpy"
+    check_line "ReCal core and cache core import" "rerun the core step (sudo -E ... --from core)" \
+        env PYTHONPATH="$root" "$core" -c "import recal.core, simulations.approximate_hits.cachecore"
+    check_line "Aker shims (standard and Proximity) load" "rerun the aker step (sudo -E ... --from aker)" shims_load
+    check_line "Aker FILTER line is compiled in" "rerun the aker step (sudo -E ... --from aker)" aker_filter_line_present
+    check_line "import qvcache in .venv-ann" "rerun the qvcache step (sudo -E ... --from qvcache)" qvcache_imports
+    check_line "fs.aio-max-nr >= 1048576" "sudo -E bash scripts/ec2_bootstrap.sh --from limits" \
+        test "$(cat /proc/sys/fs/aio-max-nr 2> /dev/null || echo 0)" -ge 1048576
+    check_line "PostgreSQL answers on port ${Q1_PG_PORT:-54320} with pgvector available" "make q1-pg-start (make prepare starts it too)" pg_has_vector
+    check_line "store ${RECAL_STORE:-RECAL_STORE unset} reachable" "set RECAL_STORE (s3://bucket/prefix) and check the instance role (aws s3 ls)" store_reachable
+    check_line "Drive variables for $DATASETS set" "set the missing RECAL_DRIVE_* variables in the environment or .env.local" drive_variables_set
+    check_line "links: datasets/aker and results" "rerun the links step (sudo -E ... --from links)" test -e "$root/datasets/aker" -a -e "$root/results"
+    if [ "$CHECK_FAILED" -eq 0 ]; then log "check: all passed"; else log "check: some checks failed"; fi
+    return "$CHECK_FAILED"
 }
 
 # --- state -------------------------------------------------------------------------------------------------
@@ -437,6 +572,7 @@ main() {
             --no-data) DATA=0 ;;
             --no-smoke) SMOKE=0 ;;
             --clean) CLEAN=1 ;;
+            --check) CHECK=1 ;;
             --from)
                 shift; FROM="${1:-}"
                 case " ${STEPS[*]} " in *" $FROM "*) ;; *) echo "--from needs one of: ${STEPS[*]}" >&2; return 2 ;; esac
@@ -450,6 +586,11 @@ main() {
     if [ "$ROLE" = run ]; then DATA=0; fi
     REQUIRED_GB="$(required_gb)"
 
+    if [ "$CHECK" -eq 1 ]; then
+        if [ -z "$COMMIT" ]; then COMMIT=check; fi
+        run_checks
+        return $?
+    fi
     if [ "$DRY" -eq 0 ]; then
         if [ "$(id -u)" -ne 0 ]; then
             log "run as root through sudo from the normal user: sudo -E bash scripts/ec2_bootstrap.sh $original_args"

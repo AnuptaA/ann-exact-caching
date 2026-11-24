@@ -205,11 +205,12 @@ def test_git_status_is_clean_after_the_links_step_and_the_build_outputs(tmp_path
     outputs = (".venv-core/bin/python", ".venv-ann/x", ".venv/x", ".venv-encode/x", ".env.local",
                "recal/core/_recal_core.cpython-311-x86_64-linux-gnu.so",
                "simulations/approximate_hits/cachecore/_cachecore.cpython-311-x86_64-linux-gnu.so",
-               "datasets/.drive_staging/part", "build/replay/driver", ".pytest_cache/x", "recal/__pycache__/x.pyc")
+               "datasets/.drive_staging/part", "build/replay/driver", ".pytest_cache/x", "recal/__pycache__/x.pyc",
+               "results/online/x/q.npy", "results/.prepare/tripclick/prep.json")
     for rel in outputs:
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         (repo / rel).touch()
-    assert (repo / "datasets/aker").is_symlink()
+    assert (repo / "datasets/aker").is_symlink() and (repo / "results").is_symlink()
     status = subprocess.run([*git, "status", "--porcelain"], capture_output=True, text=True).stdout
     assert status == ""
 
@@ -217,15 +218,16 @@ def test_git_status_is_clean_after_the_links_step_and_the_build_outputs(tmp_path
 def test_every_apt_call_is_non_interactive_and_mkl_is_preseeded_first():
     text = SCRIPT.read_text()
     for line in text.splitlines():
-        if re.search(r"\b(apt-get|add-apt-repository)\b", line) and not line.lstrip().startswith("#"):
+        if re.search(r"\b(apt-get|add-apt-repository)\b", line) and not line.lstrip().startswith(("#", "check_line")):
             assert line.lstrip().startswith("apt_run "), line
     out = dry("--only", "qvcache")
     lines = out.splitlines()
     seed = next(i for i, x in enumerate(lines) if "debconf-set-selections" in x)
-    install = next(i for i, x in enumerate(lines) if "apt-get install" in x and "libmkl-full-dev" in x)
+    install = next(i for i, x in enumerate(lines) if "apt-get" in x and "libmkl-full-dev" in x)
     assert seed < install
     assert "libmkl-rt libmkl-rt/use-as-default-blas-lapack boolean false" in lines[seed]
     assert "env DEBIAN_FRONTEND=noninteractive" in lines[install]
+    assert "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold" in lines[install]
     env = dict(os.environ, PYTHON311="no-such-python")
     for step in ("venvs", "aker"):
         run_out = subprocess.run(["bash", str(SCRIPT), "--dry-run", "--only", step], capture_output=True, text=True,

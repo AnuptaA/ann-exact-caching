@@ -68,10 +68,28 @@ class LocalBackend:
                       if p.is_file() and not p.name.endswith(".part"))
 
 
+def instance_region(timeout: float = 2.0) -> str | None:
+    """Region of the EC2 instance (IMDSv2), or None off EC2."""
+    import urllib.request
+    base = "http://169.254.169.254/latest"
+    try:
+        token = urllib.request.urlopen(urllib.request.Request(
+            f"{base}/api/token", method="PUT", headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"}),
+            timeout=timeout).read().decode()
+        return urllib.request.urlopen(urllib.request.Request(
+            f"{base}/meta-data/placement/region", headers={"X-aws-ec2-metadata-token": token}),
+            timeout=timeout).read().decode().strip() or None
+    except Exception:
+        return None
+
+
 class S3Backend:
     def __init__(self, bucket: str, prefix: str = ""):
         import boto3
-        self.client = boto3.client("s3")
+        from botocore.config import Config
+        region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or instance_region()
+        config = Config(retries={"max_attempts": 8, "mode": "standard"}, connect_timeout=10, read_timeout=60)
+        self.client = boto3.client("s3", region_name=region, config=config)
         self.bucket = bucket
         self.prefix = prefix.strip("/")
 

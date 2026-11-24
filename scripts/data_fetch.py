@@ -25,6 +25,7 @@ import os
 import re
 import json
 import shutil
+import time
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,8 @@ DRIVE_VARS = {
     "esci": "RECAL_DRIVE_ESCI",
 }
 ENV_FILE = ".env.local"
+RETRIES = 3
+QUOTA_MARKERS = ("too many users", "many accesses", "quota")
 TRIVIAQA_COUNTS = {"0.3": 99_903, "0.6": 99_990, "0.99": 99_907}
 
 
@@ -232,9 +235,39 @@ def print_variable_status(folders: list[str], env: dict[str, str]) -> None:
         print(f"{var} {'set' if var not in missing_variables([name], env) else 'missing'}")
 
 
+def import_gdown():
+    try:
+        import gdown
+    except ImportError:
+        raise SystemExit("gdown is not installed in this Python (pip install gdown, or run through scripts/fetch_data.sh "
+                         "with .venv-core)")
+    return gdown
+
+
+def with_retries(call, what: str, attempts: int = RETRIES, pause: float = 10.0):
+    """Run a Drive call; retry transient errors, stop at once with a clear message on a quota limit."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return call()
+        except SystemExit:
+            raise
+        except Exception as exc:
+            text = str(exc)
+            if any(m in text.lower() for m in QUOTA_MARKERS):
+                raise SystemExit(f"Google Drive refused {what}: quota or access limit ({text.strip()[:200]}). Try again "
+                                 f"later, or ask the owner for a copy of the file")
+            if attempt == attempts:
+                raise SystemExit(f"{what} failed after {attempts} attempts: {text.strip()[:300]}")
+            print(f"{what}: attempt {attempt} failed ({text.strip()[:120]}), retrying")
+            time.sleep(pause * attempt)
+
+
 def list_drive(folder_id: str) -> list[dict]:
-    import gdown
-    files = gdown.download_folder(id=folder_id, skip_download=True, quiet=True, use_cookies=False)
+    gdown = import_gdown()
+    files = with_retries(lambda: gdown.download_folder(id=folder_id, skip_download=True, quiet=True, use_cookies=False),
+                         "listing a Drive folder")
+    if files is None:
+        raise SystemExit("Drive returned no listing (is the folder shared with 'anyone with the link'?)")
     return [{"path": f.path, "id": f.id, "size": getattr(f, "size", None)} for f in files]
 
 
@@ -253,9 +286,17 @@ def download_item(action: dict, root: Path, staging: Path) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         common.download_file(f"{HF_BASE}/{item.name}", dest)
         return
-    import gdown
+    gdown = import_gdown()
+    staging.mkdir(parents=True, exist_ok=True)
     target = staging / Path(item.dest).name
-    gdown.download(id=action["entry"]["id"], output=str(target), quiet=False)
+    what = f"downloading {item.name}"
+    with_retries(lambda: gdown.download(id=action["entry"]["id"], output=str(target), quiet=False, resume=True), what)
+    if not target.exists():
+        raise SystemExit(f"{what}: Drive gave no file (quota or sharing problem); partial data stays in {staging}")
+    expected = action["entry"].get("size")    # the listing's size only; computed sizes are estimates
+    if expected is not None and target.stat().st_size != expected:
+        raise SystemExit(f"{what}: got {target.stat().st_size} bytes, expected {expected}; the file is kept in {staging}, "
+                         f"rerun to resume")
     place(target, dest)
 
 

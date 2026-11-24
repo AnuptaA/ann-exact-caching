@@ -17,9 +17,17 @@ PY = ".venv-core/bin/python"
 ANN = ".venv-ann/bin/python"
 K_MAX = 100
 SEARCH_LIST_FACTOR = 7
+PREP_DEPTH = 500    # top500.npy: the file name and depth every consumer reads (recal.sim, eval_real_backend)
 NPROC = "$(getconf _NPROCESSORS_ONLN)"
+# DiskANN build memory cap in GB: 60% of this machine's memory
+BUILD_GB = "$(awk '/MemTotal/ {printf \"%d\", $2 / 1048576 * 0.6}' /proc/meminfo)"
 # derived from TripClick: not uploaded unless asked for
 RESTRICTED = ("tripclick",)
+# datasets the harness pipeline (harness/datasets.py) has a spec for
+HARNESS_DATASETS = ("spacev", "sphere", "esci")
+# estimated disk need per dataset in GB (README sizes table plus scratch of twice the base vectors); the same
+# figures scripts/ec2_bootstrap.sh uses
+DISK_NEED_GB = {"spacev": 24.4, "triviaqa": 128.4, "medrag": 467.5, "tripclick": 29.6}
 
 
 @dataclass
@@ -39,8 +47,8 @@ def fetch_stage(cfg: dict, dataset: str) -> Stage:
 
 
 def prep_stage(cfg: dict, dataset: str) -> Stage:
-    """Request streams and exact answers to depth 7 x K_max per workload, then exact ground truth to depth 200."""
-    depth = SEARCH_LIST_FACTOR * K_MAX
+    """Request streams and exact top-500 answers per workload (top500.npy), then exact ground truth to K_max."""
+    depth = PREP_DEPTH
     cmds = []
     for w in artifacts.workloads_of(cfg, dataset).values():
         cmds.append(f"PYTHONPATH=. {PY} simulations/approximate_hits/online_prepare.py --dataset trace "
@@ -55,24 +63,30 @@ def diskann_stages(cfg: dict, dataset: str) -> list[Stage]:
     """DiskANN index at recall@10 0.95 with a search list of at least 7 x K_max, then its answer tables."""
     ws, listsize = artifacts.workloads_of(cfg, dataset), SEARCH_LIST_FACTOR * K_MAX
     first = next(iter(ws.values()))
-    index_dir = str(Path(first["diskann_file"]).parent / "diskann")
+    out_dir = Path(first["diskann_file"]).parent
+    index_dir = str(out_dir / "diskann")
     build = (f"PYTHONPATH=. {ANN} simulations/approximate_hits/eval_real_backend.py --prep {first['prep']} "
              f"--index diskann --targets 0.95 --fixed 0.95:{listsize} --R {listsize} --answer-depth {K_MAX} "
-             f"--threads {NPROC} --index-dir {index_dir} --build-only")
+             f"--threads {NPROC} --build-gb {BUILD_GB} --index-dir {index_dir} --out-dir {out_dir} --build-only")
     tables = [f"PYTHONPATH=. {ANN} simulations/approximate_hits/eval_real_backend.py --prep {w['prep']} "
               f"--index diskann --targets 0.95 --fixed 0.95:{listsize} --R {listsize} --answer-depth {K_MAX} "
-              f"--threads {NPROC} --index-dir {index_dir}" for w in ws.values()]
+              f"--threads {NPROC} --build-gb {BUILD_GB} --index-dir {index_dir} "
+              f"--out-dir {Path(w['diskann_file']).parent}" for w in ws.values()]
     paths = artifacts.local_paths(cfg, dataset)
     return [Stage("diskann_index", "diskann_index", [build], paths["diskann_index"]),
             Stage("diskann_answers", "diskann_answers", tables, paths["diskann_answers"])]
 
 
 def pgvector_stage(cfg: dict, dataset: str) -> Stage | None:
-    """The database update jobs clone: loaded and indexed in parallel, maintenance_work_mem sized by the harness."""
+    """The database update jobs clone. The server is started first (it does not survive a reboot). Datasets the
+    harness pipeline knows (SPACEV) go through its stages; TripClick and MedRAG are loaded from their base file."""
     if not any(n in cfg["q4"]["update_workloads"] for n in artifacts.workloads_of(cfg, dataset)):
         return None
-    cmds = [f"make q1-stage DATASET={dataset} STAGE={stage} Q1_PG_WORKERS={NPROC}"
-            for stage in ("pg_load", "pg_index")]
+    cmds = ["make q1-pg-start"]
+    if dataset in HARNESS_DATASETS:
+        cmds += [f"make q1-stage DATASET={dataset} STAGE={stage} Q1_PG_WORKERS={NPROC}" for stage in ("pg_load", "pg_index")]
+    else:
+        cmds.append(f"PYTHONPATH=. {PY} -m scripts.pg_load_base --dataset {dataset} --base {settings(cfg, dataset)['base']}")
     return Stage("pgvector_db", "pgvector_db", cmds)
 
 

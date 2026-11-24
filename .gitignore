@@ -246,6 +246,8 @@ simulations/synthetic/processed/
 datasets/aker
 # Staging of interrupted Drive downloads (scripts/data_fetch.py)
 datasets/.drive_staging/
+# Outputs of make prepare and make run (a link to the data volume on instances)
+/results
 # Built shim over the real Aker library (simulations/approximate_hits/aker_real/build.sh)
 simulations/approximate_hits/aker_real/libakershim.so
 # TripClick data: terms forbid sharing any part

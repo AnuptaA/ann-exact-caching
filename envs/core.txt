@@ -8,3 +8,7 @@ faiss-cpu==1.8.*
 diskannpy==0.7.*
 matplotlib
 pytest
+# data fetch, the store and the PostgreSQL loader (scripts/data_fetch.py, recal/store.py, scripts/pg_load_base.py)
+gdown
+boto3
+psycopg[binary]

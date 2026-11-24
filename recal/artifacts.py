@@ -63,7 +63,11 @@ def describe(name: str, paths: list[str], command: str, commit: str, root: Path 
     """Manifest entry of an artifact: its paths, files (size, sha256), command and code commit."""
     entry_files = []
     for p in paths:
-        for f in files_of(root / p):
+        found = files_of(root / p) if (root / p).exists() else []
+        if not found:
+            raise FileNotFoundError(f"artifact {name}: {root / p} does not exist or has no files (the stage that "
+                                    f"should write it did not)")
+        for f in found:
             entry_files.append({"path": str(f.relative_to(root)), "size": f.stat().st_size,
                                 "sha256": store_mod.sha256_file(f)})
     return {"name": name, "paths": paths, "files": entry_files, "command": command, "code_commit": commit,

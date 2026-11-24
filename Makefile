@@ -360,6 +360,7 @@ MATRIX_FILTERS = $(if $(SYSTEM),--system $(SYSTEM),) $(if $(WORKLOAD),--workload
 
 # make prepare DATASET=<spacev|triviaqa|medrag|tripclick|all>: build the shared artifacts and push them to the store
 prepare:
+	@test -n "$(DATASET)" || { echo "set DATASET=<spacev|triviaqa|medrag|tripclick|all>"; exit 1; }
 	$(RECAL_PY) -m scripts.prepare --config $(MATRIX) --dataset $(DATASET)
 
 # Shard job files in $(JOBS)/shards, one per workload (SHARD_BY=question|system)

@@ -167,6 +167,9 @@ def main():
     ap.add_argument("--build-effort", type=int, default=128)
     ap.add_argument("--beam", type=int, default=2, help="DiskANN beam width")
     ap.add_argument("--index-dir", type=str, default=None, help="DiskANN index directory (default <out>/diskann)")
+    ap.add_argument("--out-dir", type=str, default=None,
+                    help="where the answer file and logs go (default results/backends/<out-name or prep name> under "
+                         "simulations/approximate_hits)")
     ap.add_argument("--fixed", nargs="+", default=None,
                     help="target:search_list pairs chosen by select_backend.py (no tuning curve): answers and "
                          "deep lists at exactly that search list and --beam (doc 9u)")
@@ -176,7 +179,7 @@ def main():
                     help="--fixed with search list >= R: one search per query for answer and deep rows (doc 9af)")
     args = ap.parse_args()
     prep = Path(args.prep)
-    out = RES / "backends" / (args.out_name or prep.name)
+    out = Path(args.out_dir) if args.out_dir else RES / "backends" / (args.out_name or prep.name)
     out.mkdir(parents=True, exist_ok=True)
     db, q, truth = load(prep)
     ix = Index(args.index, db, args, out)

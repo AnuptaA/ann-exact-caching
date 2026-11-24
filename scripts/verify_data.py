@@ -161,6 +161,9 @@ def report(problems: list[str]) -> int:
 
 
 def verify_tripclick(directory: Path) -> int:
+    missing = [p for p in ("tripclick-ip-docs.npy", "tripclick-ip-requests-2018-01-01.npy") if not (directory / p).exists()]
+    if missing:
+        return report([f"missing {directory / p}" for p in missing])
     docs = np.load(directory / "tripclick-ip-docs.npy", mmap_mode="r")
     requests = np.load(directory / "tripclick-ip-requests-2018-01-01.npy", mmap_mode="r")
     result = check_ip_transform(docs, requests)

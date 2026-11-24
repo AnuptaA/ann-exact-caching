@@ -3,3 +3,5 @@ faiss-cpu==1.8.*
 diskannpy==0.7.*
 numpy==1.25.*
 scipy
+# eval_real_backend imports run_e2e_oracle_trace, which imports run_e2e_oracle (plots at module level)
+matplotlib

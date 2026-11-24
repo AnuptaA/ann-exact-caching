@@ -129,6 +129,29 @@ sudo -E bash scripts/ec2_bootstrap.sh --role prepare --datasets tripclick 2>&1 |
 - `--datasets a,b` selects the datasets the instance prepares (`spacev`, `triviaqa`, `medrag`, `tripclick`; default all four). The free space of the data volume must cover their sum plus 20%; the same figure replaces the harness's fixed 400 GB volume check, and the data step fetches only those datasets. Every other check still runs. Requirement per dataset (base vectors, DiskANN index, pgvector, answer tables and scratch of twice the base vectors; estimates from the table below): SPACEV 24.4 GB, TriviaQA 128.4 GB, MedRAG 467.5 GB, TripClick 29.6 GB. With the 20% margin: TripClick alone 36 GB, all four 780 GB. A 400 GiB volume formats to 393 GB, so it fits any selection without MedRAG.
 - A step runs only if the previous ones passed. A failure prints the step, the failed command and the last 30 lines of its output, then the summary, and stops. Fix the cause and rerun: steps already done for this commit are skipped, a step that was interrupted or failed is cleaned (partial virtual environments and build directories are removed) and redone. State is in `$RECAL_TMP/recal_bootstrap/` (default `/tmp`).
 - Toolchain for the aker and qvcache steps (`scripts/bootstrap_toolchain.sh`): CMake is taken from the harness build venv (`.venv-build`), `$Q1_TOOLS/bin` or the PATH (at least 3.23.1) and put first on the build PATH; Boost is the harness copy under `$Q1_TOOLS/boost` when it built one, else the system packages (at least 1.80, shared libraries of every component Aker links); Aker needs a shared FAISS, which the harness does not provide (its copy is a static archive), so the aker step builds the same pinned FAISS commit as a shared library into `$TP/faiss-install/lib64`. Each step first lists exactly which tool or library is missing (`aker: missing: - ...`) and stops.
+
+Bootstrap sequence on a fresh instance (user `ubuntu`, repository on the data volume, `.env.local` with the `RECAL_DRIVE_*` links, `RECAL_STORE` set):
+
+```sh
+sudo -E bash scripts/ec2_bootstrap.sh --role prepare --datasets tripclick 2>&1 | tee /data/bootstrap.log
+bash scripts/ec2_bootstrap.sh --check --datasets tripclick     # as ubuntu, no sudo: one PASS or FAIL line per check
+make prepare DATASET=tripclick                                   # as ubuntu, no sudo
+.venv-core/bin/python -m scripts.prepare --config experiments/matrix.example.json --dataset tripclick --check
+```
+
+- If a step fails, the script prints the step's own output (last 30 lines), the failed command and the summary, and
+  stops. Fix the cause and resume with `--from <step>` (steps already done for this commit are skipped; a step that
+  failed or was interrupted is cleaned and redone). `--clean` starts over (state, venvs and third-party builds).
+- `--check` changes nothing: it verifies the virtual environments and their imports, both cores, the Aker shims
+  (standard and Proximity) and their FILTER line, `import qvcache` in `.venv-ann`, `diskannpy`, `fs.aio-max-nr`,
+  PostgreSQL on port 54320 with pgvector, the store (`aws s3 ls` for an S3 store), the Drive variables, the links and
+  the free space, and prints the fix for each FAIL. `scripts.prepare --check` verifies every artifact of a finished
+  prepare against its manifest (size and sha256).
+- `make prepare` is rerunnable: a stage with output paths is skipped when its commands are unchanged and its outputs
+  exist (`--force` redoes it), the PostgreSQL loader keeps a loaded table and a valid index, downloads resume
+  (`gdown` resume, 3 attempts, a clear message when Drive reports a quota limit) and `make q1-pg-start` brings the
+  server back after a reboot. Outputs go to `<repo>/results` (a link to `$RESULTS_DIR`).
+
 - `--from STEP` resumes at a step (earlier steps are skipped, STEP is redone). `--clean` removes the state file, `.venv-core`, `.venv-ann` and the third-party builds in `$TP`, then exits; data, results and the harness toolchain in `/opt/q1` are kept. Start over with `--clean` and run the same command again.
 
 ## Running the evaluation
@@ -167,8 +190,8 @@ logic is in `recal/matrix.py` only. `MATRIX` selects the configuration (default 
   `python -m scripts.store push|pull|ls`. Every result records instance type, CPU model, cores, memory, disk type and
   the code commit (`environment`).
 - Prepare stages per dataset (`recal/prepare.py`, `--dry-run` lists the commands): fetch and verify the data; request
-  streams and exact answers to depth 700 with exact ground truth to depth 200; the DiskANN index at recall@10 0.95 with a
-  search list of 700 (7 x K_max) and its answer tables; the pgvector database for the update workloads (parallel HNSW build,
+  streams and exact top-500 answers (`top500.npy`) with exact ground truth to depth 100; the DiskANN index at recall@10 0.95 with a
+  search list of 700 (7 x K_max) and its answer tables; the pgvector database for the update workloads (SPACEV through the harness stages, TripClick and MedRAG loaded from their base file by `scripts/pg_load_base.py`; parallel HNSW build,
   `maintenance_work_mem` sized by the harness, workers from the core count); shift streams (k-means seed 0 once) and update
   schedules converted once; the MedRAG working set (`medrag_budgets.json`); the QVCache memory measurement. TripClick-derived
   artifacts are not uploaded unless `--upload-restricted` is given. The stage commands for the real datasets need the cluster

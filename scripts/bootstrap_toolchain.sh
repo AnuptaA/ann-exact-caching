@@ -219,3 +219,50 @@ ensure_aker_faiss() {
     as_user env "PATH=$(tool_path)" "$cmake_path" --install "$build"
     as_user touch "$prefix/.installed-$FAISS_COMMIT-shared"
 }
+
+# --- QVCache module -----------------------------------------------------------------------------------------
+# The artifact's build puts the Python module in <artifact>/python (qvcache.cpython-311-*.so); search the whole
+# artifact directory, prefer that location, and never assume a path that was not found.
+
+# qvcache_module: path of the built module; fails (and prints nothing) when there is none.
+qvcache_module() {
+    local src="$TP/qvcache" f
+    for f in "$src"/python/qvcache*.so; do
+        if [ -f "$f" ]; then echo "$f"; return 0; fi
+    done
+    f="$(find "$src" -name 'qvcache*.so' -type f 2> /dev/null | sort | head -n 1 || true)"
+    if [ -n "$f" ]; then echo "$f"; return 0; fi
+    return 1
+}
+
+# qvcache_imports: the module imports in .venv-ann (prints its file).
+qvcache_imports() {
+    as_user "$root/.venv-ann/bin/python" -c "import qvcache; print(qvcache.__file__)"
+}
+
+# register_qvcache: make the module importable from .venv-ann through a .pth file (written as the invoking user),
+# then verify the import.
+register_qvcache() {
+    local module site
+    module="$(qvcache_module)" || {
+        log "qvcache: no qvcache*.so found anywhere under $TP/qvcache (the build did not produce the Python module)"
+        return 1
+    }
+    site="$("$root/.venv-ann/bin/python" -c 'import site; print(site.getsitepackages()[0])')"
+    if [ -z "$site" ] || [ ! -d "$site" ]; then
+        log "qvcache: site-packages of $root/.venv-ann not found (got '$site')"
+        return 1
+    fi
+    dirname "$module" | as_user tee "$site/qvcache.pth" > /dev/null
+    log "qvcache: registered $(dirname "$module") in $site/qvcache.pth"
+    qvcache_imports || {
+        log "qvcache: import qvcache fails in $root/.venv-ann although $module exists"
+        return 1
+    }
+}
+
+# aker_ld_library_path: where the Aker shims find libaker, Boost and FAISS at run time.
+aker_ld_library_path() {
+    printf '%s' "$TP/aker_vendored/build/lib:$TP/aker_vendored_prox/build/lib:$TP/boost-install/lib:$TP/faiss-install/lib64"
+    if [ -n "${LD_LIBRARY_PATH:-}" ]; then printf ':%s' "$LD_LIBRARY_PATH"; fi
+}
