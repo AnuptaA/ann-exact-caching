@@ -189,7 +189,7 @@ def test_no_corpus_skips_the_corpus_files(tmp_path, capsys):
 
 def test_a_missing_expected_file_stops_before_any_download(tmp_path, capsys):
     code, out = run_fetch(tmp_path, capsys, "--medrag", drop=("medrag100k", "requests_100k.json"))
-    assert code == 3 and "requests_100k.json is not in the medrag100k folder (<RECAL_DRIVE_MEDRAG_100K>)" in out
+    assert code == 3 and "requests_100k.json is not in the medrag100k folder (RECAL_DRIVE_MEDRAG_100K)" in out
     assert "needs " not in out
 
 
@@ -243,3 +243,53 @@ def test_result_stamp_records_request_file_name_and_sha256(tmp_path):
     ju.register_data_file(path)
     assert len(ju._data_files) == 1
     ju._data_files.clear()
+
+
+def clear_drive_env(monkeypatch):
+    from scripts import data_fetch
+    for var in data_fetch.DRIVE_VARS.values():
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_folder_id_accepts_a_link_or_an_id():
+    from scripts import data_fetch
+    assert data_fetch.folder_id("https://example.org/x/folders/abc_-12") == "abc_-12"
+    assert data_fetch.folder_id("https://example.org/x/folders/abc_-12?usp=sharing") == "abc_-12"
+    assert data_fetch.folder_id(" abc_-12 ") == "abc_-12"
+
+
+def test_a_missing_variable_stops_before_any_listing_or_download(tmp_path, capsys, monkeypatch):
+    from scripts import data_fetch
+    clear_drive_env(monkeypatch)
+
+    def fail(_):
+        raise AssertionError("Drive was asked")
+    monkeypatch.setattr(data_fetch, "list_drive", fail)
+    code = data_fetch.main(["--medrag", "--root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert code == 4 and "RECAL_DRIVE_MEDRAG" in out and "RECAL_DRIVE_MEDRAG_100K" in out
+    assert "RECAL_DRIVE_TRIPCLICK" not in out
+
+
+def test_env_file_is_read_and_the_environment_wins(tmp_path, monkeypatch):
+    from scripts import data_fetch
+    clear_drive_env(monkeypatch)
+    (tmp_path / ".env.local").write_text(
+        "# note\nRECAL_DRIVE_MEDRAG=https://x/folders/fromfile\nexport RECAL_DRIVE_TRIPCLICK='tc'\n")
+    monkeypatch.setenv("RECAL_DRIVE_MEDRAG", "fromenv")
+    env = data_fetch.drive_env(tmp_path)
+    assert env["RECAL_DRIVE_MEDRAG"] == "fromenv" and env["RECAL_DRIVE_TRIPCLICK"] == "tc"
+    assert data_fetch.missing_variables(["medrag", "tripclick", "triviaqa"], env) == ["RECAL_DRIVE_TRIVIAQA"]
+
+
+def test_dry_run_and_list_report_set_and_missing_without_values(tmp_path, capsys, monkeypatch):
+    from scripts import data_fetch
+    clear_drive_env(monkeypatch)
+    monkeypatch.setenv("RECAL_DRIVE_TRIPCLICK", "secretvalue")
+    assert data_fetch.main(["--list", "--root", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "RECAL_DRIVE_TRIPCLICK set" in out and "RECAL_DRIVE_MEDRAG missing" in out
+    monkeypatch.setattr(data_fetch, "list_drive", lambda _: [])
+    data_fetch.main(["--tripclick", "--medrag", "--dry-run", "--root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert "RECAL_DRIVE_MEDRAG missing" in out and "secretvalue" not in out

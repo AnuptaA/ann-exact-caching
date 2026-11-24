@@ -101,7 +101,7 @@ Tests (no data or services): `.venv/bin/python -m pytest tests/approximate_hits 
 
 ## Fetching data
 
-SPACEV and SPHERE bases and Aker's request streams (Zipf 0.3, 0.6, 0.99) come from Aker's Hugging Face release (`sjoon-oh/aker`). TriviaQA, MedRAG and TripClick each have a shared Google Drive folder with a README (ask the maintainers for access; do not re-share them; TripClick's terms forbid sharing it). `datasets/MANIFEST.md` lists every folder, file, shape and transform.
+SPACEV and SPHERE bases and Aker's request streams (Zipf 0.3, 0.6, 0.99) come from Aker's Hugging Face release (`sjoon-oh/aker`). TriviaQA, MedRAG and TripClick each have a shared Google Drive folder with a README (ask the maintainers for access and for the folder links; do not re-share them; TripClick's terms forbid sharing it). Set `RECAL_DRIVE_MEDRAG`, `RECAL_DRIVE_MEDRAG_100K`, `RECAL_DRIVE_TRIPCLICK`, `RECAL_DRIVE_TRIVIAQA` (and `RECAL_DRIVE_ESCI` for `--esci`) to the dataset's folder link or ID, in the environment or in a git-ignored `.env.local` at the repository root (the environment wins). A missing variable stops the fetch before any download; `--list` and `--dry-run` show which are set. On an instance, export them before `scripts/ec2_bootstrap.sh` runs its data step or put `.env.local` in the checkout. `datasets/MANIFEST.md` lists every folder, file, shape and transform.
 
 ```sh
 python3 -m venv .venv-fetch && .venv-fetch/bin/pip install gdown

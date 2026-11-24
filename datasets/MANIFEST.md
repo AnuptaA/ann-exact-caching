@@ -2,7 +2,7 @@
 
 Data files are gitignored. TripClick's terms forbid sharing the data or anything derived from it. Each Drive
 dataset has its own folder with a README; `scripts/fetch_data.sh` takes the files from these folders by name and
-stops when one is missing. Real downloads run on the cluster.
+stops when one is missing. Set `RECAL_DRIVE_<DATASET>` to the dataset's folder link (shared privately), in the environment or in `.env.local`. Real downloads run on the cluster.
 
 ## Sources
 
@@ -10,10 +10,10 @@ stops when one is missing. Real downloads run on the cluster.
 |---|---|---|
 | SPACEV | Hugging Face `sjoon-oh/aker` | `spacev-10m.npy` (10,000,000 x 100 int8), `spacev-sim-100k-<z>.npy` (100,000 x 100 int8), Zipf 0.3, 0.6, 0.99 |
 | SPHERE base | Hugging Face `sjoon-oh/aker` | `sphere-10m.npy` (10,000,000 x 768 float64, 61.4 GB) |
-| TriviaQA | Drive folder `<RECAL_DRIVE_TRIVIAQA>` | `triviaqa-ip-sim-100k-<z>.npy` (request vectors, 769-d float32), `triviaqa-dpr-sim-100k-<z>.npy` (768-d, before the transform), `-lineidx.npy`, `.json` (match statistics), `sphere-ip-10m.json` (M and norm statistics) |
-| MedRAG corpus | Drive folder `<RECAL_DRIVE_MEDRAG>` | `medrag-ip-docs.npy`, `base_pmids.npy`, `base.json`, `medrag_pmids.npy` |
-| MedRAG requests (100K) | Drive folder `<RECAL_DRIVE_MEDRAG_100K>` | `medrag-ip_100k-requests.npy`, `requests_100k.json`, `zipf_draw_100k.json`, `paraphrases_100k.json`, `paraphrase_stats_100k.json` |
-| TripClick | Drive folder `<RECAL_DRIVE_TRIPCLICK>` | `tripclick-ip-docs.npy`, `tripclick-ip-requests-2018-01-01.npy`, `requests-2018-01-01.json`; raw 768-d shards and `LICENSE.md` are not fetched |
+| TriviaQA | Drive folder (`RECAL_DRIVE_TRIVIAQA`) | `triviaqa-ip-sim-100k-<z>.npy` (request vectors, 769-d float32), `triviaqa-dpr-sim-100k-<z>.npy` (768-d, before the transform), `-lineidx.npy`, `.json` (match statistics), `sphere-ip-10m.json` (M and norm statistics) |
+| MedRAG corpus | Drive folder (`RECAL_DRIVE_MEDRAG`) | `medrag-ip-docs.npy`, `base_pmids.npy`, `base.json`, `medrag_pmids.npy` |
+| MedRAG requests (100K) | Drive folder (`RECAL_DRIVE_MEDRAG_100K`) | `medrag-ip_100k-requests.npy`, `requests_100k.json`, `zipf_draw_100k.json`, `paraphrases_100k.json`, `paraphrase_stats_100k.json` |
+| TripClick | Drive folder (`RECAL_DRIVE_TRIPCLICK`) | `tripclick-ip-docs.npy`, `tripclick-ip-requests-2018-01-01.npy`, `requests-2018-01-01.json`; raw 768-d shards and `LICENSE.md` are not fetched |
 
 ## Transforms
 

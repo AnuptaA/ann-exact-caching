@@ -15,10 +15,14 @@ Run it through scripts/fetch_data.sh. Datasets:
   --list      print what each mode would fetch (no network)
   --dry-run   print the actions and the space check without downloading
 
-Every Drive dataset has its own folder (FOLDERS). A file expected in a folder but missing from its listing stops
-the run before anything is downloaded. Free space is checked before every download.
+Every Drive dataset has its own folder, given by an environment variable (DRIVE_VARS) holding the folder link or
+ID. The variables are also read from <root>/.env.local when present; the environment wins. A missing variable stops
+the run before any listing or download, and so does a file expected in a folder but missing from its listing. Free
+space is checked before every download.
 """
 
+import os
+import re
 import json
 import shutil
 import argparse
@@ -30,13 +34,14 @@ ZIPF = ("0.3", "0.6", "0.99")
 MIN_FREE_GB = 10
 NPY_HEADER = 128
 
-FOLDERS = {
-    "medrag": "<RECAL_DRIVE_MEDRAG>",
-    "medrag100k": "<RECAL_DRIVE_MEDRAG_100K>",
-    "tripclick": "<RECAL_DRIVE_TRIPCLICK>",
-    "triviaqa": "<RECAL_DRIVE_TRIVIAQA>",
-    "esci": "<RECAL_DRIVE_ESCI>",
+DRIVE_VARS = {
+    "medrag": "RECAL_DRIVE_MEDRAG",
+    "medrag100k": "RECAL_DRIVE_MEDRAG_100K",
+    "tripclick": "RECAL_DRIVE_TRIPCLICK",
+    "triviaqa": "RECAL_DRIVE_TRIVIAQA",
+    "esci": "RECAL_DRIVE_ESCI",
 }
+ENV_FILE = ".env.local"
 TRIVIAQA_COUNTS = {"0.3": 99_903, "0.6": 99_990, "0.99": 99_907}
 
 
@@ -181,7 +186,7 @@ def build_actions(modes: list[str], root: Path, listing: dict, corpus: bool, for
 
 
 def missing_message(actions: list[dict]) -> str:
-    lines = [f"  {a['item'].name} is not in the {a['item'].folder} folder ({FOLDERS[a['item'].folder]})"
+    lines = [f"  {a['item'].name} is not in the {a['item'].folder} folder ({DRIVE_VARS[a['item'].folder]})"
              for a in actions if a["action"] == "missing"]
     return "expected files are missing from their Drive folders, nothing was downloaded:\n" + "\n".join(lines)
 
@@ -192,6 +197,39 @@ def total_needed(actions: list[dict]) -> int:
 
 def space_ok(need: int, free: int, floor_gb: float = MIN_FREE_GB) -> bool:
     return free - need >= floor_gb * 2**30
+
+
+def folder_id(value: str) -> str:
+    """Folder ID from a Drive folder link, or the value itself when it is already an ID."""
+    match = re.search(r"/folders/([\w-]+)", value)
+    return match.group(1) if match else value.strip()
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    values = {}
+    if not path.exists():
+        return values
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.removeprefix("export ").split("=", 1)
+        values[key.strip()] = value.strip().strip("\"'")
+    return values
+
+
+def drive_env(root: Path) -> dict[str, str]:
+    return {**load_env_file(root / ENV_FILE), **os.environ}
+
+
+def missing_variables(folders: list[str], env: dict[str, str]) -> list[str]:
+    return [DRIVE_VARS[f] for f in folders if not env.get(DRIVE_VARS[f], "").strip()]
+
+
+def print_variable_status(folders: list[str], env: dict[str, str]) -> None:
+    for name in folders:
+        var = DRIVE_VARS[name]
+        print(f"{var} {'set' if var not in missing_variables([name], env) else 'missing'}")
 
 
 def list_drive(folder_id: str) -> list[dict]:
@@ -228,7 +266,7 @@ def print_actions(actions: list[dict]) -> None:
         print(f"{a['action']:9s} {a['mode']:9s} {item.source:5s} {item.name} -> {item.dest} ({size} bytes)")
 
 
-def print_listing() -> None:
+def print_listing(env: dict[str, str]) -> None:
     for mode in MODES:
         for item in items_for(mode, True, False):
             where = item.folder or "hf"
@@ -236,6 +274,7 @@ def print_listing() -> None:
     for name, dest in MEDRAG_10K.items():
         print(f"medrag    medrag      {name} -> {dest} (only with --medrag-10k)")
     print("esci      esci        every file under ESCI/ -> datasets/esci/ (--esci only)")
+    print_variable_status(list(DRIVE_VARS), env)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -267,8 +306,9 @@ def run_post_steps(modes: list[str], root: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    env = drive_env(args.root)
     if args.list:
-        print_listing()
+        print_listing(env)
         return 0
     modes = selected_modes(args)
     if not modes and not args.esci:
@@ -279,7 +319,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.listing:
         listing = json.loads(args.listing.read_text())
     else:
-        listing = {name: list_drive(FOLDERS[name]) for name in folders}
+        if args.dry_run:
+            print_variable_status(folders, env)
+        missing = missing_variables(folders, env)
+        if missing:
+            print("set these environment variables (or put them in .env.local): " + ", ".join(missing))
+            return 4
+        listing = {name: list_drive(folder_id(env[DRIVE_VARS[name]])) for name in folders}
     actions = build_actions(modes, args.root, listing, corpus, args.force, args.esci, args.medrag_10k)
     print_actions(actions)
     if any(a["action"] == "missing" for a in actions):

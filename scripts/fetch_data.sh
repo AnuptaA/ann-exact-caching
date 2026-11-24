@@ -3,6 +3,7 @@
 #   sh scripts/fetch_data.sh --spacev --triviaqa --sphere [--dry-run]
 #   sh scripts/fetch_data.sh --all [--no-corpus] [--dry-run]    (ESCI is never part of --all)
 #   sh scripts/fetch_data.sh --list
+# Drive folders come from RECAL_DRIVE_MEDRAG, _MEDRAG_100K, _TRIPCLICK, _TRIVIAQA (and _ESCI), or from .env.local.
 # Needs gdown for Drive files (python3 -m venv .venv-fetch && .venv-fetch/bin/pip install gdown).
 # Free space is checked before every download. Data stays gitignored. TripClick must not be shared.
 set -e

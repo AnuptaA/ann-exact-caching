@@ -24,6 +24,7 @@
 #   DATA_DIR      data volume (default /data); datasets and answer tables go to $DATA_DIR/datasets
 #   RESULTS_DIR   results (default $DATA_DIR/results); linked to simulations/approximate_hits/results
 #   TP            third-party build prefix (default $DATA_DIR/third_party); Aker builds there
+#   RECAL_DRIVE_* dataset Drive folder links for the data step (or .env.local in the checkout)
 #   PYTHON311     interpreter for .venv-core (default python3.11; installed from the deadsnakes PPA if missing)
 # Every step prints PASS or FAIL in the summary; a failed step does not stop independent ones.
 set -uo pipefail
