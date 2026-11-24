@@ -52,6 +52,15 @@ AKER = Path("datasets/aker")
 # the vendored source the bootstrap builds from; AKER_CONFIG_PATH (Aker's own variable) overrides it
 CONFIG = Path(os.environ.get("AKER_CONFIG_PATH", HERE.parents[2] / "third_party/aker/bootstrap/aker-standard.ini"))
 
+
+def config_record(path: Path = CONFIG) -> dict:
+    """The INI the shim imports, for every result. The shim overrides every value but dropout."""
+    import configparser
+    parser = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
+    found = parser.read(path)
+    dropout = parser.getfloat("tuning", "dropout", fallback=None) if found else None
+    return {"path": str(Path(path).resolve()), "dropout": dropout}
+
 #-------------------------------------------------------------------------------
 
 
@@ -60,6 +69,7 @@ class Aker:
 
     def __init__(self, dim, pool, topk, delta, risk, a_tighten, a_loosen):
         import os
+        self.config = config_record()
         # Proximity mode: a separate build (libakershim_prox.so, see build.sh); its library dir must
         # come first in LD_LIBRARY_PATH, checked here because the other one would load silently
         name = "libakershim_prox.so" if os.environ.get("AKER_GLOBAL_THRESH") else "libakershim.so"
@@ -535,6 +545,7 @@ def run_timing(args, db, q, top, stream):
 
 
 def write_result(out, res, **dump_kwargs):
+    res.setdefault("aker_config", config_record())
     try:
         from recal.measure.aker_check import library_fingerprint
         res.setdefault("aker_library", library_fingerprint())

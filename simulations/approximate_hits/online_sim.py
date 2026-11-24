@@ -1942,6 +1942,9 @@ def main():
             ob.QVCacheCore if getattr(args, "cache_impl", "python") == "core" else ob.QVCache)
         sim = cls(D, stream, args)
         res = dict(sim.run(), method=args.method, args=vars(args))
+        aker_config = getattr(getattr(sim, "ak", None), "config", None)
+        if aker_config is not None:
+            res["aker_config"] = aker_config
     else:
         sim = Sim(D, stream, args)
         res = sim.run(args.method)

@@ -217,3 +217,12 @@ def test_online_simulator_warms_up_on_thirty_percent_by_default(tmp_path, monkey
     online_sim.main()
     cols, _, meta = rec.load(out / "aker_records.npz")
     assert cols["index"][0] == int(0.3 * n) and meta["history_len"] == int(0.3 * n)
+
+
+def test_every_result_records_the_aker_config_path_and_dropout(tmp_path):
+    drv = load_driver()
+    vendored = ROOT / "third_party/aker/bootstrap/aker-standard.ini"
+    assert drv.config_record() == {"path": str(vendored), "dropout": 0.0}
+    out = tmp_path / "r.json"
+    drv.write_result(out, {"hit_rate": 0.5})
+    assert json.loads(out.read_text())["aker_config"] == {"path": str(vendored), "dropout": 0.0}

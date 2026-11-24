@@ -1324,6 +1324,9 @@ def main():
            "entry_changes": int(getattr(m, "changes", 0)), "in_cache_search": ef_info}
     logger.info(f"hit rate {res['hit_rate']:.3f} (timed sample {res['hit_rate_timed']:.3f}); recall vs "
                 f"exact {res['recall_vs_exact_all']:.3f}; cache + DiskANN {res['cache']['mean_ms']:.2f} ms")
+    aker_config = getattr(getattr(m, "ak", None), "config", None)
+    if aker_config is not None:
+        res["aker_config"] = aker_config
     if args.no_backend_arms:
         guard.stop()
         res["environment"] = guard.report()
