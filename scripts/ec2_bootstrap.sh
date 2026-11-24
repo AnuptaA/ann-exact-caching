@@ -88,6 +88,14 @@ run() {
     return "$rc"
 }
 
+# apt_run CMD...: root apt call that never prompts (debconf, needrestart).
+apt_run() { run env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 "$@"; }
+
+# preseed_mkl: answer the Intel MKL debconf question "use libmkl_rt.so as the default BLAS/LAPACK" with no.
+preseed_mkl() {
+    run bash -c "echo 'libmkl-rt libmkl-rt/use-as-default-blas-lapack boolean false' | debconf-set-selections"
+}
+
 # as_user CMD...: run as the invoking user when the script runs as root through sudo.
 as_user() {
     if [ "$DRY" -eq 1 ]; then printf '[dry-run] (as %s) %s\n' "${RUN_USER:-current user}" "$*"; return 0; fi
@@ -231,9 +239,9 @@ step_limits() {
 
 step_venvs() {
     if ! command -v "$PYTHON311" > /dev/null 2>&1; then
-        run add-apt-repository -y ppa:deadsnakes/ppa
-        run apt-get update -qq
-        run apt-get install -y -qq python3.11 python3.11-venv python3.11-dev
+        apt_run add-apt-repository -y ppa:deadsnakes/ppa
+        apt_run apt-get update -qq
+        apt_run apt-get install -y -qq python3.11 python3.11-venv python3.11-dev
     fi
     as_user "$PYTHON311" -m venv "$root/.venv-core"
     as_user "$root/.venv-core/bin/pip" install --quiet -r "$root/envs/core.txt" pybind11 pytest
@@ -254,7 +262,7 @@ clean_core() {
 
 step_aker() {
     # the step installs what the harness does not (rsync, used by the Aker build), then checks every tool and library
-    run apt-get install -y -qq rsync libopenblas-dev
+    apt_run apt-get install -y -qq rsync libopenblas-dev
     if [ "$DRY" -eq 0 ]; then aker_missing | require_missing aker; fi
     as_user mkdir -p "$TP"
     local boost
@@ -273,7 +281,9 @@ clean_aker() {
 }
 
 step_qvcache() {
-    run apt-get install -y -qq $QVCACHE_PACKAGES
+    preseed_mkl
+    # shellcheck disable=SC2086
+    apt_run apt-get install -y -qq $QVCACHE_PACKAGES
     if [ "$DRY" -eq 0 ]; then
         { qvcache_missing; apt_missing $QVCACHE_PACKAGES; } | require_missing qvcache
     fi

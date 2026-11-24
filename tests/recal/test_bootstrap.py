@@ -212,3 +212,23 @@ def test_git_status_is_clean_after_the_links_step_and_the_build_outputs(tmp_path
     assert (repo / "datasets/aker").is_symlink()
     status = subprocess.run([*git, "status", "--porcelain"], capture_output=True, text=True).stdout
     assert status == ""
+
+
+def test_every_apt_call_is_non_interactive_and_mkl_is_preseeded_first():
+    text = SCRIPT.read_text()
+    for line in text.splitlines():
+        if re.search(r"\b(apt-get|add-apt-repository)\b", line) and not line.lstrip().startswith("#"):
+            assert line.lstrip().startswith("apt_run "), line
+    out = dry("--only", "qvcache")
+    lines = out.splitlines()
+    seed = next(i for i, x in enumerate(lines) if "debconf-set-selections" in x)
+    install = next(i for i, x in enumerate(lines) if "apt-get install" in x and "libmkl-full-dev" in x)
+    assert seed < install
+    assert "libmkl-rt libmkl-rt/use-as-default-blas-lapack boolean false" in lines[seed]
+    assert "env DEBIAN_FRONTEND=noninteractive" in lines[install]
+    env = dict(os.environ, PYTHON311="no-such-python")
+    for step in ("venvs", "aker"):
+        run_out = subprocess.run(["bash", str(SCRIPT), "--dry-run", "--only", step], capture_output=True, text=True,
+                                 env=env).stdout
+        apt = [x for x in run_out.splitlines() if "apt-get" in x or "add-apt" in x]
+        assert apt and all("env DEBIAN_FRONTEND=noninteractive" in x for x in apt), step
