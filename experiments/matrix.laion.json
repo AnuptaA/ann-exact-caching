@@ -1,0 +1,250 @@
+{
+ "seeds": [
+  0
+ ],
+ "shift_seeds": [
+  0,
+  1,
+  2
+ ],
+ "medrag_budgets_file": "results/medrag/medrag_budgets.json",
+ "q1": {
+  "targets": [
+   0.8,
+   0.85,
+   0.9,
+   0.95
+  ],
+  "backends": [
+   "exact",
+   "diskann"
+  ]
+ },
+ "q2": {
+  "target": 0.9
+ },
+ "q3": {
+  "target": 0.9,
+  "systems": [
+   "recal",
+   "aker",
+   "qvcache"
+  ],
+  "node_shares": [
+   80,
+   60,
+   40,
+   20,
+   0
+  ],
+  "saturation_clients": 64,
+  "clients": [
+   1,
+   2,
+   4,
+   8,
+   16,
+   32,
+   64
+  ],
+  "repetitions": 3
+ },
+ "q4": {
+  "grid_workloads": [
+   "spacev-0.6",
+   "triviaqa-0.6",
+   "laion"
+  ],
+  "grid_budgets": [
+   0.005,
+   0.02,
+   0.2
+  ],
+  "histories": [
+   10000,
+   50000
+  ],
+  "shift_workloads": [
+   "spacev-0.6",
+   "triviaqa-0.6"
+  ],
+  "shift_prep_dir": "results/shifts/preps",
+  "k_workloads": [
+   "spacev-0.6",
+   "laion"
+  ],
+  "fixed_k": [
+   5,
+   25,
+   50,
+   75,
+   100
+  ],
+  "update_workloads": [
+   "spacev-0.99",
+   "laion",
+   "medrag"
+  ],
+  "update_modes": [
+   "uniform",
+   "targeted"
+  ],
+  "update_rates": [
+   0.01,
+   0.1
+  ],
+  "update_prep_dir": "results/updates/preps"
+ },
+ "workloads": {
+  "spacev-0.3": {
+   "dataset": "spacev",
+   "prep": "results/online/spacev-aker-0.3",
+   "stream": "trace",
+   "coord_bytes": 1,
+   "n_vectors": 10000000,
+   "dim": 100,
+   "degree": 64,
+   "diskann_file": "results/backends/spacev-aker-0.3/diskann.npz",
+   "replay_workload": "spacev-aker-0.3",
+   "budgets": [
+    0.01,
+    0.05,
+    0.1
+   ],
+   "standin": 0.05
+  },
+  "spacev-0.6": {
+   "dataset": "spacev",
+   "prep": "results/online/spacev-aker-0.6",
+   "stream": "trace",
+   "coord_bytes": 1,
+   "n_vectors": 10000000,
+   "dim": 100,
+   "degree": 64,
+   "diskann_file": "results/backends/spacev-aker-0.6/diskann.npz",
+   "replay_workload": "spacev-aker-0.6",
+   "budgets": [
+    0.01,
+    0.05,
+    0.1
+   ],
+   "standin": 0.05
+  },
+  "spacev-0.99": {
+   "dataset": "spacev",
+   "prep": "results/online/spacev-aker-0.99",
+   "stream": "trace",
+   "coord_bytes": 1,
+   "n_vectors": 10000000,
+   "dim": 100,
+   "degree": 64,
+   "diskann_file": "results/backends/spacev-aker-0.99/diskann.npz",
+   "replay_workload": "spacev-aker-0.99",
+   "budgets": [
+    0.01,
+    0.05,
+    0.1
+   ],
+   "standin": 0.05
+  },
+  "triviaqa-0.3": {
+   "dataset": "triviaqa",
+   "prep": "results/online/triviaqa-ip-0.3",
+   "stream": "trace",
+   "coord_bytes": 4,
+   "n_vectors": 10000000,
+   "dim": 769,
+   "degree": 64,
+   "diskann_file": "results/backends/triviaqa-ip-0.3/diskann.npz",
+   "replay_workload": "triviaqa-ip-0.3",
+   "budgets": [
+    0.01,
+    0.05,
+    0.1
+   ],
+   "standin": 0.05
+  },
+  "triviaqa-0.6": {
+   "dataset": "triviaqa",
+   "prep": "results/online/triviaqa-ip-0.6",
+   "stream": "trace",
+   "coord_bytes": 4,
+   "n_vectors": 10000000,
+   "dim": 769,
+   "degree": 64,
+   "diskann_file": "results/backends/triviaqa-ip-0.6/diskann.npz",
+   "replay_workload": "triviaqa-ip-0.6",
+   "budgets": [
+    0.01,
+    0.05,
+    0.1
+   ],
+   "standin": 0.05
+  },
+  "triviaqa-0.99": {
+   "dataset": "triviaqa",
+   "prep": "results/online/triviaqa-ip-0.99",
+   "stream": "trace",
+   "coord_bytes": 4,
+   "n_vectors": 10000000,
+   "dim": 769,
+   "degree": 64,
+   "diskann_file": "results/backends/triviaqa-ip-0.99/diskann.npz",
+   "replay_workload": "triviaqa-ip-0.99",
+   "budgets": [
+    0.01,
+    0.05,
+    0.1
+   ],
+   "standin": 0.05
+  },
+  "medrag": {
+   "dataset": "medrag",
+   "prep": "results/online/medrag-ip",
+   "stream": "trace",
+   "coord_bytes": 4,
+   "n_vectors": 23888832,
+   "dim": 769,
+   "degree": 64,
+   "diskann_file": "results/backends/medrag-ip/diskann.npz",
+   "replay_workload": "medrag-ip"
+  },
+  "laion": {
+   "dataset": "laion",
+   "prep": "results/online/laion-prompts",
+   "stream": "trace",
+   "coord_bytes": 4,
+   "n_vectors": 9646707,
+   "dim": 512,
+   "degree": 64,
+   "diskann_file": "results/backends/laion-prompts/diskann.npz",
+   "replay_workload": "laion-prompts",
+   "budgets": [
+    0.01,
+    0.05,
+    0.1
+   ],
+   "standin": 0.05
+  }
+ },
+ "prepare": {
+  "spacev": {
+   "fetch": "--spacev",
+   "base": "datasets/aker/spacev-10m.npy",
+   "qvcache_memory": "25000 50000 100000 200000"
+  },
+  "triviaqa": {
+   "fetch": "--triviaqa --sphere",
+   "base": "datasets/aker/sphere-ip-10m.npy",
+   "shift_flags": " --append-zero"
+  },
+  "medrag": {
+   "fetch": "--medrag",
+   "base": "datasets/medrag/medrag-ip-docs.npy"
+  },
+  "laion": {
+   "fetch": "--laion",
+   "base": "datasets/aker/laion-ip-docs.npy"
+  }
+ }
+}

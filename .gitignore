@@ -261,3 +261,4 @@ datasets/medrag/*
 
 # Virtual environments (from main)
 .venv*/
+datasets/laion/

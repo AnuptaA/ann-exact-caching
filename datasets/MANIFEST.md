@@ -13,6 +13,8 @@ stops when one is missing. Set `RECAL_DRIVE_<DATASET>` to the dataset's folder l
 | TriviaQA | Drive folder (`RECAL_DRIVE_TRIVIAQA`) | `triviaqa-ip-sim-100k-<z>.npy` (request vectors, 769-d float32), `triviaqa-dpr-sim-100k-<z>.npy` (768-d, before the transform), `-lineidx.npy`, `.json` (match statistics), `sphere-ip-10m.json` (M and norm statistics) |
 | MedRAG corpus | Drive folder (`RECAL_DRIVE_MEDRAG`) | `medrag-ip-docs.npy`, `base_pmids.npy`, `base.json`, `medrag_pmids.npy` |
 | MedRAG requests (100K) | Drive folder (`RECAL_DRIVE_MEDRAG_100K`) | `medrag-ip_100k-requests.npy`, `requests_100k.json`, `zipf_draw_100k.json`, `paraphrases_100k.json`, `paraphrase_stats_100k.json` |
+| LAION-prompts requests | Drive folder (`RECAL_DRIVE_LAION_PROMPTS`) | `rc-diffusiondb-requests.npy` (100,000 x 512 float32, stream order), `q.npy` (84,416 x 512 float32), `streams.npz` (key `trace`), `top128.npy` (84,416 x 128 int32, exact), `row_to_passage_id.npy` (9,646,707 int64), `requests.json`, `shuffle_perm.npy`, `build.json`, `checks.json`, `README.md` (kept as `README_prompts.md`) |
+| LAION-10M corpus | Drive folder (`RECAL_DRIVE_LAION`, the LAION folder or its `data_vectors`) | `shard_000.npz` ... `shard_099.npz`, float16, 9,646,707 rows x 512 in total; the build writes `datasets/aker/laion-ip-docs.npy` (float32, same row order) with its SHA-256 in `laion-ip-docs.json` |
 | TripClick | Drive folder (`RECAL_DRIVE_TRIPCLICK`) | `tripclick-ip-docs.npy`, `tripclick-ip-requests-2018-01-01.npy`, `requests-2018-01-01.json`; raw 768-d shards and `LICENSE.md` are not fetched |
 
 ## Transforms
@@ -52,3 +54,5 @@ Sizes in bytes; `-` means not yet on this machine.
 | `base_pmids.npy` | - | 23888832 | int64 | - | expected, cluster only |
 | `medrag_pmids.npy` | - | 23895135 | int64 | - | expected, cluster only |
 | `medrag-ip_100k-requests.npy` | - | 100000x769 | float32 | - | expected |
+
+- LAION-prompts: unit-norm CLIP ViT-B/32 vectors, so inner product, cosine and Euclidean rank the same and no coordinate is appended. `scripts/laion_data.py verify` checks shard rows (sum 9,646,707), `row_to_passage_id` against the shards' passage ids, request and query shapes, stream indices, request rows equal to `q.npy[stream]`, and norms. Corpus row r is the r-th vector of the shards in order. Hubness is strong (the 1,000 most frequent images fill 16.8% of top-10 slots) and distances are flat (nearest at about 0.985 of the 10th's distance).

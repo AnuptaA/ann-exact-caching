@@ -81,6 +81,7 @@ _W = [
     Workload("spacev-real", "SPACEV real query log", "spacev-real", backend="spacev-real95",
              budgets=(0.01, 0.1), real_log=True),
     Workload("tripclick-ip", "TripClick real health-search log", "tripclick-ip", real_log=True),
+    Workload("laion-prompts", "LAION-prompts (shuffled DiffusionDB prompts over LAION-10M)", "laion-prompts"),
     # 0.3% of the 23.9M corpus already holds the working set (doc 9y)
     Workload("medrag-ip", "MedRAG-Zipf (Proximity)", "medrag-ip", budgets=(0.0001, 0.0003, 0.001, 0.003)),
     # backend-recall sensitivity (doc 9ae d)

@@ -27,7 +27,7 @@ RESTRICTED = ("tripclick",)
 HARNESS_DATASETS = ("spacev", "sphere", "esci")
 # estimated disk need per dataset in GB (README sizes table plus scratch of twice the base vectors); the same
 # figures scripts/ec2_bootstrap.sh uses
-DISK_NEED_GB = {"spacev": 24.4, "triviaqa": 128.4, "medrag": 467.5, "tripclick": 29.6}
+DISK_NEED_GB = {"spacev": 24.4, "triviaqa": 128.4, "medrag": 467.5, "tripclick": 29.6, "laion": 146.2}
 
 
 @dataclass
@@ -46,6 +46,11 @@ def fetch_stage(cfg: dict, dataset: str) -> Stage:
     return Stage("fetch", None, [f"sh scripts/fetch_data.sh {settings(cfg, dataset)['fetch']}"])
 
 
+def laion_base_stage(cfg: dict, dataset: str) -> Stage:
+    """Float32 corpus from the float16 shards, and the request-file links the workload registry reads."""
+    return Stage("base", None, [f"PYTHONPATH=. {PY} -m scripts.laion_data build --out {settings(cfg, dataset)['base']}"])
+
+
 def prep_stage(cfg: dict, dataset: str) -> Stage:
     """Request streams and exact top-500 answers per workload (top500.npy), then exact ground truth to K_max."""
     depth = PREP_DEPTH
@@ -56,6 +61,9 @@ def prep_stage(cfg: dict, dataset: str) -> Stage:
         cmds.append(f"PYTHONPATH=. {PY} -m scripts.precompute_answers --backend exact "
                     f"--queries {w['prep']}/q.npy --base {settings(cfg, dataset)['base']} --kmax {K_MAX} "
                     f"--gt-out {w['prep']}/gt")
+    if dataset == "laion":
+        cmds += [f"PYTHONPATH=. {PY} -m scripts.laion_data check-truth --prep {w['prep']}"
+                 for w in artifacts.workloads_of(cfg, dataset).values()]
     return Stage("prep", "prep", cmds, artifacts.local_paths(cfg, dataset)["prep"])
 
 
@@ -154,7 +162,10 @@ def qvcache_stage(cfg: dict, dataset: str) -> Stage | None:
 
 def stages(cfg: dict, dataset: str) -> list[Stage]:
     """All stages of a dataset in dependency order."""
-    out = [fetch_stage(cfg, dataset), prep_stage(cfg, dataset), *diskann_stages(cfg, dataset)]
+    out = [fetch_stage(cfg, dataset)]
+    if dataset == "laion":
+        out.append(laion_base_stage(cfg, dataset))
+    out += [prep_stage(cfg, dataset), *diskann_stages(cfg, dataset)]
     if dataset == "medrag":
         out += medrag_stages(cfg)
     out += [s for s in (pgvector_stage(cfg, dataset), shift_stage(cfg, dataset), update_stage(cfg, dataset),

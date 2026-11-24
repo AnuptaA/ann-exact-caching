@@ -78,6 +78,10 @@ WORKLOADS = {
     # reworded by Claude Haiku 5.5, over MedRAG's PubMed (NCBI MedCPT embeddings), inner product ->
     # Euclidean (769-d); datasets/medrag/build_workload.py
     "medrag-ip": {"base": "medrag-ip-docs.npy", "trace": ["medrag-ip_100k-requests.npy"]},
+    # LAION-prompts: 100k DiffusionDB prompt submissions (CLIP ViT-B/32 text, shuffled once) over the 9.6M-image
+    # LAION-10M corpus (CLIP image embeddings, unit norm, 512-d, inner product = cosine = Euclidean ranking);
+    # scripts/laion_data.py builds the float32 corpus and links the request file here
+    "laion-prompts": {"base": "laion-ip-docs.npy", "trace": ["laion-requests.npy"]},
     # the 10K stream (rewordings by another model) is kept under its own name and is not in the experiment matrix
     "medrag-10k-ip": {"base": "medrag-ip-docs.npy", "trace": ["medrag-10k-ip-requests.npy"]},
 }

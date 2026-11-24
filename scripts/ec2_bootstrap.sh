@@ -132,6 +132,7 @@ dataset_tenths() {
         triviaqa) echo $((310 + 340 + 0 + 14 + 620)) ;;
         medrag) echo $((740 + 800 + 1650 + 5 + 1480)) ;;
         tripclick) echo $((47 + 50 + 100 + 5 + 94)) ;;
+        laion) echo $((198 + 193 + 250 + 420 + 5 + 396)) ;;
         *) return 1 ;;
     esac
 }
@@ -139,7 +140,7 @@ dataset_tenths() {
 parse_datasets() {
     local list="$1" d out=""
     for d in ${list//,/ }; do
-        dataset_tenths "$d" > /dev/null || { echo "unknown dataset: $d (spacev, triviaqa, medrag, tripclick)" >&2; return 1; }
+        dataset_tenths "$d" > /dev/null || { echo "unknown dataset: $d (spacev, triviaqa, medrag, tripclick, laion)" >&2; return 1; }
         case " $out " in *" $d "*) ;; *) out="$out $d" ;; esac
     done
     [ -n "$out" ] || { echo "--datasets needs at least one dataset" >&2; return 1; }

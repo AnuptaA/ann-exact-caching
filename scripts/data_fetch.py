@@ -9,9 +9,11 @@ Run it through scripts/fetch_data.sh. Datasets:
   --medrag    MedRAG corpus (MedRAG folder) and the 100K request stream (its own folder); --no-corpus skips
               the 74 GB corpus; --medrag-10k adds the 10K request files (a different rewording model; never
               used by the experiments)
-  --tripclick TripClick vectors and requests
+  --tripclick TripClick vectors and requests (not part of the experiment matrix)
+  --laion     LAION-prompts: request files and exact top-128 (prompts folder), then the 100 corpus shards
+              (LAION folder); --no-corpus skips the shards
   --esci      ESCI files for local checks (never part of --all)
-  --all       every dataset above except ESCI
+  --all       every dataset above except ESCI and LAION
   --list      print what each mode would fetch (no network)
   --dry-run   print the actions and the space check without downloading
 
@@ -41,6 +43,8 @@ DRIVE_VARS = {
     "tripclick": "RECAL_DRIVE_TRIPCLICK",
     "triviaqa": "RECAL_DRIVE_TRIVIAQA",
     "esci": "RECAL_DRIVE_ESCI",
+    "laion_prompts": "RECAL_DRIVE_LAION_PROMPTS",
+    "laion": "RECAL_DRIVE_LAION",
 }
 ENV_FILE = ".env.local"
 RETRIES = 3
@@ -110,6 +114,39 @@ SIZES = {"medrag-ip_100k-requests.npy": npy_size(100_000, 769, 4), "medrag-ip-do
          "tripclick-ip-requests-2018-01-01.npy": npy_size(100_000, 769, 4)}
 
 
+LAION_SHARDS = 100
+LAION_ROWS = 9_646_707
+LAION_REQUESTS = 100_000
+LAION_QUERIES = 84_416
+LAION_PROMPTS = {
+    "rc-diffusiondb-requests.npy": "datasets/laion/rc-diffusiondb-requests.npy",
+    "q.npy": "datasets/laion/q.npy",
+    "streams.npz": "datasets/laion/streams.npz",
+    "top128.npy": "datasets/laion/top128.npy",
+    "row_to_passage_id.npy": "datasets/laion/row_to_passage_id.npy",
+    "requests.json": "datasets/laion/requests.json",
+    "shuffle_perm.npy": "datasets/laion/shuffle_perm.npy",
+    "build.json": "datasets/laion/build.json",
+    "checks.json": "datasets/laion/checks.json",
+    "README.md": "datasets/laion/README_prompts.md",
+}
+SIZES.update({"rc-diffusiondb-requests.npy": npy_size(LAION_REQUESTS, 512, 4),
+              "q.npy": npy_size(LAION_QUERIES, 512, 4), "top128.npy": npy_size(LAION_QUERIES, 128, 4),
+              "row_to_passage_id.npy": npy_size(LAION_ROWS, 1, 8)})
+
+
+def laion_shard_name(index: int) -> str:
+    return f"shard_{index:03d}.npz"
+
+
+def laion_items(corpus: bool = True) -> list[Item]:
+    items = drive_items(LAION_PROMPTS, "laion_prompts")
+    if corpus:
+        items += [Item("drive", laion_shard_name(i), f"datasets/laion/shards/{laion_shard_name(i)}", None, "laion")
+                  for i in range(LAION_SHARDS)]
+    return items
+
+
 def drive_items(files: dict, folder: str) -> list[Item]:
     return [Item("drive", name, dest, SIZES.get(name), folder) for name, dest in files.items()]
 
@@ -123,7 +160,7 @@ def medrag_items(corpus: bool = True, ten_k: bool = False) -> list[Item]:
     return items
 
 
-MODES = ("spacev", "triviaqa", "sphere", "medrag", "tripclick")
+MODES = ("spacev", "triviaqa", "sphere", "medrag", "tripclick", "laion")
 
 
 def items_for(mode: str, corpus: bool = True, ten_k: bool = False) -> list[Item]:
@@ -131,6 +168,8 @@ def items_for(mode: str, corpus: bool = True, ten_k: bool = False) -> list[Item]
         return medrag_items(corpus, ten_k)
     if mode == "tripclick":
         return drive_items(TRIPCLICK, "tripclick")
+    if mode == "laion":
+        return laion_items(corpus)
     return {"spacev": spacev_items, "triviaqa": triviaqa_items, "sphere": sphere_items}[mode]()
 
 
@@ -138,6 +177,9 @@ def find_entry(item: Item, listing: dict) -> dict | None:
     for entry in listing.get(item.folder, []):
         if entry["path"] == item.name:
             return entry
+    if item.folder == "laion":
+        # the link may point at the LAION folder or at data_vectors inside it
+        return next((e for e in listing["laion"] if e["path"].endswith(f"/{item.name}")), None)
     return None
 
 
@@ -333,7 +375,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def selected_modes(args: argparse.Namespace) -> list[str]:
-    return list(MODES) if args.all else [m for m in MODES if getattr(args, m)]
+    return [m for m in MODES if m != "laion"] if args.all else [m for m in MODES if getattr(args, m)]
 
 
 def run_post_steps(modes: list[str], root: Path) -> None:
@@ -353,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     modes = selected_modes(args)
     if not modes and not args.esci:
-        print("choose a dataset (--spacev --triviaqa --sphere --medrag --tripclick --esci) or --all")
+        print("choose a dataset (--spacev --triviaqa --sphere --medrag --tripclick --laion --esci) or --all")
         return 2
     corpus = not args.no_corpus
     folders = needed_folders(modes, args.esci, corpus, args.medrag_10k)

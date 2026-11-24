@@ -62,7 +62,8 @@ All paths are relative to the repository root and gitignored.
 | SPACEV real log | `datasets/aker/spacev1b/{query_log.bin,query.bin}` | Aker's released files |
 | TriviaQA over SPHERE | `datasets/aker/sphere-10m.npy`, `sphere-ip-10m.npy`, `triviaqa-ip-sim-100k-<z>.npy` | Aker's files, then `datasets/reembed_triviaqa_queries.py` and `datasets/make_sphere_ip_transform.py` (needs the DPR encoders in `$RECAL_THIRD_PARTY/sphere/`) |
 | MedRAG | `datasets/aker/medrag-ip-docs.npy` (about 74 GB), `datasets/aker/medrag-ip-requests.npy`, `datasets/medrag/*` | `datasets/medrag/download_medcpt.sh`, `medrag_pmids.py`, `build_workload.py draw|base|queries`, `paraphrase.py` (local llama.cpp server on 127.0.0.1:18080) |
-| TripClick | `datasets/tripclick/raw/` (Hugging Face token needed), `datasets/aker/tripclick-ip-docs.npy`, `tripclick-ip-requests-2018-01-01.npy` | `datasets/tripclick/download.py`, `build_workload.py --start 2018-01-01 --n 100000` |
+| TripClick (not part of the experiment matrix; code and fetch mode kept) | `datasets/tripclick/raw/` (Hugging Face token needed), `datasets/aker/tripclick-ip-docs.npy`, `tripclick-ip-requests-2018-01-01.npy` | `datasets/tripclick/download.py`, `build_workload.py --start 2018-01-01 --n 100000` |
+| LAION-prompts | `datasets/laion/` (request files, `top128.npy`, 100 float16 shards), `datasets/aker/laion-ip-docs.npy` (float32 corpus, 9,646,707 x 512), `laion-requests.npy` | `sh scripts/fetch_data.sh --laion` (needs `RECAL_DRIVE_LAION_PROMPTS` and `RECAL_DRIVE_LAION`), then `python -m scripts.laion_data build` (done by `make prepare DATASET=laion`) |
 | ESCI 1M | `datasets/esci/data_vectors/{esci_db1000000_s42.npy,esci_queries.npy}` | `datasets/esci/build_embedding_subsample.py` (see `datasets/esci/README_esci.md`) |
 | Q1 streams (SPACEV, SPHERE, ESCI, TriviaQA; Zipf, uniform, no-locality) | `$Q1_DATA/<dataset>/` (`base.f32bin`, `streams_seed0.npz`, `gt/`, `answers/`, ...), default `/data/q1` | `make q1-generate DATASET=<name>` |
 | Per-workload preps and backends | `simulations/approximate_hits/results/online/<prep>/` and `results/backends/<prep>/` | `online_prepare.py`, `eval_real_backend.py` |
@@ -120,13 +121,15 @@ One mode per dataset. Files are placed where the workload registry expects them 
 
 Run it through sudo from the normal user, with `-E` so the `RECAL_*` variables (the Drive folder links, `RECAL_STORE`) are kept. System steps (apt, sysctl, the data directories) run as root; the harness setup, virtual environments, builds, data fetch and tests run as the invoking user, and at the end the repository, data, build and queue directories belong to that user. Without root the script prints the command to use and stops.
 
+LAION-prompts replaces TripClick in the experiments (`experiments/matrix.laion.json`; `matrix.example.json` is the TripClick-era configuration). Its stream is shuffled once, so it has no real arrival order: the Q4 burst and natural-drift analyses that used TripClick's order are pending and need synthetic bursts and drift. `--datasets laion` needs 176 GB free (146.2 GB estimate plus 20%).
+
 Pilot instance (only TripClick), from the checkout:
 
 ```sh
 sudo -E bash scripts/ec2_bootstrap.sh --role prepare --datasets tripclick 2>&1 | tee /data/bootstrap.log
 ```
 
-- `--datasets a,b` selects the datasets the instance prepares (`spacev`, `triviaqa`, `medrag`, `tripclick`; default all four). The free space of the data volume must cover their sum plus 20%; the same figure replaces the harness's fixed 400 GB volume check, and the data step fetches only those datasets. Every other check still runs. Requirement per dataset (base vectors, DiskANN index, pgvector, answer tables and scratch of twice the base vectors; estimates from the table below): SPACEV 24.4 GB, TriviaQA 128.4 GB, MedRAG 467.5 GB, TripClick 29.6 GB. With the 20% margin: TripClick alone 36 GB, all four 780 GB. A 400 GiB volume formats to 393 GB, so it fits any selection without MedRAG.
+- `--datasets a,b` selects the datasets the instance prepares (`spacev`, `triviaqa`, `medrag`, `tripclick`, `laion`; default the first four). The free space of the data volume must cover their sum plus 20%; the same figure replaces the harness's fixed 400 GB volume check, and the data step fetches only those datasets. Every other check still runs. Requirement per dataset (base vectors, DiskANN index, pgvector, answer tables and scratch of twice the base vectors; estimates from the table below): SPACEV 24.4 GB, TriviaQA 128.4 GB, MedRAG 467.5 GB, TripClick 29.6 GB. With the 20% margin: TripClick alone 36 GB, all four 780 GB. A 400 GiB volume formats to 393 GB, so it fits any selection without MedRAG.
 - A step runs only if the previous ones passed. A failure prints the step, the failed command and the last 30 lines of its output, then the summary, and stops. Fix the cause and rerun: steps already done for this commit are skipped, a step that was interrupted or failed is cleaned (partial virtual environments and build directories are removed) and redone. State is in `$RECAL_TMP/recal_bootstrap/` (default `/tmp`).
 - Toolchain for the aker and qvcache steps (`scripts/bootstrap_toolchain.sh`): CMake is taken from the harness build venv (`.venv-build`), `$Q1_TOOLS/bin` or the PATH (at least 3.23.1) and put first on the build PATH; Boost is the harness copy under `$Q1_TOOLS/boost` when it built one, else the system packages (at least 1.80, shared libraries of every component Aker links); Aker needs a shared FAISS, which the harness does not provide (its copy is a static archive), so the aker step builds the same pinned FAISS commit as a shared library into `$TP/faiss-install/lib64`. Each step first lists exactly which tool or library is missing (`aker: missing: - ...`) and stops.
 
@@ -209,6 +212,7 @@ logic is in `recal/matrix.py` only. `MATRIX` selects the configuration (default 
 | TriviaQA (SPHERE, 10M x 769, float32) | 31 GB | about 34 GB | none | about 1.4 GB | 128 GB RAM, 300 GB disk | 128 GB RAM, 150 GB disk |
 | MedRAG (23.9M x 769, float32) | 74 GB | about 80 GB | about 165 GB | about 0.5 GB | 256 GB RAM, 600 GB disk (pgvector HNSW build needs about 90 GB of `maintenance_work_mem`) | 192 GB RAM, 400 GB disk with the clones |
 | TripClick (1.5M x 769, float32) | 4.7 GB | about 5 GB | about 10 GB | about 0.5 GB | 64 GB RAM, 100 GB disk | 32 GB RAM, 60 GB disk |
+| LAION-prompts (9.6M x 512, float32) | 19.8 GB (plus 19.3 GB of float16 shards during the build, deletable afterwards) | about 25 GB | about 42 GB | about 0.5 GB | 64 GB RAM (HNSW build about 30 GB), 300 GB disk | 32 GB RAM, 150 GB disk |
 
 Throughput runs want the DiskANN index on local NVMe and the page cache smaller than the index. MedRAG with pgvector is
 the largest instance.

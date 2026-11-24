@@ -52,6 +52,12 @@ def plan(cfg: dict, medrag: dict | None = None) -> tuple[OrderedDict, list[str]]
     return out, skipped
 
 
+def selected(cfg: dict, wl: OrderedDict, question: str) -> OrderedDict:
+    """The workloads of one question: its optional "workloads" list in the configuration, else all."""
+    names = cfg[question].get("workloads")
+    return wl if names is None else OrderedDict((n, e) for n, e in wl.items() if n in names)
+
+
 def default_deviation(w: dict) -> str:
     """The paper's deviation factor (0.25 SPACEV, 0.075 otherwise), written explicitly in every QVCache cell."""
     from recal.qvcache_driver import default_deviation as paper_default
@@ -106,7 +112,7 @@ def q1_systems(cfg: dict, w: dict) -> list[tuple]:
 
 def q1_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
     out = []
-    for name, entry in wl.items():
+    for name, entry in selected(cfg, wl, "q1").items():
         w = entry["w"]
         for budget in entry["budgets"]:
             for seed in cfg["seeds"]:
@@ -118,7 +124,7 @@ def q1_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
 
 def q2_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
     out = []
-    for name, entry in wl.items():
+    for name, entry in selected(cfg, wl, "q2").items():
         w = entry["w"]
         for flag in ABLATIONS:
             for seed in cfg["seeds"]:
@@ -149,7 +155,7 @@ Q3_SYSTEMS = {
 def q3_hit_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
     """The hit-rate run of every split point: the result cache at its share of the 5% budget (share 100 is Q1's run)."""
     q3, out = cfg["q3"], []
-    for name, entry in wl.items():
+    for name, entry in selected(cfg, wl, "q3").items():
         w = entry["w"]
         for key in q3["systems"]:
             system, method, stem, flags = Q3_SYSTEMS[key]
@@ -169,7 +175,7 @@ def q3_followups(cfg: dict, wl: OrderedDict, hits: list[Job], owner_out) -> list
     q3, out = cfg["q3"], []
     by_cell = {j.cell: j for j in hits}
     sat, reps = q3["saturation_clients"], q3["repetitions"]
-    for name, entry in wl.items():
+    for name, entry in selected(cfg, wl, "q3").items():
         w, budget = entry["w"], entry["standin"]
         root = f"{ROOT}/q3/{name}"
         rw = w["replay_workload"]

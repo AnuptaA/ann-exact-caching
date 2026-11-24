@@ -328,7 +328,8 @@ def test_prepare_check_passes_on_an_intact_prepare_and_names_a_damaged_file(tmp_
 
 
 def test_the_disk_need_of_prepare_matches_the_bootstrap():
-    out = subprocess.run(["bash", str(SCRIPT), "--dry-run", "--no-smoke"], capture_output=True, text=True).stdout
+    out = subprocess.run(["bash", str(SCRIPT), "--dry-run", "--no-smoke", "--datasets", ",".join(prepare.DISK_NEED_GB)],
+                         capture_output=True, text=True).stdout
     for dataset, gb in prepare.DISK_NEED_GB.items():
         assert f"disk need {dataset}: {gb} GB" in out
 

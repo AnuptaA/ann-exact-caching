@@ -255,6 +255,7 @@ def main() -> int:
     medrag = sub.add_parser("medrag")
     medrag.add_argument("--dir", type=Path, default=Path("datasets/medrag"))
     medrag.add_argument("--aker-dir", type=Path, default=Path("datasets/aker"))
+    sub.add_parser("laion").add_argument("--dir", type=Path, default=Path("datasets/laion"))
     for name in ("spacev", "sphere", "triviaqa"):
         sub.add_parser(name).add_argument("--dir", type=Path, default=Path("datasets/aker"))
     manifest = sub.add_parser("manifest")
@@ -265,6 +266,9 @@ def main() -> int:
         return verify_tripclick(args.dir)
     if args.command == "medrag":
         return verify_medrag(args.dir, args.aker_dir)
+    if args.command == "laion":
+        from scripts import laion_data
+        return laion_data.verify(args.dir)
     if args.command in ("spacev", "sphere", "triviaqa"):
         return {"spacev": verify_spacev, "sphere": verify_sphere,
                 "triviaqa": verify_triviaqa}[args.command](args.dir)
