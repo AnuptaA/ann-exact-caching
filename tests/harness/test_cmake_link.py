@@ -242,3 +242,59 @@ def test_a_static_archive_needs_blas_after_it_on_the_link_line(tmp_path):
     if with_blas.returncode != 0 and platform.system() != "Darwin":
         pytest.skip("no linkable BLAS on this machine")
     assert with_blas.returncode == 0, with_blas.stderr
+
+
+def _debian_pg(tmp_path: Path, statuses: list[str], systemctl_rc: int = 0) -> dict:
+    """Stubs that behave like Debian's tools: pg_dropcluster --stop fails on a stopped cluster."""
+    import os
+    bin_dir = tmp_path / "pgbin"
+    bin_dir.mkdir()
+    calls, count = tmp_path / "calls", tmp_path / "count"
+    stubs = {
+        "sudo": 'exec "$@"',
+        "pg_lsclusters": f"""n=$(cat {count} 2>/dev/null || echo 0); echo $((n + 1)) > {count}
+set -- {" ".join(statuses)}; shift $n 2>/dev/null; s=${{1:-$(echo {statuses[-1]})}}
+echo "16 main 5432 $s postgres /var/lib/postgresql/16/main /var/log/postgresql/x.log" """,
+        "pg_dropcluster": f"""echo "pg_dropcluster $@" >> {calls}
+if [ "$1" = "--stop" ]; then
+  case "$(cat {tmp_path}/state 2>/dev/null)" in
+    down) echo "Cluster is not running." >&2; echo "Error: could not stop server, aborting" >&2; exit 1 ;;
+  esac
+fi""",
+        "systemctl": f'echo "systemctl $@" >> {calls}; echo "Failed to stop postgresql.service" >&2; exit {systemctl_rc}',
+    }
+    for name, body in stubs.items():
+        path = bin_dir / name
+        path.write_text("#!/bin/sh\n" + body + "\n")
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    (tmp_path / "state").write_text(statuses[-1])
+    return {"PATH": f"{bin_dir}:{os.environ['PATH']}", "calls": str(calls)}
+
+
+def test_a_stopped_packaged_cluster_is_dropped_without_stop(tmp_path):
+    env = _debian_pg(tmp_path, ["down"])
+    out = _bash("drop_packaged_cluster", PATH=env["PATH"])
+    assert out.returncode == 0 and "already stopped" in out.stdout
+    assert Path(env["calls"]).read_text().split("\n")[:-1] == ["pg_dropcluster 16 main"]
+    assert "could not stop server" not in out.stdout + out.stderr
+
+
+def test_a_cluster_that_stops_before_the_drop_is_still_dropped(tmp_path):
+    env = _debian_pg(tmp_path, ["online", "down"])
+    out = _bash("drop_packaged_cluster", PATH=env["PATH"])
+    assert out.returncode == 0
+    assert Path(env["calls"]).read_text().split("\n")[:-1] == ["pg_dropcluster --stop 16 main", "pg_dropcluster 16 main"]
+
+
+def test_a_failing_drop_of_a_running_cluster_still_fails(tmp_path):
+    env = _debian_pg(tmp_path, ["online"])
+    (tmp_path / "state").write_text("down")
+    out = _bash("drop_packaged_cluster", PATH=env["PATH"])
+    assert out.returncode != 0
+
+
+def test_disabling_an_already_stopped_service_counts_as_success(tmp_path):
+    env = _debian_pg(tmp_path, ["down"], systemctl_rc=1)
+    out = _bash("disable_packaged_service", PATH=env["PATH"])
+    assert out.returncode == 0 and "already stopped" in out.stdout
+    assert "systemctl disable --now postgresql" in Path(env["calls"]).read_text()

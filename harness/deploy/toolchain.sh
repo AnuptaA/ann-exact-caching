@@ -115,13 +115,42 @@ record_faiss_blas() {
     [ -s "$2" ] || die "no BLAS/LAPACK entries in $1: FAISS did not record its BLAS (install libopenblas-dev and rebuild)"
 }
 
-# drop_packaged_cluster: the Debian package may create a PG_MAJOR/main cluster; drop it only when it exists.
+# packaged_cluster_status: the status column of pg_lsclusters for PG_MAJOR/main ("online", "down", ...); empty when
+# there is no such cluster.
+packaged_cluster_status() {
+    { pg_lsclusters --no-header 2> /dev/null || true; } | awk -v v="$PG_MAJOR" '$1 == v && $2 == "main" { print $4 }'
+}
+
+# drop_packaged_cluster: the Debian package may create a PG_MAJOR/main cluster; drop it only when it exists. A
+# cluster that is already stopped is dropped without --stop (pg_dropcluster --stop fails on a stopped cluster).
 drop_packaged_cluster() {
-    if [ -n "${Q1_DRYRUN:-}" ] || pg_lsclusters --no-header 2>/dev/null | awk -v v="$PG_MAJOR" '$1 == v && $2 == "main" { found = 1 } END { exit !found }'; then
+    local status
+    if [ -n "${Q1_DRYRUN:-}" ]; then
         run sudo pg_dropcluster --stop "$PG_MAJOR" main
-    else
-        log "no packaged cluster $PG_MAJOR/main to drop"
+        return 0
     fi
+    status=$(packaged_cluster_status)
+    case "$status" in
+        "") log "no packaged cluster $PG_MAJOR/main to drop" ;;
+        down*)
+            log "packaged cluster $PG_MAJOR/main is already stopped"
+            run sudo pg_dropcluster "$PG_MAJOR" main
+            ;;
+        *)
+            if ! run sudo pg_dropcluster --stop "$PG_MAJOR" main; then
+                # it may have stopped between the check and the call
+                case "$(packaged_cluster_status)" in
+                    down*) run sudo pg_dropcluster "$PG_MAJOR" main ;;
+                    *) return 1 ;;
+                esac
+            fi
+            ;;
+    esac
+}
+
+# disable_packaged_service: our own cluster only; a packaged service that is already stopped or absent is fine.
+disable_packaged_service() {
+    run sudo systemctl disable --now postgresql || log "packaged postgresql service was already stopped or is absent"
 }
 
 # PostgreSQL PG_MAJOR from PGDG (jammy ships 14; noble ships 16 but PGDG works for both).
@@ -135,7 +164,7 @@ ensure_postgres() {
         apt_get install "postgresql-$PG_MAJOR" "postgresql-server-dev-$PG_MAJOR" "postgresql-client-$PG_MAJOR"
     fi
     # our own cluster only: the packaged cluster must not run next to it
-    run sudo systemctl disable --now postgresql || true
+    disable_packaged_service
     drop_packaged_cluster
     local ctl
     ctl="$("$pg_bin/pg_config" --sharedir 2>/dev/null || echo /nonexistent)/extension/vector.control"
