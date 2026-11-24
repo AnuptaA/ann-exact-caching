@@ -207,6 +207,9 @@ finish_ownership() {
 }
 
 # --- steps -------------------------------------------------------------------------------------------------
+# shellcheck source=bootstrap_toolchain.sh
+. "$root/scripts/bootstrap_toolchain.sh"
+
 step_preconditions() {
     if [ "$DRY" -eq 0 ]; then
         [ "$(uname -s)" = "Linux" ] || { log "not Linux"; return 1; }
@@ -250,25 +253,32 @@ clean_core() {
 }
 
 step_aker() {
-    # the pinned Boost and FAISS of the harness toolchain, installed where aker_real/build.sh looks for them
+    # the step installs what the harness does not (rsync, used by the Aker build), then checks every tool and library
+    run apt-get install -y -qq rsync libopenblas-dev
+    if [ "$DRY" -eq 0 ]; then aker_missing | require_missing aker; fi
     as_user mkdir -p "$TP"
-    local tools="${Q1_TOOLS:-/opt/q1}"
-    # the toolchain leaves Boost empty when the system one is new enough: then the system prefix is used
-    local boost_prefix="$tools/boost"
-    [ -d "$boost_prefix" ] || boost_prefix=/usr
-    [ -e "$TP/boost-install" ] || as_user ln -s "$boost_prefix" "$TP/boost-install"
-    [ -e "$TP/faiss-install" ] || as_user ln -s "$tools/faiss" "$TP/faiss-install"
-    TP="$TP" AKER_SRC=vendored as_user sh "$root/simulations/approximate_hits/aker_real/build.sh"
+    local boost
+    boost="$(boost_prefix)"
+    # Boost: the harness copy, or the system packages (prefix /usr); the link follows what the harness installed
+    if [ -L "$TP/boost-install" ] || [ ! -e "$TP/boost-install" ]; then as_user ln -sfn "$boost" "$TP/boost-install"; fi
+    ensure_aker_faiss
+    if [ "$DRY" -eq 0 ]; then faiss_missing | require_missing aker; fi
+    TP="$TP" AKER_SRC=vendored as_user env "PATH=$(tool_path)" "CMAKE_PREFIX_PATH=$TP/faiss-install:$boost" \
+        sh "$root/simulations/approximate_hits/aker_real/build.sh"
 }
 
-clean_aker() { run rm -rf "$TP/aker_vendored/build"; }
+clean_aker() {
+    run rm -rf "$TP/aker_vendored/build" "$TP/aker_vendored_prox/build" "$TP/src/faiss-shared-build"
+    if [ ! -f "$TP/faiss-install/.installed-$FAISS_COMMIT-shared" ]; then run rm -rf "$TP/faiss-install"; fi
+}
 
 step_qvcache() {
-    # shellcheck source=../harness/deploy/pins.env
-    . "$root/harness/deploy/pins.env"
-    run apt-get install -y -qq libaio-dev libgoogle-perftools-dev libunwind-dev libboost-program-options-dev \
-        libmkl-full-dev libcpprest-dev libeigen3-dev libspdlog-dev libnuma-dev libtbb-dev
-    local src="$TP/qvcache"
+    run apt-get install -y -qq $QVCACHE_PACKAGES
+    if [ "$DRY" -eq 0 ]; then
+        { qvcache_missing; apt_missing $QVCACHE_PACKAGES; } | require_missing qvcache
+    fi
+    local src="$TP/qvcache" cmake_path
+    cmake_path="$(cmake_bin)"
     if [ ! -d "$src/.git" ]; then
         as_user mkdir -p "$TP"
         as_user git init -q "$src"
@@ -277,8 +287,9 @@ step_qvcache() {
     as_user git -C "$src" fetch -q --depth 1 origin "$QVCACHE_COMMIT"
     as_user git -C "$src" checkout -q "$QVCACHE_COMMIT"
     as_user "$root/.venv-ann/bin/pip" install --quiet pybind11 numpy
-    as_user cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$root/.venv-ann/bin/python"
-    as_user cmake --build "$src/build" -j "$(nproc 2>/dev/null || echo 8)"
+    as_user env "PATH=$(tool_path)" "$cmake_path" -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
+        -DPython3_EXECUTABLE="$root/.venv-ann/bin/python"
+    as_user env "PATH=$(tool_path)" "$cmake_path" --build "$src/build" -j "$(nproc 2>/dev/null || echo 8)"
     # make the binding importable from .venv-ann
     as_user bash -c "d=\$(dirname \$(find '$src/build' -name 'qvcache*.so' | head -n1)) && \
         echo \$d > \$('$root/.venv-ann/bin/python' -c 'import site; print(site.getsitepackages()[0])')/qvcache.pth"

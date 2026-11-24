@@ -13,6 +13,11 @@
 set -e
 TP=${TP:-${RECAL_THIRD_PARTY:-$HOME/third_party}}
 HERE=$(cd "$(dirname "$0")" && pwd)
+for tool in cmake g++ rsync; do
+  command -v "$tool" > /dev/null 2>&1 || { echo "aker build: $tool not found on PATH ($PATH)" >&2; exit 1; }
+done
+[ -e "$TP/boost-install/include/boost/version.hpp" ] || { echo "aker build: no Boost headers in $TP/boost-install/include" >&2; exit 1; }
+[ -e "$TP/faiss-install/include/faiss/Index.h" ] || { echo "aker build: no FAISS headers in $TP/faiss-install/include" >&2; exit 1; }
 # AKER_SRC=vendored (default): the repository's third_party/aker (local patches in PATCHES.md), built from a
 # copy at $TP/aker_vendored; it exposes the query filter's HNSW parameters and the shim sets the paper's values
 # (m 4, efConstruction 8, efSearch 16; override with AKER_FILTER_M / AKER_FILTER_EFC / AKER_FILTER_EFS).
