@@ -4,7 +4,10 @@ Each entry is one commit. Upstream: sjoon-oh/aker `release` e7639a5.
 
 1. CMakeLists.txt: compile extern/xxHash/xxhash.c into libaker (upstream gets it
    from a submodule that is not vendored).
-2. CMakeLists.txt: remove the ak_ycsb_gen target (needs the YCSB-C submodule).
+2. CMakeLists.txt: remove the ak_ycsb_gen target (needs the YCSB-C submodule), and leave
+   src/utils/ak_sequence_gen.cc (class `YcsbSeqGenerator`, includes YCSB-C headers) out of libaker. Nothing in
+   the library, the C wrapper or the harness uses it (the harness build excludes it the same way); the files
+   stay in the tree unchanged.
 3. inc/ak_anns_cache_config.hh, inc/ak_anns_cache_c_wrapper.h, src/ak_anns_cache_c_wrapper.cc,
    src/ak_approx_filter.cc: the query filter's HNSW parameters (m, efSearch, efConstruction)
    were hard-coded as 4 / 8 / 16 (the paper says m 4, efConstruction 8, efSearch 16). They are

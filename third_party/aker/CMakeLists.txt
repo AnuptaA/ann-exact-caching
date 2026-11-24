@@ -93,6 +93,10 @@ file(GLOB_RECURSE AKER_SRC_FILES
     "${PROJECT_SOURCE_DIR}/src/*.cc"
 )
 
+# Patch 2: the YCSB-C based sequence generator needs the YCSB-C submodule, which is not vendored, and
+# nothing in the library uses it.
+list(FILTER AKER_SRC_FILES EXCLUDE REGEX "ak_sequence_gen")
+
 # Patch 1: the vendored xxHash is not a submodule here; compile its source with the library.
 add_library(aker SHARED ${AKER_SRC_FILES} "${PROJECT_SOURCE_DIR}/extern/xxHash/xxhash.c")
 
