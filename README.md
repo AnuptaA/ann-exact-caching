@@ -116,7 +116,19 @@ One mode per dataset. Files are placed where the workload registry expects them 
 
 ## Setting up an instance
 
-`sudo bash scripts/ec2_bootstrap.sh` sets up a fresh Ubuntu 24.04 x86_64 instance in steps (`--dry-run` prints them; `--only` and `--skip` select steps): the harness toolchain and PostgreSQL 16 with pgvector 0.8.0 (`harness/deploy/setup_instance.sh`), the AIO limit, `.venv-core` (Python 3.11) and `.venv-ann` from `envs/`, the ReCal and cache cores, the vendored Aker library in standard and Proximity modes against the pinned Boost and FAISS, links from `datasets/` and `simulations/approximate_hits/results` to the data volume, the data fetch and a smoke test (`scripts/smoke_cells.py`). Set `DATA_DIR` (default `/data`), `RESULTS_DIR` and `TP` to keep data, results and builds off the root disk.
+`scripts/ec2_bootstrap.sh` sets up a fresh Ubuntu 24.04 x86_64 instance in steps (`--dry-run` prints them; `--only` and `--skip` select steps): the harness toolchain and PostgreSQL 16 with pgvector 0.8.0 (`harness/deploy/setup_instance.sh`), the AIO limit, `.venv-core` (Python 3.11) and `.venv-ann` from `envs/`, the ReCal and cache cores, the vendored Aker library in standard and Proximity modes against the pinned Boost and FAISS, links from `datasets/` and `simulations/approximate_hits/results` to the data volume, the data fetch and a smoke test (`scripts/smoke_cells.py`). Set `DATA_DIR` (default `/data`), `RESULTS_DIR` and `TP` to keep data, results and builds off the root disk.
+
+Run it through sudo from the normal user, with `-E` so the `RECAL_*` variables (the Drive folder links, `RECAL_STORE`) are kept. System steps (apt, sysctl, the data directories) run as root; the harness setup, virtual environments, builds, data fetch and tests run as the invoking user, and at the end the repository, data, build and queue directories belong to that user. Without root the script prints the command to use and stops.
+
+Pilot instance (only TripClick), from the checkout:
+
+```sh
+sudo -E bash scripts/ec2_bootstrap.sh --role prepare --datasets tripclick 2>&1 | tee /data/bootstrap.log
+```
+
+- `--datasets a,b` selects the datasets the instance prepares (`spacev`, `triviaqa`, `medrag`, `tripclick`; default all four). The free space of the data volume must cover their sum plus 20%; the same figure replaces the harness's fixed 400 GB volume check, and the data step fetches only those datasets. Every other check still runs. Requirement per dataset (base vectors, DiskANN index, pgvector, answer tables and scratch of twice the base vectors; estimates from the table below): SPACEV 24.4 GB, TriviaQA 128.4 GB, MedRAG 467.5 GB, TripClick 29.6 GB. With the 20% margin: TripClick alone 36 GB, all four 780 GB. A 400 GiB volume formats to 393 GB, so it fits any selection without MedRAG.
+- A step runs only if the previous ones passed. A failure prints the step, the failed command and the last 30 lines of its output, then the summary, and stops. Fix the cause and rerun: steps already done for this commit are skipped, a step that was interrupted or failed is cleaned (partial virtual environments and build directories are removed) and redone. State is in `$RECAL_TMP/recal_bootstrap/` (default `/tmp`).
+- `--from STEP` resumes at a step (earlier steps are skipped, STEP is redone). `--clean` removes the state file, `.venv-core`, `.venv-ann` and the third-party builds in `$TP`, then exits; data, results and the harness toolchain in `/opt/q1` are kept. Start over with `--clean` and run the same command again.
 
 ## Running the evaluation
 
