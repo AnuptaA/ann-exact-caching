@@ -17,6 +17,7 @@ from recal.jobspec import Job
 
 PY = ".venv-core/bin/python"
 ANN = ".venv-ann/bin/python"
+PYPATH = "PYTHONPATH=."
 ABLATIONS = ("--no-union", "--no-expansion", "--no-shells", "--lru", "--no-calibration", "--no-recalibration",
              "--no-mini-cache")
 ROOT = "results"
@@ -70,7 +71,7 @@ def needs_of(w: dict, backend: str = "diskann", extra=()) -> tuple:
 def cell(d: str, stem: str, method: str, w: dict, budget, flags: str, prep: str | None = None,
          stream: str | None = None) -> str:
     b = budget if isinstance(budget, str) else f"{budget:g}"
-    return (f"[ -f {d}/{stem}.json ] || {{ mkdir -p {d} && PYTHONPATH=. {PY} -u -m recal.cells --method {method} "
+    return (f"[ -f {d}/{stem}.json ] || {{ mkdir -p {d} && {PYPATH} {PY} -u -m recal.cells --method {method} "
             f"--prep {prep or w['prep']} --stream {stream or w['stream']} --budget {b} "
             f"--coord-bytes {w['coord_bytes']:g} {flags} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
 
@@ -181,22 +182,27 @@ def q3_followups(cfg: dict, wl: OrderedDict, hits: list[Job], owner_out) -> list
                 arms.append(f"--arm {spec}")
                 arm_args.append(f"--arm {spec}")
         needs = (f"{w['dataset']}/diskann_index", f"{w['dataset']}/prep")
-        sweep = (f"[ -f {root}/sweep.json ] || {{ mkdir -p {root} && PYTHONPATH=. {ANN} -u {REPLAY} --workload {rw} "
+        run_dirs = tuple(owner_out(by_cell[f"{ROOT}/q3/{name}/{key}_n{ns}"]) + "/" for key in q3["systems"]
+                         for ns in q3["node_shares"])
+        sweep = (f"[ -f {root}/sweep.json ] || {{ mkdir -p {root} && {PYPATH} {ANN} -u {REPLAY} --workload {rw} "
                  f"{' '.join(arms)} --clients {sat} --saturation-clients {sat} --repetitions {reps} --io-complete --out {root}/sweep.json "
                  f"> {root}/log_sweep.txt 2>&1; }}  # throughput_replay.py")
-        best = (f"[ -f {root}/best.json ] || {{ PYTHONPATH=. {PY} -u -m {BEST_SPLIT} run --sweep {root}/sweep.json "
+        best = (f"[ -f {root}/best.json ] || {{ {PYPATH} {PY} -u -m {BEST_SPLIT} run --sweep {root}/sweep.json "
                 f"--clients {sat} {' '.join(arm_args)} --out {root}/best.json > {root}/log_best.txt 2>&1; }}  "
                 f"# {BEST_SPLIT}")
         get = lambda s: f"$({PY} -m {BEST_SPLIT} get {root}/best.json {s}.spec)"  # noqa: E731
         clients = " ".join(map(str, q3["clients"]))
         thread_arms = " ".join([f"--arm nodeonly=none,nodes={node_cache_nodes(w, budget, 100)}"]
                                + [f"--arm {get(k)}" for k in q3["systems"]])
-        threads = (f"[ -f {root}/threads.json ] || {{ PYTHONPATH=. {ANN} -u {REPLAY} --workload {rw} {thread_arms} "
+        threads = (f"[ -f {root}/threads.json ] || {{ {PYPATH} {ANN} -u {REPLAY} --workload {rw} {thread_arms} "
                    f"--clients {clients} --repetitions {reps} --io-complete --out {root}/threads.json "
                    f"> {root}/log_threads.txt 2>&1; }}  # throughput_replay.py")
-        out += [Job(sweep, "q3", name, "split_sweep", "replay", f"{root}/sweep", needs),
-                Job(best, "q3", name, "best_split", "best_split", f"{root}/best", needs),
-                Job(threads, "q3", name, "thread_lines", "threads", f"{root}/threads", needs)]
+        out += [Job(sweep, "q3", name, "split_sweep", "replay", f"{root}/sweep", needs,
+                    (f"{root}/sweep.json", f"{root}/log_sweep.txt"), run_dirs),
+                Job(best, "q3", name, "best_split", "best_split", f"{root}/best", (),
+                    (f"{root}/best.json", f"{root}/log_best.txt"), (f"{root}/sweep.json",)),
+                Job(threads, "q3", name, "thread_lines", "threads", f"{root}/threads", needs,
+                    (f"{root}/threads.json", f"{root}/log_threads.txt"), run_dirs + (f"{root}/best.json",))]
     return out
 
 
@@ -324,14 +330,17 @@ def runs(cfg: dict, only=None, medrag: dict | None = None) -> dict:
     wl, skipped = plan(cfg, medrag)
     cells, _ = cell_jobs(cfg, medrag)
     jobs, table, listed = OrderedDict((e, []) for e in EXPERIMENTS), {}, OrderedDict((e, []) for e in EXPERIMENTS)
+    job_hashes = OrderedDict((e, []) for e in EXPERIMENTS)
 
     def add(job: Job) -> str:
         h, out = matrix_hash.cell_hash(job.line), matrix_hash.out_dir(job.line)
         entry = table.get(h)
         if entry is None:
             entry = table[h] = {"line": job.line, "out": out, "workload": job.workload, "system": job.system,
-                                "kind": job.kind, "needs": list(job.needs), "cells": []}
+                                "kind": job.kind, "needs": list(job.needs), "outputs": list(job.produced),
+                                "inputs": list(job.inputs), "cells": []}
             jobs[job.exp].append(job)
+            job_hashes[job.exp].append(h)
         entry["cells"].append({"experiment": job.exp, "cell": out, "out": out})
         listed[job.exp].append({"cell": out, "hash": h})
         return h
@@ -356,7 +365,7 @@ def runs(cfg: dict, only=None, medrag: dict | None = None) -> dict:
                                "hit_hash": hit_hash[f"{ROOT}/q3/{name}/{key}_n{ns}"], "replay_hash": sweep,
                                "arm": f"{key}_n{ns}"})
     keep = [e for e in EXPERIMENTS if only is None or e in only]
-    return {"jobs": {e: jobs[e] for e in keep}, "runs": table, "cells": {e: listed[e] for e in keep},
+    return {"jobs": {e: jobs[e] for e in keep}, "job_hashes": {e: job_hashes[e] for e in keep}, "runs": table, "cells": {e: listed[e] for e in keep},
             "split_points": points, "skipped": skipped}
 
 

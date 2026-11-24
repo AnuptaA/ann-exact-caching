@@ -13,7 +13,7 @@ import argparse
 import json
 from pathlib import Path
 
-from recal import matrix
+from recal import artifacts, matrix, shards
 
 
 def print_table(table: dict) -> None:
@@ -30,6 +30,20 @@ def print_table(table: dict) -> None:
         print(f"left out (no medrag_budgets.json): {', '.join(t['skipped'])}")
 
 
+def write_shards(cfg: dict, a, medrag) -> None:
+    out = a.out / "shards"
+    out.mkdir(parents=True, exist_ok=True)
+    built = shards.build(cfg, a.shard_by, a.question, a.system, a.workload, medrag)
+    for name, shard in built.items():
+        (out / f"{name}.json").write_text(json.dumps(shard, indent=1))
+        (out / f"{name}.txt").write_text("\n".join(j["line"] for j in shard["jobs"]) + "\n")
+        (out / f"{name}.artifacts.json").write_text(json.dumps(shard["artifacts"], indent=1))
+        print(f"{name}: {len(shard['jobs'])} jobs, {sum(j['exclusive'] for j in shard['jobs'])} exclusive, "
+              f"artifacts {', '.join(shard['artifacts'])}")
+    runs = matrix.runs(cfg, medrag=medrag)
+    (a.out / "matrix_runs.json").write_text(json.dumps(runs["runs"], indent=1))
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", type=Path, required=True)
@@ -38,11 +52,21 @@ def main(argv=None) -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--table", action="store_true", help="print cells, distinct runs and shared runs per experiment")
     ap.add_argument("--hashes", action="store_true")
+    ap.add_argument("--shard-by", choices=shards.BY, help="write shard job files (needs --out): one per workload, "
+                    "question or system; Q3 jobs of a workload stay together")
+    ap.add_argument("--question", nargs="+", choices=sorted(matrix.EXPERIMENTS), help="keep only these questions")
+    ap.add_argument("--system", nargs="+", help="keep only jobs of these systems (name or prefix)")
+    ap.add_argument("--workload", nargs="+", help="keep only these workloads")
     a = ap.parse_args(argv)
     cfg = json.loads(a.config.read_text())
     medrag = matrix.load_medrag_budgets(cfg)
     if a.table:
         print_table(matrix.sharing_table(cfg, medrag=medrag))
+        return 0
+    if a.shard_by:
+        if a.out is None:
+            ap.error("--shard-by needs --out")
+        write_shards(cfg, a, medrag)
         return 0
     result = matrix.runs(cfg, a.only, medrag)
     counts = {name: len(v) for name, v in result["cells"].items()}

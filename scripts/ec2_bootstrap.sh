@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # One-time setup of a fresh Ubuntu 24.04 x86_64 instance for the evaluation. Run as root. Idempotent.
-#   sudo bash scripts/ec2_bootstrap.sh [--dry-run] [--only STEP ...] [--skip STEP ...] [--no-data] [--no-smoke]
+#   sudo bash scripts/ec2_bootstrap.sh [--role prepare|run] [--dry-run] [--only STEP ...] [--skip STEP ...] [--no-data] [--no-smoke]
+#
+# Roles: prepare (default) fetches the data and builds the shared artifacts afterwards (make prepare); run skips the data
+# fetch and every build of data or indexes: it pulls the artifacts of its shard from the store (make run SHARD=...).
 #
 # Steps, in order:
 #   base        harness/deploy/setup_instance.sh: system packages, pinned CMake, Boost and FAISS, PostgreSQL 16 with
@@ -12,7 +15,8 @@
 #   qvcache     the authors' QVCache artifact (pinned commit in harness/deploy/pins.env), built natively against
 #               the .venv-ann interpreter so DiskANN and pgvector stay in the same process (no extra hop)
 #   links       points datasets/{aker,medrag,tripclick} and simulations/approximate_hits/results at the data volume
-#   data        scripts/fetch_data.sh --all (skipped with --no-data)
+#   store       boto3 for the S3 store (credentials from the instance role; set RECAL_STORE=s3://bucket/prefix)
+#   data        scripts/fetch_data.sh --all (skipped with --no-data and with --role run)
 #   smoke       tests, matrix dry run, a small ReCal cell with every ablation, library and backend checks
 #               (skipped with --no-smoke)
 #
@@ -30,12 +34,14 @@ RESULTS_DIR="${RESULTS_DIR:-$DATA_DIR/results}"
 TP="${TP:-$DATA_DIR/third_party}"
 PYTHON311="${PYTHON311:-python3.11}"
 DRY=0
+ROLE=prepare
 SMOKE=1
 DATA=1
 ONLY=()
 SKIP=()
 while [ $# -gt 0 ]; do
     case "$1" in
+        --role) shift; ROLE="$1"; case "$ROLE" in prepare|run) ;; *) echo "--role must be prepare or run" >&2; exit 2 ;; esac ;;
         --dry-run) DRY=1 ;;
         --no-data) DATA=0 ;;
         --no-smoke) SMOKE=0 ;;
@@ -45,6 +51,8 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+[ "$ROLE" = run ] && DATA=0
 
 log() { printf '[bootstrap] %s\n' "$*"; }
 run() {
@@ -137,6 +145,11 @@ step_links() {
         run ln -s "$RESULTS_DIR" "$root/simulations/approximate_hits/results"
 }
 
+step_store() {
+    run "$root/.venv-core/bin/pip" install --quiet boto3
+    [ "$DRY" -eq 1 ] || [ -n "${RECAL_STORE:-}${RECAL_S3_BUCKET:-}" ] || log "note: set RECAL_STORE before make prepare / make run"
+}
+
 step_data() {
     [ "$DATA" -eq 1 ] || { log "data fetch skipped (--no-data)"; return 0; }
     RECAL_REPO="$root" run sh "$root/scripts/fetch_data.sh" --all
@@ -151,7 +164,7 @@ step_smoke() {
 
 summary=()
 failed=0
-for name in preconditions base limits venvs core aker qvcache links data smoke; do
+for name in preconditions base limits venvs core aker qvcache links store data smoke; do
     if ! selected "$name"; then summary+=("$name: NOT RUN"); continue; fi
     log "step $name"
     if (cd "$root" && "step_$name"); then summary+=("$name: PASS"); else summary+=("$name: FAIL"); failed=1; fi

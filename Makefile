@@ -348,3 +348,36 @@ q1-smoke: q1-guard
 # Only the q1 targets need bash and pipefail; the jd targets keep make's default shell.
 q1-%: SHELL := /bin/bash
 q1-%: .SHELLFLAGS := -o pipefail -c
+
+# ---- Experiment matrix: prepare, shard, run, reduce (recal/matrix.py; no cell logic here) ----
+MATRIX ?= experiments/matrix.example.json
+JOBS ?= jobs
+SHARD_BY ?= workload
+RECAL_PY ?= .venv-core/bin/python
+MATRIX_FILTERS = $(if $(SYSTEM),--system $(SYSTEM),) $(if $(WORKLOAD),--workload $(WORKLOAD),)
+
+.PHONY: prepare shards run q1 q2 q3 q4 reduce status
+
+# make prepare DATASET=<spacev|triviaqa|medrag|tripclick|all>: build the shared artifacts and push them to the store
+prepare:
+	$(RECAL_PY) -m scripts.prepare --config $(MATRIX) --dataset $(DATASET)
+
+# Shard job files in $(JOBS)/shards, one per workload (SHARD_BY=question|system)
+shards:
+	$(RECAL_PY) -m scripts.gen_matrix --config $(MATRIX) --shard-by $(SHARD_BY) --out $(JOBS)
+
+# make run SHARD=<name>: pull the shard artifacts, run its jobs, push the results
+run:
+	@test -n "$(SHARD)" || { echo "set SHARD=<name> (see $(JOBS)/shards)"; exit 1; }
+	$(RECAL_PY) -m scripts.run_shard $(JOBS)/shards/$(SHARD).json
+
+# make q1 [SYSTEM=<name or prefix>] [WORKLOAD=<name>]: the jobs of one question, optionally filtered
+q1 q2 q3 q4:
+	$(RECAL_PY) -m scripts.gen_matrix --config $(MATRIX) --shard-by workload --question $@ $(MATRIX_FILTERS) --out $(JOBS)/$@
+	@for f in $(JOBS)/$@/shards/*.json; do case "$$f" in *.artifacts.json) ;; *) $(RECAL_PY) -m scripts.run_shard $$f || exit 1;; esac; done
+
+reduce:
+	$(RECAL_PY) -m scripts.reduce --config $(MATRIX) --jobs $(JOBS) --out figures_data
+
+status:
+	$(RECAL_PY) -m scripts.status --jobs $(JOBS)

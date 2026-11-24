@@ -17,6 +17,13 @@ class Job:
     kind: str
     cell: str
     needs: tuple = ()
+    outputs: tuple = ()
+    inputs: tuple = ()
+
+    @property
+    def produced(self) -> tuple:
+        """Output paths: a directory ends with a slash. A run's own directory unless the job lists files."""
+        return self.outputs or (self.cell.rstrip("/") + "/",)
 
     @property
     def stage(self) -> int:

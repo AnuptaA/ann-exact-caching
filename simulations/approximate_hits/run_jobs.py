@@ -70,20 +70,12 @@ def job_name(line, path):
     return m.group(1) if m else line[:80]
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("lines")
-    ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--cores-per-job", type=int, default=4)
-    ap.add_argument("--first-core", type=int, default=8)
-    ap.add_argument("--first", default="0.01,0.1,0.001,0.0001", help="budgets run first")
-    ap.add_argument("--trust-existing", action="store_true", help="a result that exists counts as done")
-    ap.add_argument("--strict-hash", action="store_true", help="no effect: a result without a scheme 2 config hash is always stale")
-    a = ap.parse_args()
-    lines = [l for l in open(a.lines).read().splitlines() if l.strip()]
+def run_lines(lines, workers=8, cores_per_job=4, first_core=8, first="0.01,0.1,0.001,0.0001",
+              trust_existing=False, strict_hash=False):
+    """Run job lines: lines that are not jobs one after the other, jobs concurrently; returns the failed lines."""
     prep = [l for l in lines if not is_job(l)]
     jobs = [l for l in lines if is_job(l)]
-    first = set(a.first.split(","))
+    first = set(first.split(","))
 
     def key(l):
         mb = re.search(r"--budget ([0-9.e-]+)", l)
@@ -96,7 +88,7 @@ def main():
         if rc != 0:
             print(f"FAILED prep (exit {rc}): {l[:100]}", flush=True)
             failures.append(l)
-    asg = assign_cores(os.cpu_count() or 0, a.workers, a.cores_per_job, a.first_core)
+    asg = assign_cores(os.cpu_count() or 0, workers, cores_per_job, first_core)
     if asg.notice:
         print(f"notice: {asg.notice}", flush=True)
     pin = asg.pin and shutil.which("taskset") is not None
@@ -105,7 +97,7 @@ def main():
     lock = threading.Lock()
 
     def run(l):
-        path, status = result_status(l, a.strict_hash, a.trust_existing)
+        path, status = result_status(l, strict_hash, trust_existing)
         if status == 0:
             print(f"skip (fresh) {path}", flush=True)
             return
@@ -114,15 +106,15 @@ def main():
             os.replace(path, path + ".stale")
         with lock:
             w = free.pop(0)
-        c0 = asg.first_core + w * a.cores_per_job
-        cmd = pin_line(l, c0, c0 + a.cores_per_job - 1) if pin else l
+        c0 = first_core + w * cores_per_job
+        cmd = pin_line(l, c0, c0 + cores_per_job - 1) if pin else l
         try:
             rc = subprocess.run(["sh", "-c", cmd], check=False).returncode
         finally:
             with lock:
                 free.append(w)
                 free.sort()
-        if rc == 0 and path is not None and result_status(l, a.strict_hash, a.trust_existing)[1] != 0:
+        if rc == 0 and path is not None and result_status(l, strict_hash, trust_existing)[1] != 0:
             rc = -1
         name = job_name(l, path)
         if rc != 0:
@@ -134,6 +126,21 @@ def main():
 
     with ThreadPoolExecutor(asg.workers) as ex:
         list(ex.map(run, jobs))
+    return failures
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("lines")
+    ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--cores-per-job", type=int, default=4)
+    ap.add_argument("--first-core", type=int, default=8)
+    ap.add_argument("--first", default="0.01,0.1,0.001,0.0001", help="budgets run first")
+    ap.add_argument("--trust-existing", action="store_true", help="a result that exists counts as done")
+    ap.add_argument("--strict-hash", action="store_true", help="no effect: a result without a scheme 2 config hash is always stale")
+    a = ap.parse_args()
+    lines = [l for l in open(a.lines).read().splitlines() if l.strip()]
+    failures = run_lines(lines, a.workers, a.cores_per_job, a.first_core, a.first, a.trust_existing, a.strict_hash)
     if failures:
         print(f"{len(failures)} lines failed", flush=True)
         return 1

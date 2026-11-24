@@ -130,3 +130,57 @@ One mode per dataset. Files are placed where the workload registry expects them 
 - Update runs are independent jobs, one per (workload, mode, rate, system, seed): each reads its own prep folder (`scripts/convert_streams.py updates --out`) and the DSN of its own PostgreSQL clone in `$PG_CLONES/<job id>.dsn` (`--pg-dsn @file`); no state is shared between jobs. Every system (ReCal, Aker, Proximity) answers its misses with live searches on that clone and applies the schedule's inserts and deletes to it in order; Aker and Proximity do so through a backend adapter in `eval_aker_real.py` (the library only sees miss answers and data-change events). `--precomputed-answers` keeps the old precomputed-and-filtered path for tests. QVCache is not in the update runs: the artifact has no update path and the paper leaves updates to the backend.
 - Q4: `recal/robustness.py` (burst mask; bursts are derived from existing records by `recal/analysis/bursts.py`), `scripts/make_shift_streams.py` (abrupt, gradual and correlated shifts over 64 k-means clusters), `scripts/convert_streams.py` (turns a shift stream or an update schedule into the prep folder every driver reads, with the update files in the formats of ReCal and the real Aker driver; request vectors come from the existing official vectors, no encoder runs; cluster runs need FAISS and refuse without it), `scripts/make_update_schedule.py` and `--updates` (inserts and deletes with live ground truth).
 
+
+## Running on many instances
+
+One instance prepares each dataset, the run instances map shards of the job list, one instance reduces.
+
+```
+make prepare DATASET=spacev          # on a prepare instance: data, indexes, answer tables, preps -> store
+make shards                          # jobs/shards/<workload>.json (SHARD_BY=question|system, --question/--system/--workload filters)
+make run SHARD=spacev-0.6            # on a run instance: pull artifacts, run the shard, push results
+make q3 WORKLOAD=tripclick SYSTEM=recal   # the jobs of one question, filtered
+make reduce                          # pull results, check every run, write figures_data/*.csv
+make status                          # done, missing, failed per question and system
+```
+
+The targets call `scripts/gen_matrix.py`, `scripts/store.py`, `scripts/run_shard.py` and `scripts/reduce.py`; the cell
+logic is in `recal/matrix.py` only. `MATRIX` selects the configuration (default the example), `JOBS` the job directory.
+
+- Store: `RECAL_STORE=s3://bucket/prefix` (or `RECAL_S3_BUCKET` and `RECAL_S3_PREFIX`; credentials from the instance
+  role) or a directory for local use. Layout `artifacts/<dataset>/<artifact>` with `manifest.json` (path, size, sha256,
+  command, code commit per artifact) and `results/<question>/<run hash>/`. Every object has a checksum sidecar that is
+  verified on pull; transfers run in parallel and skip objects that match (an interrupted push or pull resumes).
+  `python -m scripts.store push|pull|ls`. Every result records instance type, CPU model, cores, memory, disk type and
+  the code commit (`environment`).
+- Prepare stages per dataset (`recal/prepare.py`, `--dry-run` lists the commands): fetch and verify the data; request
+  streams and exact answers to depth 700 with exact ground truth to depth 200; the DiskANN index at recall@10 0.95 with a
+  search list of 700 (7 x K_max) and its answer tables; the pgvector database for the update workloads (parallel HNSW build,
+  `maintenance_work_mem` sized by the harness, workers from the core count); shift streams (k-means seed 0 once) and update
+  schedules converted once; the MedRAG working set (`medrag_budgets.json`); the QVCache memory measurement. TripClick-derived
+  artifacts are not uploaded unless `--upload-restricted` is given. The stage commands for the real datasets need the cluster
+  and have not been run here.
+- Shards: Q3 jobs of a workload stay in one shard. Hit-rate and update runs may run concurrently; throughput jobs (split
+  sweep, thread lines) are exclusive and run alone, one after the other, after the best split of each result cache is
+  chosen. A shard pulls its artifacts and the results of other shards it reads, skips jobs whose result exists with the
+  same config hash, and pushes results after every stage.
+- Instances (estimates, to be checked on the first run): `scripts/ec2_bootstrap.sh --role prepare` fetches data and builds;
+  `--role run` skips data and index builds (it installs boto3 and pulls artifacts from the store).
+
+| Dataset | Base vectors | DiskANN index | pgvector (table + HNSW) | Answer tables | Prepare instance | Run instance |
+|---|---|---|---|---|---|---|
+| SPACEV (10M x 100, int8) | 1 GB | about 4 GB | about 16 GB | about 1.4 GB | 64 GB RAM, 200 GB disk | 32 GB RAM, 100 GB disk |
+| TriviaQA (SPHERE, 10M x 769, float32) | 31 GB | about 34 GB | none | about 1.4 GB | 128 GB RAM, 300 GB disk | 128 GB RAM, 150 GB disk |
+| MedRAG (23.9M x 769, float32) | 74 GB | about 80 GB | about 165 GB | about 0.5 GB | 256 GB RAM, 600 GB disk (pgvector HNSW build needs about 90 GB of `maintenance_work_mem`) | 192 GB RAM, 400 GB disk with the clones |
+| TripClick (1.5M x 769, float32) | 4.7 GB | about 5 GB | about 10 GB | about 0.5 GB | 64 GB RAM, 100 GB disk | 32 GB RAM, 60 GB disk |
+
+Throughput runs want the DiskANN index on local NVMe and the page cache smaller than the index. MedRAG with pgvector is
+the largest instance.
+
+### pgvector clones for update jobs
+
+Each update job gets its own clone of the prepared database, so jobs share no state. Create the clones once per run
+instance, outside the matrix: stop the prepared cluster, copy its data directory per job (`cp -a --reflink=auto` on a
+filesystem with reflinks, otherwise a plain copy), start each clone on a free port with its own data directory, and write
+the connection string of the clone to `$PG_CLONES/<job id>.dsn`. The job id is the update cell's name (for example
+`spacev-0.99_targeted10_recal_s0`, listed in `matrix_runs.json`); the job line passes it as `--pg-dsn @$PG_CLONES/<job id>.dsn`.
