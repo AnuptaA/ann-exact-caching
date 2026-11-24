@@ -12,6 +12,7 @@ output file). Everything else counts: system, workload, stream, budget, mode, ba
 import hashlib
 import re
 import shlex
+from pathlib import Path
 
 from recal.measure import jobs_util
 
@@ -19,6 +20,7 @@ CODE_MARKER = "matrix"
 EXTRA_EXCLUDED = ("records",)
 SUBSTITUTION = re.compile(r"\$\(([^)]*)\)")
 SHELL_STOPS = {"|", "||", "&&", ";", "&"}
+REPO = str(Path(__file__).resolve().parents[1])
 
 
 def command_tokens(line: str) -> tuple[list[str], list[str]]:
@@ -63,7 +65,8 @@ def cell_hash(line: str) -> str:
             skip = True
         else:
             kept.append(tok)
-    text = " ".join(kept + substitutions)
+    # Job lines carry absolute paths; hash them relative to the repository so clones agree.
+    text = " ".join(kept + substitutions).replace(REPO, ".")
     return hashlib.sha256(text.encode()).hexdigest()
 
 

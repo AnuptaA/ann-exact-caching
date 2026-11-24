@@ -190,3 +190,13 @@ def test_q3_tables_have_throughput_with_system_recall_best_splits_and_thread_lin
     assert split["nodeonly"]["system"] == "nodeonly" and split["recal_n80"]["node_share"] == 80
     assert out["q3_best"][0]["node_share"] == 20
     assert len(out["q3_threads"]) == 4 and out["q3_threads"][0]["qps_std"] == 0.0
+
+
+def test_job_lines_use_absolute_paths_and_pinning_keeps_the_interpreter():
+    from simulations.approximate_hits import run_jobs
+    built = shards.build(real_cfg(), medrag=MEDRAG)
+    lines = [j["line"] for shard in built.values() for j in shard["jobs"]]
+    assert all(f"PYTHONPATH={ROOT} " in line for line in lines)
+    assert not any(" .venv-" in line or " simulations/" in line for line in lines)
+    pinned = run_jobs.pin_line(f"PYTHONPATH={ROOT} {ROOT}/.venv-core/bin/python -u -m recal.cells", 2, 3)
+    assert pinned == f"PYTHONPATH={ROOT} taskset -c 2-3 {ROOT}/.venv-core/bin/python -u -m recal.cells"

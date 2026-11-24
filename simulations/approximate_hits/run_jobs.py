@@ -49,7 +49,7 @@ def assign_cores(n_cpu, workers, cores_per_job, first_core):
 def pin_line(line, c0, c1):
     if "taskset" in line:
         return line
-    return line.replace(PYTHON, f"taskset -c {c0}-{c1} {PYTHON}")
+    return re.sub(rf"(\S*{re.escape(PYTHON)})", rf"taskset -c {c0}-{c1} \1", line)
 
 
 def result_status(line, strict_hash, trust_existing):

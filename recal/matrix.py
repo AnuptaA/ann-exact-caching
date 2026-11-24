@@ -15,14 +15,16 @@ from pathlib import Path
 from recal import modes
 from recal.jobspec import Job
 
-PY = ".venv-core/bin/python"
-ANN = ".venv-ann/bin/python"
-PYPATH = "PYTHONPATH=."
+# Absolute, so job lines run from any working directory (results stay relative to it).
+REPO = Path(__file__).resolve().parents[1]
+PY = f"{REPO}/.venv-core/bin/python"
+ANN = f"{REPO}/.venv-ann/bin/python"
+PYPATH = f"PYTHONPATH={REPO}"
 ABLATIONS = ("--no-union", "--no-expansion", "--no-shells", "--lru", "--no-calibration", "--no-recalibration",
              "--no-mini-cache")
 ROOT = "results"
 STREAM_LENGTH = 100_000
-REPLAY = "simulations/approximate_hits/throughput_replay.py"
+REPLAY = f"{REPO}/simulations/approximate_hits/throughput_replay.py"
 BEST_SPLIT = "recal.system_benefit.best_split"
 
 
@@ -190,7 +192,7 @@ def q3_followups(cfg: dict, wl: OrderedDict, hits: list[Job], owner_out) -> list
         best = (f"[ -f {root}/best.json ] || {{ {PYPATH} {PY} -u -m {BEST_SPLIT} run --sweep {root}/sweep.json "
                 f"--clients {sat} {' '.join(arm_args)} --out {root}/best.json > {root}/log_best.txt 2>&1; }}  "
                 f"# {BEST_SPLIT}")
-        get = lambda s: f"$({PY} -m {BEST_SPLIT} get {root}/best.json {s}.spec)"  # noqa: E731
+        get = lambda s: f"$({PYPATH} {PY} -m {BEST_SPLIT} get {root}/best.json {s}.spec)"  # noqa: E731
         clients = " ".join(map(str, q3["clients"]))
         thread_arms = " ".join([f"--arm nodeonly=none,nodes={node_cache_nodes(w, budget, 100)}"]
                                + [f"--arm {get(k)}" for k in q3["systems"]])
