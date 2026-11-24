@@ -187,6 +187,8 @@ def stamp_result(result: dict, argv: Optional[list] = None) -> dict:
         result["config_hash"] = config_hash(argv_to_dict(argv))
         result["hash_scheme"] = 1
     result["code_commit"] = code_commit()
+    from recal.measure import environment
+    result["environment"] = environment.describe()
     return result
 
 
