@@ -46,7 +46,7 @@ def write_shards(cfg: dict, a, medrag) -> None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", type=Path, required=True)
+    ap.add_argument("--config", type=Path, default=Path("experiments/matrix.json"))
     ap.add_argument("--out", type=Path)
     ap.add_argument("--only", nargs="+", choices=sorted(matrix.EXPERIMENTS))
     ap.add_argument("--dry-run", action="store_true")

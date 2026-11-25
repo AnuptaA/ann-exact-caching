@@ -58,7 +58,7 @@ def reduce(cfg: dict, run_table: dict, cells: dict, out: Path, root: Path = Path
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", type=Path, required=True)
+    ap.add_argument("--config", type=Path, default=Path("experiments/matrix.json"))
     ap.add_argument("--jobs", type=Path, default=Path("jobs"))
     ap.add_argument("--store", default=None)
     ap.add_argument("--no-pull", action="store_true")
