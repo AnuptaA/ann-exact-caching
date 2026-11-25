@@ -240,6 +240,8 @@ logic is in `recal/matrix.py` only. `MATRIX` selects the configuration (default 
 | TripClick (1.5M x 769, float32) | 4.7 GB | about 5 GB | about 10 GB | about 0.5 GB | 64 GB RAM, 100 GB disk | 32 GB RAM, 60 GB disk |
 | LAION-prompts (9.6M x 512, float32) | 19.8 GB (plus 19.3 GB of float16 shards during the build, deletable afterwards) | about 25 GB | about 42 GB | about 0.5 GB | 64 GB RAM (HNSW build about 30 GB), 300 GB disk | 32 GB RAM, 150 GB disk |
 
+DiskANN's PQ size is set per dataset in the configuration (`prepare.<dataset>.diskann_pq_bytes`: SPACEV 32, TriviaQA and MedRAG 256; LAION a list `[64, 128, 256]` that the prepare tries in order, keeping the smallest size that reaches recall@10 0.95 at a search list of at most 256; each trial is a full index build, so expect up to three builds of hours each, and the unchosen indexes are deleted). The answer stage fails when recall@10 at its search list is below 0.95 (it used to write the answers regardless). PQ size, search list and measured recall are recorded in `diskann.json`, `pq.json` of the index, `pq_trials.json` (LAION), the artifact manifest, and as `diskann_backend` in every result that uses the DiskANN answers. PQ codes are backend memory: they are identical for every system and for every Q3 split, and they sit outside M, the cache memory budget. LAION's latency probe is `latency_probe.py --prep results/online/laion-prompts --index results/backends/laion-prompts/diskann --out results/latency_probe/laion.json`, then `select_backend.py` as for the other datasets.
+
 Throughput runs want the DiskANN index on local NVMe and the page cache smaller than the index. MedRAG with pgvector is
 the largest instance.
 

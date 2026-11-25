@@ -17,6 +17,9 @@ PY = ".venv-core/bin/python"
 ANN = ".venv-ann/bin/python"
 K_MAX = 100
 SEARCH_LIST_FACTOR = 7
+DEFAULT_PQ_BYTES = 32
+TARGET_RECALL = 0.95
+MAX_TRIAL_LIST = 256
 PREP_DEPTH = 500    # top500.npy: the file name and depth every consumer reads (recal.sim, eval_real_backend)
 NPROC = "$(getconf _NPROCESSORS_ONLN)"
 # DiskANN build memory cap in GB: 60% of this machine's memory
@@ -67,19 +70,34 @@ def prep_stage(cfg: dict, dataset: str) -> Stage:
     return Stage("prep", "prep", cmds, artifacts.local_paths(cfg, dataset)["prep"])
 
 
+def pq_setting(cfg: dict, dataset: str) -> tuple[int | None, list[int]]:
+    """(fixed PQ bytes or None, candidates to try in order). Config: diskann_pq_bytes, an int or a list."""
+    value = settings(cfg, dataset).get("diskann_pq_bytes", DEFAULT_PQ_BYTES)
+    return (value, []) if isinstance(value, int) else (None, list(value))
+
+
 def diskann_stages(cfg: dict, dataset: str) -> list[Stage]:
-    """DiskANN index at recall@10 0.95 with a search list of at least 7 x K_max, then its answer tables."""
+    """DiskANN index at recall@10 0.95 with a search list of at least 7 x K_max, then its answer tables.
+
+    The PQ size comes from the configuration. With a list of sizes the build stage tries them in order and keeps
+    the smallest that reaches recall@10 0.95 at a search list of at most MAX_TRIAL_LIST. The answer stage fails when
+    recall@10 at its search list is below 0.95."""
     ws, listsize = artifacts.workloads_of(cfg, dataset), SEARCH_LIST_FACTOR * K_MAX
+    pq, candidates = pq_setting(cfg, dataset)
+    pq_flag = f" --diskann-pq-bytes {pq}" if pq is not None else ""
+    trial_flag = (f" --pq-candidates {' '.join(map(str, candidates))} --require-recall {TARGET_RECALL:g} "
+                  f"--max-search-list {MAX_TRIAL_LIST}") if candidates else ""
     first = next(iter(ws.values()))
     out_dir = Path(first["diskann_file"]).parent
     index_dir = str(out_dir / "diskann")
     build = (f"PYTHONPATH=. {ANN} simulations/approximate_hits/eval_real_backend.py --prep {first['prep']} "
              f"--index diskann --targets 0.95 --fixed 0.95:{listsize} --R {listsize} --answer-depth {K_MAX} "
-             f"--threads {NPROC} --build-gb {BUILD_GB} --index-dir {index_dir} --out-dir {out_dir} --build-only")
+             f"--threads {NPROC} --build-gb {BUILD_GB} --index-dir {index_dir} --out-dir {out_dir}{pq_flag}"
+             f"{trial_flag} --build-only")
     tables = [f"PYTHONPATH=. {ANN} simulations/approximate_hits/eval_real_backend.py --prep {w['prep']} "
               f"--index diskann --targets 0.95 --fixed 0.95:{listsize} --R {listsize} --answer-depth {K_MAX} "
               f"--threads {NPROC} --build-gb {BUILD_GB} --index-dir {index_dir} "
-              f"--out-dir {Path(w['diskann_file']).parent}" for w in ws.values()]
+              f"--out-dir {Path(w['diskann_file']).parent}{pq_flag}" for w in ws.values()]
     paths = artifacts.local_paths(cfg, dataset)
     return [Stage("diskann_index", "diskann_index", [build], paths["diskann_index"]),
             Stage("diskann_answers", "diskann_answers", tables, paths["diskann_answers"])]
@@ -214,5 +232,7 @@ def make_tiny(cfg: dict, root: Path, seed: int = 0, n_requests: int = 3000) -> d
         answers = root / w["diskann_file"]
         answers.parent.mkdir(parents=True, exist_ok=True)
         np.savez(answers, **{"answer_0.95": top[:, :10], "deep_0.95": top})
+        answers.with_suffix(".json").write_text(json.dumps({"pq_bytes": DEFAULT_PQ_BYTES, "targets": {"0.95": {
+            "effort": 100, "search_list": 100, "recall_at_10": 1.0, "recall_answer_at_k": 1.0}}}))
         entries[name] = {"prep": w["prep"], "diskann_answers": w["diskann_file"]}
     return entries

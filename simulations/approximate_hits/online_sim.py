@@ -1952,6 +1952,10 @@ def main():
         res["backend"] = dict(D["backend_recall_measured"],
                               target=args.backend_target if args.backend_file
                               else args.backend_recall, file=args.backend_file)
+        if args.backend_file:
+            from recal.measure.jobs_util import register_backend_file, _backend_meta
+            register_backend_file(args.backend_file, args.backend_target)
+            res["diskann_backend"] = dict(_backend_meta)
         logger.info(f"backend recall measured {D['backend_recall_measured']}")
     key = f"phase_{args.stream}"
     if key in streams.files or (args.stream == "shift" and "phase" in streams.files):

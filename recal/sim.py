@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from recal.backend import ExactBackend
-from recal.measure.jobs_util import add_hash_flag, register_args, register_data_file, stamp_result
+from recal.measure.jobs_util import add_hash_flag, register_args, register_backend_file, register_data_file, stamp_result
 from recal.params import Params
 from recal.records import Records, add_response
 from recal.stored import StoredAnswers
@@ -64,6 +64,7 @@ def make_backend(kind: str, db, q, top, stream_idx, args):
     if kind == "stored":
         return StoredAnswers(db, q[np.unique(stream_idx)], top[np.unique(stream_idx)])
     z = np.load(args.backend_file)     # DiskANN answers: answer_<target> (K) and deep_<target> (deeper lists)
+    register_backend_file(args.backend_file, args.backend_target)
     u = np.unique(stream_idx)
     return StoredAnswers(db, q[u], z[f"deep_{args.backend_target}"][u], shallow=z[f"answer_{args.backend_target}"][u])
 

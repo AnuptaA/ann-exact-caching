@@ -40,6 +40,7 @@ HASH_SCHEME = 2
 HASH_FLAG = "--print-config-hash"
 _registered: dict = {}
 _data_files: list = []
+_backend_meta: dict = {}
 
 
 def atomic_write_json(path: Any, obj: Any, **dump_kwargs: Any) -> None:
@@ -175,10 +176,26 @@ def register_data_file(path: Any) -> None:
                             "sha256": file_sha256(path)})
 
 
+def register_backend_file(path: Any, target: Any) -> None:
+    """Remember the DiskANN answer file of a run: PQ size, search list and measured recall@10 come from its json
+    (eval_real_backend.py). Files made before that record these as null."""
+    path = Path(path)
+    meta = {}
+    if path.with_suffix(".json").exists():
+        meta = json.loads(path.with_suffix(".json").read_text())
+    chosen = meta.get("targets", {}).get(str(target), {})
+    _backend_meta.clear()
+    _backend_meta.update({"file": str(path), "target": str(target), "pq_bytes": chosen.get("pq_bytes", meta.get("pq_bytes")),
+                          "search_list": chosen.get("search_list", chosen.get("effort")),
+                          "measured_recall_at_10": chosen.get("recall_at_10", chosen.get("recall_answer_at_k"))})
+
+
 def stamp_result(result: dict, argv: Optional[list] = None) -> dict:
     """Add config_hash and code_commit: scheme 2 when the script registered its arguments."""
     if _data_files:
         result["data_files"] = [dict(d) for d in _data_files]
+    if _backend_meta:
+        result["diskann_backend"] = dict(_backend_meta)
     if _registered:
         result["config_hash"] = resolved_hash(_registered)
         result["hash_scheme"] = HASH_SCHEME

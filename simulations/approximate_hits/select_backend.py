@@ -24,6 +24,7 @@ CANDIDATES = {
        for z in ("0.3", "0.6", "0.99")},
     "tripclick-ip": ["tripclick"],
     "medrag-ip": ["medrag"],
+    "laion-prompts": ["laion"],
 }
 
 

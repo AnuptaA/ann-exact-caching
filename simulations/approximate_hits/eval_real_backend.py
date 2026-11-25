@@ -33,6 +33,7 @@ import json
 import time
 import argparse
 import logging
+import shutil
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
@@ -105,6 +106,8 @@ class Index:
                     data=db, distance_metric="l2", index_directory=str(d), complexity=100,
                     graph_degree=64, search_memory_maximum=gb, build_memory_maximum=args.build_gb,
                     num_threads=args.threads, pq_disk_bytes=0, index_prefix="ann")
+                (d / PQ_FILE).write_text(json.dumps({"pq_bytes": args.diskann_pq_bytes}))
+            self.pq_bytes = index_pq_bytes(d, args.diskann_pq_bytes)
             from simulations.approximate_hits.diskann_aio import open_disk_index
             self.ix = open_disk_index(
                 index_directory=str(d), num_threads=args.threads, num_nodes_to_cache=0,
@@ -123,6 +126,82 @@ class Index:
         ids, _ = self.ix.batch_search(q, k_neighbors=k, complexity=max(effort, k),
                                       beam_width=self.beam, num_threads=self.threads)
         return ids.astype(np.int64)
+
+
+PQ_FILE = "pq.json"
+
+
+def index_pq_bytes(index_dir: Path, default: int) -> int:
+    """PQ bytes per vector the index in index_dir was built with (pq.json), else the flag's value."""
+    f = Path(index_dir) / PQ_FILE
+    return int(json.loads(f.read_text())["pq_bytes"]) if f.exists() else int(default)
+
+
+def below_target(recall_value: float, target: float) -> bool:
+    return recall_value < target - 1e-12
+
+
+def recall_failure(what: str, pq_bytes, search_list: int, measured: float, target: float) -> str:
+    return (f"{what}: recall@10 {measured:.4f} is below the target {target:g} at search list {search_list} "
+            f"with {pq_bytes}-byte PQ; use a larger --diskann-pq-bytes or search list")
+
+
+def choose_pq(candidates, measure, require: float):
+    """Smallest PQ size reaching recall `require`. measure(pq) -> (search_list, recall, build_s), the first search
+    list of the allowed range that reaches it or the best one tried. Returns (chosen or None, trials)."""
+    trials = []
+    for pq in sorted(candidates):
+        search_list, recall_value, build_s = measure(pq)
+        ok = not below_target(recall_value, require)
+        trials.append({"pq_bytes": pq, "search_list": search_list, "recall_at_10": recall_value,
+                       "build_s": build_s, "reached": ok})
+        if ok:
+            return trials[-1], trials
+    return None, trials
+
+
+def pick_pq(args, db, q, truth, tune, out: Path) -> dict:
+    """Build an index per PQ candidate (smallest first, stop at the first that reaches --require-recall at a search
+    list of at most --max-search-list), keep it as the --index-dir and delete the others."""
+    target_dir = Path(args.index_dir) if args.index_dir else out / "diskann"
+    done = out / "pq_trials.json"
+    if done.exists() and (target_dir / PQ_FILE).exists():
+        kept = index_pq_bytes(target_dir, 0)
+        for trial in json.loads(done.read_text())["trials"]:
+            if trial["pq_bytes"] == kept and trial["reached"]:
+                logger.info(f"index with {kept}-byte PQ already chosen: {trial}")
+                return trial
+    efforts = [e for e in GRIDS["diskann"] if e <= args.max_search_list]
+    state = {}
+
+    def measure(pq):
+        trial = argparse.Namespace(**vars(args))
+        trial.diskann_pq_bytes, trial.index_dir = pq, str(target_dir.with_name(f"{target_dir.name}_pq{pq}"))
+        ix = Index("diskann", db, trial, out)
+        best = (efforts[-1], 0.0)
+        for e in efforts:
+            r = recall(truth[tune], ix.search(q[tune], args.k, e), args.k)
+            logger.info(f"pq {pq} search list {e}: recall@{args.k} {r:.4f}")
+            best = (e, r)
+            if not below_target(r, args.require_recall):
+                break
+        state[pq] = trial.index_dir
+        return best[0], best[1], ix.build_s
+
+    chosen, trials = choose_pq(args.pq_candidates, measure, args.require_recall)
+    (out / "pq_trials.json").write_text(json.dumps({"require_recall": args.require_recall,
+                                                    "max_search_list": args.max_search_list, "trials": trials}, indent=1))
+    for pq, d in state.items():
+        if chosen is None or pq != chosen["pq_bytes"]:
+            shutil.rmtree(d, ignore_errors=True)
+    if chosen is None:
+        rows = "; ".join(f"pq {t['pq_bytes']}: recall {t['recall_at_10']:.4f} at list {t['search_list']}" for t in trials)
+        raise SystemExit(f"no PQ size in {sorted(args.pq_candidates)} reaches recall@10 {args.require_recall:g} at a "
+                         f"search list of at most {args.max_search_list} ({rows})")
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    Path(state[chosen["pq_bytes"]]).rename(target_dir)
+    return chosen
 
 
 def miss_concentration(truth, ids, k):
@@ -173,6 +252,12 @@ def main():
     ap.add_argument("--fixed", nargs="+", default=None,
                     help="target:search_list pairs chosen by select_backend.py (no tuning curve): answers and "
                          "deep lists at exactly that search list and --beam (doc 9u)")
+    ap.add_argument("--require-recall", type=float, default=None,
+                    help="fail when recall@k at the chosen search list is below this (--build-only, --pq-candidates)")
+    ap.add_argument("--pq-candidates", type=int, nargs="+", default=None,
+                    help="DiskANN: try these PQ sizes smallest first and keep the first that reaches --require-recall "
+                         "at a search list of at most --max-search-list")
+    ap.add_argument("--max-search-list", type=int, default=256)
     ap.add_argument("--efforts", type=int, nargs="+", default=None,
                     help="search efforts to try (default: the index's grid, GRIDS)")
     ap.add_argument("--share-deep", action="store_true",
@@ -182,20 +267,29 @@ def main():
     out = Path(args.out_dir) if args.out_dir else RES / "backends" / (args.out_name or prep.name)
     out.mkdir(parents=True, exist_ok=True)
     db, q, truth = load(prep)
-    ix = Index(args.index, db, args, out)
     rng = np.random.default_rng(1)
     tune = rng.choice(len(q), args.tune_queries, replace=False)
+    if args.pq_candidates:
+        if args.index != "diskann" or args.require_recall is None:
+            raise SystemExit("--pq-candidates needs --index diskann and --require-recall")
+        chosen = pick_pq(args, db, q, truth, tune, out)
+        logger.info(f"chose {chosen}")
+        return
+    ix = Index(args.index, db, args, out)
     if args.build_only:
         r = recall(truth[tune], ix.search(q[tune], args.k, args.build_effort), args.k)
-        info = {"index": args.index, "build_s": ix.build_s, "pq_bytes": args.diskann_pq_bytes,
+        info = {"index": args.index, "build_s": ix.build_s, "pq_bytes": getattr(ix, "pq_bytes", args.diskann_pq_bytes),
                 "effort": args.build_effort, "recall_at_k": r, "n_db": len(db)}
         (out / f"{args.index}_build.json").write_text(json.dumps(info, indent=1))
         logger.info(f"built: {info}")
+        if args.require_recall is not None and below_target(r, args.require_recall):
+            raise SystemExit(recall_failure("build", info["pq_bytes"], args.build_effort, r, args.require_recall))
         return
     if args.fixed:          # chosen settings: no curve; answers at exactly these search lists
+        pq_bytes = getattr(ix, "pq_bytes", args.diskann_pq_bytes)
         res = {"index": args.index, "index_dir": str(args.index_dir or out / "diskann"), "beam": args.beam,
-               "build_s": ix.build_s, "curve": {}, "targets": {}}
-        arrays = {}
+               "build_s": ix.build_s, "pq_bytes": pq_bytes, "curve": {}, "targets": {}}
+        arrays, failures = {}, []
         for pair in args.fixed:
             tgt, e = pair.split(":")
             e = int(e)
@@ -213,13 +307,19 @@ def main():
             else:
                 ans = ix.search(q, args.answer_depth, e)
                 deep = ix.search(q, args.R, e)
-            stats = {"effort": e, "beam": args.beam, "recall_answer_at_k": recall(truth, ans, args.k),
+            stats = {"effort": e, "search_list": e, "pq_bytes": pq_bytes, "beam": args.beam,
+                     "recall_answer_at_k": recall(truth, ans, args.k),
+                     "recall_at_10": recall(truth, ans, args.k),
                      "recall_deep_at_k": recall(truth, deep, args.k),
                      "recall_deep_at_R": recall(truth, deep, args.R)}
             res["targets"][tgt] = stats
             arrays[f"answer_{tgt}"] = ans.astype(np.int32)
             arrays[f"deep_{tgt}"] = deep.astype(np.int32)
             logger.info(f"target {tgt}: {stats}")
+            if below_target(stats["recall_at_10"], float(tgt)):
+                failures.append(recall_failure(f"target {tgt}", pq_bytes, e, stats["recall_at_10"], float(tgt)))
+        if failures:
+            raise SystemExit("; ".join(failures) + " (nothing was written)")
         np.savez(out / f"{args.index}.npz", **arrays)
         (out / f"{args.index}.json").write_text(json.dumps(res, indent=1))
         logger.info(f"wrote {out / args.index}.npz")
@@ -243,7 +343,8 @@ def main():
         e = min(ok)
         ans = ix.search(q, args.answer_depth, e)
         deep = ix.search(q, args.R, e)
-        stats = {"effort": e, "recall_answer_at_k": recall(truth, ans, args.k),
+        stats = {"effort": e, "search_list": e, "pq_bytes": getattr(ix, "pq_bytes", None),
+                 "recall_answer_at_k": recall(truth, ans, args.k), "recall_at_10": recall(truth, ans, args.k),
                  "recall_deep_at_k": recall(truth, deep, args.k),
                  "recall_deep_at_R": recall(truth, deep, args.R),
                  "misses": miss_concentration(truth, ans, args.k)}

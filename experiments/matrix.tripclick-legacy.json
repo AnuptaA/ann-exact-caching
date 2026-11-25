@@ -231,20 +231,24 @@
   "spacev": {
    "fetch": "--spacev",
    "base": "datasets/aker/spacev-10m.npy",
-   "qvcache_memory": "25000 50000 100000 200000"
+   "qvcache_memory": "25000 50000 100000 200000",
+   "diskann_pq_bytes": 32
   },
   "triviaqa": {
    "fetch": "--triviaqa --sphere",
    "base": "datasets/aker/sphere-ip-10m.npy",
-   "shift_flags": " --append-zero"
+   "shift_flags": " --append-zero",
+   "diskann_pq_bytes": 256
   },
   "medrag": {
    "fetch": "--medrag",
-   "base": "datasets/medrag/medrag-ip-docs.npy"
+   "base": "datasets/medrag/medrag-ip-docs.npy",
+   "diskann_pq_bytes": 256
   },
   "tripclick": {
    "fetch": "--tripclick",
-   "base": "datasets/aker/tripclick-ip-docs.npy"
+   "base": "datasets/aker/tripclick-ip-docs.npy",
+   "diskann_pq_bytes": 256
   }
  }
 }

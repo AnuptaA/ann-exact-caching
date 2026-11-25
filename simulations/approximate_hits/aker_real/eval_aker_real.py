@@ -211,6 +211,11 @@ class World:
             if kind != "none":
                 raise SystemExit("real-index backends support a fixed database only")
             z = np.load(args.backend_file)
+            try:
+                from recal.measure.jobs_util import register_backend_file
+                register_backend_file(args.backend_file, args.backend_target)
+            except ImportError:
+                pass
             self.answer_rows = z[f"answer_{args.backend_target}"]
             if self.answer_rows.shape[1] < args.k + args.delta:
                 raise SystemExit("answer rows shallower than k + delta")
