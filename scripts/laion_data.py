@@ -22,30 +22,27 @@ DIM = 512
 TOP_DEPTH = 128
 NORM_TOL = 1e-2
 SAMPLE = 2000
-ID_KEYS = ("passage_ids", "passage_id", "ids")
-VECTOR_KEYS = ("embeddings", "vectors", "embedding", "data")
+ID_KEY = "passage_ids"
+VECTOR_KEY = "embeddings"
 
 
 def shard_paths(directory: Path) -> list[Path]:
     return [directory / "shards" / data_fetch.laion_shard_name(i) for i in range(data_fetch.LAION_SHARDS)]
 
 
-def pick_key(names: list[str], preferred: tuple[str, ...], what: str, path: Path) -> str:
-    for key in preferred:
-        if key in names:
-            return key
-    raise KeyError(f"{path.name} has no {what} array (keys: {names})")
+def shard_array(path: Path, key: str) -> np.ndarray:
+    with np.load(path) as shard:
+        if key not in shard.files:
+            raise KeyError(f"{path.name} has no '{key}' array (keys: {shard.files})")
+        return shard[key]
 
 
 def shard_ids(path: Path) -> np.ndarray:
-    with np.load(path) as shard:
-        return shard[pick_key(list(shard.files), ID_KEYS, "passage id", path)]
+    return shard_array(path, ID_KEY)
 
 
 def shard_vectors(path: Path) -> np.ndarray:
-    with np.load(path) as shard:
-        names = [n for n in shard.files if n not in ID_KEYS]
-        return shard[pick_key(names, VECTOR_KEYS, "vector", path)]
+    return shard_array(path, VECTOR_KEY)
 
 
 def shard_rows(paths: list[Path]) -> list[int]:

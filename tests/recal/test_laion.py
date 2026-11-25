@@ -177,3 +177,13 @@ def test_a_question_can_name_its_own_workloads():
     cfg["q1"]["workloads"] = ["laion"]
     only = matrix.cell_jobs(cfg, MEDRAG)[0]["q1"]
     assert 0 < len(only) < full and all("/laion/" in j.line for j in only)
+
+
+def test_a_shard_without_the_expected_keys_is_named_in_the_error(small, tmp_path):
+    folder = make_folder(tmp_path)
+    path = laion_data.shard_paths(folder)[0]
+    np.savez(path, vectors=np.zeros((2, laion_data.DIM), np.float16), ids=np.arange(2))
+    with pytest.raises(KeyError, match="shard_000.npz has no 'passage_ids'"):
+        laion_data.shard_ids(path)
+    with pytest.raises(KeyError, match="no 'embeddings'"):
+        laion_data.shard_vectors(path)
