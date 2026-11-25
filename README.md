@@ -115,6 +115,30 @@ sh scripts/fetch_data.sh --esci                     # ESCI for local checks (nev
 
 One mode per dataset. Files are placed where the workload registry expects them (`datasets/aker/`, `datasets/medrag/`, `datasets/tripclick/`). A file expected in a Drive folder but missing from its listing stops the run before any download, the free space is checked before every download (a 10 GB floor), and each dataset is verified afterwards (`scripts/verify_data.py`). `--sphere` downloads the Hugging Face base and builds the inner-product corpus (`scripts/build_sphere_ip.py`, which checks M against the published value). MedRAG uses the 100,000-request stream and its corpus; the 10,000-request stream was made with a different rewording model and is fetched only with `--medrag-10k`, under its own names (`medrag-10k-ip` in the registry), and is not used by the experiments. Verification of the 100K stream checks the vector file (100,000 x 769 float32, last coordinate 0), the draw (Zipf 0.8, seed 0, 500 questions, counts maximum 7,602, median 92, minimum 38), the request texts (unique, question sequence equal to the draw's). Results record the request file name and SHA-256 (`data_files`).
 
+## New instance
+
+Launch the instance by hand in the console (Ubuntu 24.04 x86_64, an IAM role that can read and write the bucket, key, security group, one extra EBS volume for `/data`), then run one command on it as `ubuntu`:
+
+```
+curl -fsSL https://raw.githubusercontent.com/AnuptaA/ann-exact-caching/main/scripts/instance_setup.sh | bash -s -- <dataset>
+```
+
+Console settings per prepare instance (estimates from the sizes table; the volume must cover the bootstrap's requirement plus its 20% margin):
+
+| Dataset | Type | Data volume |
+|---|---|---|
+| tripclick | m7i.4xlarge (64 GB RAM) | 100 GB |
+| laion | m7i.4xlarge (64 GB RAM) | 300 GB |
+| spacev | m7i.4xlarge (64 GB RAM) | 200 GB |
+| triviaqa | 128 GB RAM class | 300 GB |
+| medrag | 256 GB RAM class | 600 GB |
+
+The script installs the system packages and the AWS CLI, formats and mounts the one unformatted data volume at `/data` (it refuses when none or more than one is attached and prints `lsblk`), clones the code to `/data/thesis`, writes the `RECAL_*` settings to `~/.bashrc`, pulls the secrets and agent context from the private bucket, installs Claude Code, and starts a tmux session `main` (window `bootstrap` runs `sudo -E bash scripts/ec2_bootstrap.sh --role prepare --datasets <dataset>`, window `agent` is empty). It is safe to rerun and stops at the first failure. `--dry-run` prints every action; `--bucket`, `--prefix` and `--repo-url` change the defaults.
+
+Secrets live under `s3://recal-eval-aa/ops/` (Block Public Access must be on): `secrets/env.local` (the `RECAL_DRIVE_*` links, installed as `.env.local`), `secrets/github_token`, `secrets/git_identity` (name on line 1, email on line 2), `context/common.md` and `context/<dataset>.md`. Upload them from the laptop with `scripts/upload_secrets.sh --env-file local/private/drive_links.env --token-file <file> --name <name> --email <email> --context-dir <dir>`; it checks Block Public Access first and never prints values. A missing secret is reported with its upload target and the setup continues.
+
+Then: `tmux attach -t main`, run `claude --remote-control` in the `agent` window and log in, and paste `~/agent_context.md`.
+
 ## Setting up an instance
 
 `scripts/ec2_bootstrap.sh` sets up a fresh Ubuntu 24.04 x86_64 instance in steps (`--dry-run` prints them; `--only` and `--skip` select steps): the harness toolchain and PostgreSQL 16 with pgvector 0.8.0 (`harness/deploy/setup_instance.sh`), the AIO limit, `.venv-core` (Python 3.11) and `.venv-ann` from `envs/`, the ReCal and cache cores, the vendored Aker library in standard and Proximity modes against the pinned Boost and FAISS, links from `datasets/` and `simulations/approximate_hits/results` to the data volume, the data fetch and a smoke test (`scripts/smoke_cells.py`). Set `DATA_DIR` (default `/data`), `RESULTS_DIR` and `TP` to keep data, results and builds off the root disk.
