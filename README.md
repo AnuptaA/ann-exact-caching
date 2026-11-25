@@ -123,15 +123,17 @@ Launch the instance by hand in the console (Ubuntu 24.04 x86_64, an IAM role tha
 curl -fsSL https://raw.githubusercontent.com/AnuptaA/ann-exact-caching/main/scripts/instance_setup.sh | bash -s -- <dataset>
 ```
 
-Console settings per prepare instance (estimates from the sizes table; the volume must cover the bootstrap's requirement plus its 20% margin):
+Console settings per prepare instance (estimates from the sizes table; the volume must cover the bootstrap's requirement plus its 20% margin). Pass the data volume's size with `--data-size-gb` (GiB, within 2%) so the script finds it even when the instance has other unformatted volumes:
 
-| Dataset | Type | Data volume |
-|---|---|---|
-| tripclick | m7i.4xlarge (64 GB RAM) | 100 GB |
-| laion | m7i.4xlarge (64 GB RAM) | 300 GB |
-| spacev | m7i.4xlarge (64 GB RAM) | 200 GB |
-| triviaqa | 128 GB RAM class | 300 GB |
-| medrag | 256 GB RAM class | 600 GB |
+| Dataset | Type | Data volume | Command arguments |
+|---|---|---|---|
+| tripclick | m7i.4xlarge (64 GB RAM) | 100 GB | `--data-size-gb 100 tripclick` |
+| laion | m7i.4xlarge (64 GB RAM) | 300 GB | `--data-size-gb 300 laion` |
+| spacev | m7i.4xlarge (64 GB RAM) | 200 GB | `--data-size-gb 200 spacev` |
+| triviaqa | 128 GB RAM class | 300 GB | `--data-size-gb 300 triviaqa` |
+| medrag | 256 GB RAM class | 600 GB | `--data-size-gb 600 medrag` |
+
+For example `curl -fsSL https://raw.githubusercontent.com/AnuptaA/ann-exact-caching/main/scripts/instance_setup.sh | bash -s -- --data-size-gb 300 laion`. Instances for update runs also have a second unformatted volume (the ZFS volume for pgvector clones, set up separately); the script never formats any disk but the one matching the size, and without the flag it refuses when several unformatted disks are attached. On any doubt (none or several matching) it prints `lsblk` and stops without formatting.
 
 The script installs the system packages and the AWS CLI, formats and mounts the one unformatted data volume at `/data` (it refuses when none or more than one is attached and prints `lsblk`), clones the code to `/data/thesis`, writes the `RECAL_*` settings to `~/.bashrc`, pulls the secrets and agent context from the private bucket, installs Claude Code, and starts a tmux session `main` (window `bootstrap` runs `sudo -E bash scripts/ec2_bootstrap.sh --role prepare --datasets <dataset>`, window `agent` is empty). It is safe to rerun and stops at the first failure. `--dry-run` prints every action; `--bucket`, `--prefix` and `--repo-url` change the defaults.
 

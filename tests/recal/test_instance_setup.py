@@ -31,8 +31,8 @@ def sourced(script: Path, code: str, stdin: str = "", env: dict | None = None, p
                           text=True, env=environment)
 
 
-def pick(lsblk: str):
-    return sourced(SETUP, "pick_data_volume", lsblk)
+def pick(lsblk: str, size: str = ""):
+    return sourced(SETUP, f"pick_data_volume {size}", lsblk)
 
 
 def stub(directory: Path, name: str, body: str) -> None:
@@ -61,6 +61,47 @@ def test_no_data_volume_means_none_and_the_root_disk_is_never_picked():
 def test_two_unformatted_volumes_are_ambiguous():
     result = pick(ROOT_DISK + DATA_DISK + OTHER_DISK)
     assert result.returncode == 2 and result.stdout.strip() == ""
+
+
+def disk(name: str, gib: float) -> str:
+    return f'NAME="{name}" SIZE="{int(gib * 2**30)}" TYPE="disk" FSTYPE="" MOUNTPOINT="" PKNAME=""\n'
+
+
+def test_size_flag_picks_the_data_volume_among_several_unformatted_disks():
+    zfs = disk("nvme2n1", 200)
+    result = pick(ROOT_DISK + disk("nvme1n1", 300) + zfs, "300")
+    assert result.returncode == 0 and result.stdout.strip() == "/dev/nvme1n1"
+    assert pick(ROOT_DISK + zfs + disk("nvme1n1", 300), "200").stdout.strip() == "/dev/nvme2n1"
+    assert pick(ROOT_DISK + disk("nvme1n1", 300) + zfs).returncode == 2
+
+
+def test_size_flag_with_no_match_or_two_matches_refuses():
+    assert pick(ROOT_DISK + disk("nvme1n1", 300) + disk("nvme2n1", 200), "400").returncode == 1
+    both = ROOT_DISK + disk("nvme1n1", 300) + disk("nvme2n1", 303)
+    result = pick(both, "300")
+    assert result.returncode == 2 and result.stdout.strip() == ""
+
+
+def test_size_flag_tolerance_is_two_percent():
+    assert pick(ROOT_DISK + disk("nvme1n1", 305.9), "300").returncode == 0
+    assert pick(ROOT_DISK + disk("nvme1n1", 306.5), "300").returncode == 1
+    assert pick(ROOT_DISK + disk("nvme1n1", 294.2), "300").returncode == 0
+    assert pick(ROOT_DISK + disk("nvme1n1", 293.5), "300").returncode == 1
+
+
+def test_size_flag_never_selects_a_formatted_or_partitioned_disk_of_that_size():
+    assert pick(ROOT_DISK + FORMATTED.replace("214748364800", str(300 * 2**30)) + PARTITIONED, "300").returncode == 1
+
+
+def test_size_flag_is_validated_and_shown_in_the_dry_run(tmp_path):
+    assert "of 300 GiB" in run_setup("--dry-run", "--data-size-gb", "300", "laion", tmp_home=tmp_path).stdout
+    for bad in ("0", "-5", "abc", "3.5"):
+        assert run_setup("--dry-run", "--data-size-gb", bad, "laion", tmp_home=tmp_path).returncode != 0
+
+
+def test_usage_lists_the_size_flag(tmp_path):
+    out = run_setup("--help", tmp_home=tmp_path).stdout
+    assert "--data-size-gb" in out and "set -e" not in out
 
 
 def run_setup(*args, env=None, tmp_home=None):

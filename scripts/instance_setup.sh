@@ -11,6 +11,9 @@
 #
 # Options:
 #   --dry-run          print every action without doing it
+#   --data-size-gb N   the data volume is the unformatted disk of N GiB (EBS sizes), within 2%; use it when the
+#                      instance has other unformatted volumes (the ZFS volume of update-run instances), which are
+#                      never touched. Without it, several candidates are refused.
 #   --bucket NAME      bucket of secrets, context and the store (default recal-eval-aa)
 #   --prefix NAME      store prefix inside the bucket (default runs)
 #   --repo-url URL     repository to clone (default https://github.com/AnuptaA/ann-exact-caching.git)
@@ -30,6 +33,7 @@ REPO_URL="https://github.com/AnuptaA/ann-exact-caching.git"
 DATA_DIR="/data"
 REPO_DIR="/data/thesis"
 DRY=0
+DATA_GB=""
 WITH_CLAUDE=1
 WITH_TMUX=1
 DATASET=""
@@ -55,10 +59,11 @@ on_error() {
 
 # Pick the data volume from `lsblk -bnP -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,PKNAME` output on stdin: a disk with no
 # filesystem, no mount and no partitions or children. The root disk always has a mounted partition, so it never
-# qualifies. Prints /dev/<name>. Exit 0: one candidate; 1: none; 2: more than one (ambiguous).
+# qualifies. With a size in GiB as $1, only disks within 2% of it qualify. Prints /dev/<name>. Exit 0: one
+# candidate; 1: none; 2: more than one (ambiguous).
 pick_data_volume() {
-    local result
-    result=$(awk '
+    local result want="${1:-}"
+    result=$(awk -v want="$want" '
         function val(key,   pat) {
             pat = "(^| )" key "=\"[^\"]*\""
             if (match($0, pat)) {
@@ -72,12 +77,18 @@ pick_data_volume() {
         }
         {
             n++
-            name[n] = val("NAME"); type[n] = val("TYPE"); fs[n] = val("FSTYPE"); mp[n] = val("MOUNTPOINT")
+            name[n] = val("NAME"); type[n] = val("TYPE"); fs[n] = val("FSTYPE"); mp[n] = val("MOUNTPOINT"); size[n] = val("SIZE") + 0
             parent = val("PKNAME")
             if (parent != "") has_child[parent] = 1
         }
         END {
+            target = want * 1073741824
             for (i = 1; i <= n; i++) {
+                if (want != "") {
+                    diff = size[i] - target
+                    if (diff < 0) diff = -diff
+                    if (diff > 0.02 * target) continue
+                }
                 if (type[i] == "disk" && fs[i] == "" && mp[i] == "" && !(name[i] in has_child)) {
                     count++; pick = name[i]
                 }
@@ -91,12 +102,15 @@ pick_data_volume() {
     esac
 }
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,$p' "$0" | sed '/^[^#]/,$d' | sed 's/^# \{0,1\}//'; }
 
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --dry-run) DRY=1 ;;
+            --data-size-gb)
+                DATA_GB="${2:?--data-size-gb needs a number}"; shift
+                case "$DATA_GB" in "" | *[!0-9]* | 0) die "--data-size-gb needs a positive whole number (GiB)" ;; esac ;;
             --bucket) BUCKET="${2:?--bucket needs a name}"; shift ;;
             --prefix) PREFIX="${2:?--prefix needs a name}"; shift ;;
             --repo-url) REPO_URL="${2:?--repo-url needs a URL}"; shift ;;
@@ -148,7 +162,7 @@ step_volume() {
         return 0
     fi
     if [ "$DRY" -eq 1 ]; then
-        echo "+ find the one unformatted unpartitioned disk (lsblk), refuse if none or more than one"
+        echo "+ find the one unformatted unpartitioned disk${DATA_GB:+ of $DATA_GB GiB (within 2%)} (lsblk), refuse if none or more than one"
         echo "+ sudo mkfs.ext4 -L recaldata <disk>   (skipped when a filesystem labelled recaldata exists)"
         echo "+ sudo mkdir -p $DATA_DIR; sudo mount LABEL=recaldata $DATA_DIR"
         echo "+ add 'LABEL=recaldata $DATA_DIR ext4 defaults,nofail 0 2' to /etc/fstab"
@@ -159,11 +173,15 @@ step_volume() {
     if sudo blkid -L recaldata > /dev/null 2>&1; then
         log "found an existing filesystem labelled recaldata; mounting it"
     else
-        device=$(lsblk -bnP -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,PKNAME | pick_data_volume) || code=$?
+        device=$(lsblk -bnP -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,PKNAME | pick_data_volume "$DATA_GB") || code=$?
         if [ "$code" -ne 0 ]; then
             lsblk
+            if [ -n "$DATA_GB" ]; then
+                [ "$code" -eq 1 ] && die "no unformatted disk of $DATA_GB GiB (within 2%) found; nothing was formatted"
+                die "more than one unformatted disk of $DATA_GB GiB; nothing was formatted"
+            fi
             [ "$code" -eq 1 ] && die "no unformatted data volume found; attach an EBS volume in the console and rerun"
-            die "more than one unformatted volume; leave only the data volume attached (or format one with label recaldata)"
+            die "more than one unformatted volume; rerun with --data-size-gb N to name the data volume (nothing was formatted)"
         fi
         log "formatting $device as ext4 (label recaldata)"
         sudo mkfs.ext4 -q -L recaldata "$device"
