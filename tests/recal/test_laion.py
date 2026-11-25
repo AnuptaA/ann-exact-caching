@@ -138,7 +138,7 @@ def test_missing_variables_name_both_folders(tmp_path):
 
 
 def laion_cfg():
-    return json.loads((ROOT / "experiments" / "matrix.laion.json").read_text())
+    return json.loads((ROOT / "experiments" / "matrix.json").read_text())
 
 
 def test_registry_knows_the_workload():
@@ -159,11 +159,11 @@ def test_prepare_stages_build_the_base_before_prep_and_check_the_truth():
 
 
 def test_laion_config_replaces_tripclick_and_example_keeps_it():
-    text = (ROOT / "experiments" / "matrix.laion.json").read_text()
+    text = (ROOT / "experiments" / "matrix.json").read_text()
     assert "tripclick" not in text
     q4 = laion_cfg()["q4"]
     assert "laion" in q4["grid_workloads"] and "laion" in q4["k_workloads"] and "laion" in q4["update_workloads"]
-    example = json.loads((ROOT / "experiments" / "matrix.example.json").read_text())
+    example = json.loads((ROOT / "experiments" / "matrix.tripclick-legacy.json").read_text())
     assert "tripclick" in example["workloads"]
     counts = [{k: len(v) for k, v in matrix.cell_jobs(c, MEDRAG)[0].items()} for c in (example, laion_cfg())]
     assert counts[0] == counts[1] and counts[0]["q1"] > 0

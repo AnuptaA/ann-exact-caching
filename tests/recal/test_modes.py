@@ -9,7 +9,7 @@ from recal import matrix, modes, sim
 from recal.backend import ExactBackend
 from tests.recal.test_system import make_stream, make_world
 
-CONFIG = Path(__file__).resolve().parents[2] / "experiments" / "matrix.example.json"
+CONFIG = Path(__file__).resolve().parents[2] / "experiments" / "matrix.json"
 
 
 def cfg():

@@ -4,7 +4,7 @@ from pathlib import Path
 from recal import matrix, matrix_hash as mh
 from scripts import gen_matrix
 
-CONFIG = Path(__file__).resolve().parents[2] / "experiments" / "matrix.example.json"
+CONFIG = Path(__file__).resolve().parents[2] / "experiments" / "matrix.json"
 MEDRAG = {"q1_budgets": [0.0001, 0.0003, 0.001], "standin_5pct": 0.0003}
 
 

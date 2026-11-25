@@ -13,7 +13,7 @@ MEDRAG = {"q1_budgets": [0.0001, 0.0003, 0.001], "standin_5pct": 0.0003}
 
 
 def real_cfg():
-    return json.loads((ROOT / "experiments" / "matrix.example.json").read_text())
+    return json.loads((ROOT / "experiments" / "matrix.json").read_text())
 
 
 def test_prepare_dry_run_lists_every_stage_of_a_dataset(capsys):
@@ -43,7 +43,7 @@ def test_tiny_dataset_prepare_pushes_artifacts_with_a_manifest(tmp_path):
 
 def test_tripclick_artifacts_are_not_uploaded_by_default():
     assert "tripclick" in prepare.RESTRICTED
-    cfg = real_cfg()
+    cfg = json.loads((ROOT / "experiments" / "matrix.tripclick-legacy.json").read_text())
     s = store_mod.Store(store_mod.LocalBackend("/nonexistent"))
     stage = prepare.Stage("x", None, [])
     assert prepare_cli.push_stage(s, cfg, "tripclick", stage, Path("."), upload=False) is None
@@ -76,8 +76,8 @@ def test_q3_jobs_of_a_workload_stay_together_under_every_sharding():
 
 def test_filters_and_cross_shard_inputs():
     cfg = real_cfg()
-    only = shards.build(cfg, "workload", question=["q3"], workload=["tripclick"], medrag=MEDRAG)
-    shard = only["tripclick"]
+    only = shards.build(cfg, "workload", question=["q3"], workload=["laion"], medrag=MEDRAG)
+    shard = only["laion"]
     assert {j["exp"] for j in shard["jobs"]} == {"q3"} and shard["pull_results"]
     assert all(p["question"] in ("q1", "q3") for p in shard["pull_results"])
     systems = shards.build(cfg, "workload", system=["aker"], medrag=MEDRAG)
@@ -90,10 +90,10 @@ def test_cli_writes_shard_files_and_artifact_lists(tmp_path):
     path = tmp_path / "cfg.json"
     path.write_text(json.dumps(dict(real_cfg(), medrag_budgets_file=str(budgets))))
     gen_matrix.main(["--config", str(path), "--shard-by", "workload", "--out", str(tmp_path / "jobs"),
-                     "--workload", "tripclick"])
-    shard = json.loads((tmp_path / "jobs" / "shards" / "tripclick.json").read_text())
-    assert (tmp_path / "jobs" / "shards" / "tripclick.txt").read_text().count("\n") == len(shard["jobs"])
-    assert json.loads((tmp_path / "jobs" / "shards" / "tripclick.artifacts.json").read_text()) == shard["artifacts"]
+                     "--workload", "laion"])
+    shard = json.loads((tmp_path / "jobs" / "shards" / "laion.json").read_text())
+    assert (tmp_path / "jobs" / "shards" / "laion.txt").read_text().count("\n") == len(shard["jobs"])
+    assert json.loads((tmp_path / "jobs" / "shards" / "laion.artifacts.json").read_text()) == shard["artifacts"]
 
 
 @pytest.fixture

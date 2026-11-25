@@ -350,7 +350,7 @@ q1-%: SHELL := /bin/bash
 q1-%: .SHELLFLAGS := -o pipefail -c
 
 # ---- Experiment matrix: prepare, shard, run, reduce (recal/matrix.py; no cell logic here) ----
-MATRIX ?= experiments/matrix.example.json
+MATRIX ?= experiments/matrix.json
 JOBS ?= jobs
 SHARD_BY ?= workload
 RECAL_PY ?= .venv-core/bin/python

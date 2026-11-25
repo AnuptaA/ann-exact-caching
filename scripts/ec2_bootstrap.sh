@@ -368,7 +368,7 @@ step_data() {
 step_smoke() {
     [ "$SMOKE" -eq 1 ] || { log "smoke test skipped (--no-smoke)"; return 0; }
     as_user "$root/.venv-core/bin/python" -m pytest -q "$root/tests/recal" "$root/tests/test_cachecore.py"
-    as_user "$root/.venv-core/bin/python" -m scripts.gen_matrix --config "$root/experiments/matrix.example.json" --dry-run
+    as_user "$root/.venv-core/bin/python" -m scripts.gen_matrix --config "$root/experiments/matrix.json" --dry-run
     as_user env PYTHONPATH="$root" "LD_LIBRARY_PATH=$(aker_ld_library_path)" "$root/.venv-core/bin/python" \
         -m scripts.smoke_cells --out "$RESULTS_DIR/smoke"
 }

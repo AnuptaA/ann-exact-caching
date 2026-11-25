@@ -2,7 +2,7 @@
 
 Each job line skips itself when its result exists and carries a marker run_jobs.py recognizes. The configuration
 names the workloads (dataset, prep folder, stream, stored precision, budgets, DiskANN files); see
-experiments/matrix.example.json. MedRAG's budgets come only from medrag_budgets.json (scripts/medrag_working_set.py);
+experiments/matrix.json. MedRAG's budgets come only from medrag_budgets.json (scripts/medrag_working_set.py);
 without it no MedRAG cell is emitted.
 
 Q1 384 runs, Q2 56, Q3 128 split points (hit-rate run plus a throughput arm) and 32 thread lines, Q4 93.

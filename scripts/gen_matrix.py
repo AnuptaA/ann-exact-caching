@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Job lines for the whole experiment matrix from one configuration file.
 
-  python -m scripts.gen_matrix --config experiments/matrix.example.json --dry-run
+  python -m scripts.gen_matrix --config experiments/matrix.json --dry-run
   python -m scripts.gen_matrix --config experiments/matrix.json --out jobs/ [--only q1 q2] [--hashes]
   python simulations/approximate_hits/run_jobs.py jobs/q1.txt --workers 8
 

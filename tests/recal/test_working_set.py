@@ -67,7 +67,7 @@ def test_script_writes_the_budget_file_from_a_prep_folder(tmp_path):
 
 
 def test_generator_refuses_medrag_cells_without_the_file_and_uses_it_when_present(tmp_path):
-    cfg = json.loads((ROOT / "experiments" / "matrix.example.json").read_text())
+    cfg = json.loads((ROOT / "experiments" / "matrix.json").read_text())
     cfg["medrag_budgets_file"] = str(tmp_path / "missing.json")
     jobs, skipped = matrix.cell_jobs(cfg)
     assert skipped == ["medrag"] and not [j for v in jobs.values() for j in v if j.workload == "medrag"]

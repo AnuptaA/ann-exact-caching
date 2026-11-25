@@ -5,7 +5,7 @@ from recal import matrix
 from recal.measure import jobs_util as ju
 from scripts import gen_matrix
 
-CONFIG = Path(__file__).resolve().parents[2] / "experiments" / "matrix.example.json"
+CONFIG = Path(__file__).resolve().parents[2] / "experiments" / "matrix.json"
 MEDRAG = {"q1_budgets": [0.0001, 0.0003, 0.001], "standin_5pct": 0.0003}
 
 
@@ -42,13 +42,13 @@ def test_q1_has_sixteen_systems_per_cell_and_no_qvcache_sweep():
     one = [x for x in lines("q1") if "/spacev-0.3/" in x and "_b0.01_s0" in x]
     assert len(one) == 16 and all("--coord-bytes 1" in x for x in one)
     assert all("--deviation-factor 0.25" in x for x in one if "qvcache" in x)
-    assert all("--deviation-factor 0.075" in x for x in lines("q1") if "/tripclick/" in x and "qvcache" in x)
+    assert all("--deviation-factor 0.075" in x for x in lines("q1") if "/laion/" in x and "qvcache" in x)
     assert sum("--idealized" in x for x in one) == 4
     assert all(ju.is_job_line(x) for x in lines("q1"))
 
 
 def test_the_target_sweep_is_q1_only_and_modes_follow_the_backend():
-    one = [x for x in lines("q1") if "/tripclick/" in x and "_b0.05_" in x and "recal_" in x]
+    one = [x for x in lines("q1") if "/laion/" in x and "_b0.05_" in x and "recal_" in x]
     assert {t for t in (0.8, 0.85, 0.9, 0.95) if any(f"--target {t:g} " in x for x in one)} == {0.8, 0.85, 0.9, 0.95}
     assert all("--backend exact" in x for x in one if "--idealized" in x)
     assert all("--backend file" in x for x in one if "--idealized" not in x)

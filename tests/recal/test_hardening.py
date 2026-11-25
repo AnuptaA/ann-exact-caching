@@ -15,7 +15,7 @@ from scripts import prepare as prepare_script
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/ec2_bootstrap.sh"
-CONFIG = json.loads((ROOT / "experiments/matrix.example.json").read_text())
+CONFIG = json.loads((ROOT / "experiments/matrix.tripclick-legacy.json").read_text())
 MODULE = "qvcache.cpython-311-x86_64-linux-gnu.so"
 
 
