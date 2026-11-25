@@ -246,3 +246,36 @@ def test_upload_dry_run_and_argument_checks(tmp_path):
     assert result.returncode == 0 and "would upload" in result.stdout and log == ""
     assert upload(tmp_path, [], ALL_ON)[0].returncode != 0
     assert upload(tmp_path, ["--name", "only"], ALL_ON)[0].returncode != 0
+
+
+def test_zfs_flag_picks_its_own_disk_and_never_the_data_disk():
+    both = ROOT_DISK + disk("nvme1n1", 300) + disk("nvme2n1", 200)
+    assert sourced(SETUP, "pick_disk 200", both).stdout.strip() == "/dev/nvme2n1"
+    assert sourced(SETUP, "pick_disk 300", both).stdout.strip() == "/dev/nvme1n1"
+    assert sourced(SETUP, "pick_disk 200", ROOT_DISK + disk("nvme1n1", 300)).returncode == 1
+    assert sourced(SETUP, "pick_disk 200", ROOT_DISK + disk("nvme1n1", 200) + disk("nvme2n1", 201)).returncode == 2
+    after_mkfs = ROOT_DISK + FORMATTED.replace("214748364800", str(300 * 2**30)) + disk("nvme2n1", 200)
+    assert sourced(SETUP, "pick_disk 200", after_mkfs).stdout.strip() == "/dev/nvme2n1"
+    assert sourced(SETUP, "pick_disk 300", after_mkfs).returncode == 1
+
+
+def test_sizes_within_two_percent_are_ambiguous():
+    assert sourced(SETUP, "sizes_ambiguous 300 305").returncode == 0
+    assert sourced(SETUP, "sizes_ambiguous 300 200").returncode == 1
+
+
+def test_zfs_step_in_the_dry_run_only_with_the_flag(tmp_path):
+    out = run_setup("--dry-run", "--data-size-gb", "300", "--zfs-size-gb", "200", "laion", tmp_home=tmp_path).stdout
+    for text in ("apt-get install -y zfsutils-linux", "disk of 200 GiB", "zpool create -o ashift=12", "pgpool",
+                 "zfs create -o recordsize=8k -o compression=lz4 pgpool/base"):
+        assert text in out, text
+    plain = run_setup("--dry-run", "--data-size-gb", "300", "laion", tmp_home=tmp_path).stdout
+    assert "zfs" not in plain.lower() and "zpool" not in plain
+
+
+def test_zfs_flag_is_validated(tmp_path):
+    for args in (["--zfs-size-gb", "200"], ["--data-size-gb", "300", "--zfs-size-gb", "0"],
+                 ["--data-size-gb", "300", "--zfs-size-gb", "x"], ["--data-size-gb", "200", "--zfs-size-gb", "201"]):
+        result = run_setup("--dry-run", *args, "laion", tmp_home=tmp_path)
+        assert result.returncode != 0 and "+ " not in result.stdout, args
+    assert "--zfs-size-gb" in run_setup("--help", tmp_home=tmp_path).stdout

@@ -14,6 +14,10 @@
 #   --data-size-gb N   the data volume is the unformatted disk of N GiB (EBS sizes), within 2%; use it when the
 #                      instance has other unformatted volumes (the ZFS volume of update-run instances), which are
 #                      never touched. Without it, several candidates are refused.
+#   --zfs-size-gb N    update-run instances: install ZFS and create the pool "pgpool" on the unformatted disk of
+#                      N GiB (within 2%) with the dataset pgpool/base (recordsize 8k, lz4) for the pgvector
+#                      clones. Needs --data-size-gb, and the two sizes must differ by more than 2%. Without it
+#                      nothing about ZFS happens. No other disk is touched.
 #   --bucket NAME      bucket of secrets, context and the store (default recal-eval-aa)
 #   --prefix NAME      store prefix inside the bucket (default runs)
 #   --repo-url URL     repository to clone (default https://github.com/AnuptaA/ann-exact-caching.git)
@@ -34,6 +38,7 @@ DATA_DIR="/data"
 REPO_DIR="/data/thesis"
 DRY=0
 DATA_GB=""
+ZFS_GB=""
 WITH_CLAUDE=1
 WITH_TMUX=1
 DATASET=""
@@ -61,7 +66,14 @@ on_error() {
 # filesystem, no mount and no partitions or children. The root disk always has a mounted partition, so it never
 # qualifies. With a size in GiB as $1, only disks within 2% of it qualify. Prints /dev/<name>. Exit 0: one
 # candidate; 1: none; 2: more than one (ambiguous).
-pick_data_volume() {
+# sizes_ambiguous A B: true when A and B (GiB) are within 2% of each other.
+sizes_ambiguous() {
+    awk -v a="$1" -v b="$2" 'BEGIN { d = a - b; if (d < 0) d = -d; m = a > b ? a : b; exit !(d <= 0.02 * m) }'
+}
+
+# pick_disk [GiB]: lsblk -bnP output on stdin; prints the one unformatted, unpartitioned, unmounted disk (of that
+# size within 2% when given). Exit 0 one, 1 none, 2 several.
+pick_disk() {
     local result want="${1:-}"
     result=$(awk -v want="$want" '
         function val(key,   pat) {
@@ -111,6 +123,9 @@ parse_args() {
             --data-size-gb)
                 DATA_GB="${2:?--data-size-gb needs a number}"; shift
                 case "$DATA_GB" in "" | *[!0-9]* | 0) die "--data-size-gb needs a positive whole number (GiB)" ;; esac ;;
+            --zfs-size-gb)
+                ZFS_GB="${2:?--zfs-size-gb needs a number}"; shift
+                case "$ZFS_GB" in "" | *[!0-9]* | 0) die "--zfs-size-gb needs a positive whole number (GiB)" ;; esac ;;
             --bucket) BUCKET="${2:?--bucket needs a name}"; shift ;;
             --prefix) PREFIX="${2:?--prefix needs a name}"; shift ;;
             --repo-url) REPO_URL="${2:?--repo-url needs a URL}"; shift ;;
@@ -122,6 +137,10 @@ parse_args() {
         esac
         shift
     done
+    if [ -n "$ZFS_GB" ]; then
+        [ -n "$DATA_GB" ] || die "--zfs-size-gb needs --data-size-gb (two unformatted volumes cannot be told apart otherwise)"
+        sizes_ambiguous "$DATA_GB" "$ZFS_GB" && die "--data-size-gb $DATA_GB and --zfs-size-gb $ZFS_GB are within 2% of each other; the disks cannot be told apart"
+    fi
     [ -n "$DATASET" ] || die "usage: instance_setup.sh [options] <dataset> (one of: $DATASETS)"
     case " $DATASETS " in *" $DATASET "*) ;; *) die "unknown dataset: $DATASET (one of: $DATASETS)" ;; esac
 }
@@ -191,6 +210,44 @@ step_volume() {
     grep -q "LABEL=recaldata" /etc/fstab || echo "LABEL=recaldata $DATA_DIR ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab > /dev/null
     sudo chown "$(id -un):$(id -gn)" "$DATA_DIR"
     did "data volume mounted at $DATA_DIR${device:+ ($device formatted)}"
+}
+
+pick_data_volume() { pick_disk "$@"; }
+
+step_zfs() {
+    [ -n "$ZFS_GB" ] || return 0
+    log "step zfs pool"
+    if [ "$DRY" -eq 1 ]; then
+        echo "+ sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y zfsutils-linux"
+        echo "+ find the one unformatted unpartitioned disk of $ZFS_GB GiB (within 2%) (lsblk), refuse if none or more than one"
+        echo "+ sudo zpool create -o ashift=12 -O mountpoint=/pgpool pgpool <disk>   (skipped when pool pgpool exists)"
+        echo "+ sudo zfs create -o recordsize=8k -o compression=lz4 pgpool/base   (skipped when it exists)"
+        echo "+ sudo chown $(id -un):$(id -gn) /pgpool/base; chmod 700 /pgpool/base"
+        return 0
+    fi
+    run sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y zfsutils-linux
+    if ! sudo zpool list pgpool > /dev/null 2>&1; then
+        local device code=0
+        device=$(lsblk -bnP -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,PKNAME | pick_disk "$ZFS_GB") || code=$?
+        if [ "$code" -ne 0 ]; then
+            lsblk
+            [ "$code" -eq 1 ] && die "no unformatted disk of $ZFS_GB GiB (within 2%) for the ZFS pool; nothing was changed"
+            die "more than one unformatted disk of $ZFS_GB GiB; nothing was changed"
+        fi
+        log "creating pool pgpool on $device"
+        sudo zpool create -o ashift=12 -O mountpoint=/pgpool pgpool "$device"
+        did "zfs pool pgpool created on $device"
+    else
+        skipped "zfs pool pgpool already exists"
+    fi
+    if sudo zfs list pgpool/base > /dev/null 2>&1; then
+        skipped "dataset pgpool/base already exists"
+    else
+        sudo zfs create -o recordsize=8k -o compression=lz4 pgpool/base
+        did "dataset pgpool/base (recordsize 8k, lz4)"
+    fi
+    sudo chown "$(id -un):$(id -gn)" /pgpool/base
+    chmod 700 /pgpool/base
 }
 
 step_code() {
@@ -353,6 +410,7 @@ main() {
     trap 'on_error $LINENO "$BASH_COMMAND"' ERR
     step_system
     step_volume
+    step_zfs
     step_code
     step_settings
     step_secrets
