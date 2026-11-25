@@ -104,16 +104,17 @@ def diskann_stages(cfg: dict, dataset: str) -> list[Stage]:
 
 
 def pgvector_stage(cfg: dict, dataset: str) -> Stage | None:
-    """The database update jobs clone. The server is started first (it does not survive a reboot). Datasets the
-    harness pipeline knows (SPACEV) go through its stages; TripClick and MedRAG are loaded from their base file."""
+    """The database update jobs clone: loaded and indexed in pgpool/base, then snapshotted (scripts/pg_update_base.sh).
+    Datasets the harness pipeline knows (SPACEV) go through its stages; TripClick and MedRAG are loaded from their
+    base file. Without the ZFS pool the script records a skip."""
     if not any(n in cfg["q4"]["update_workloads"] for n in artifacts.workloads_of(cfg, dataset)):
         return None
-    cmds = ["make q1-pg-start"]
     if dataset in HARNESS_DATASETS:
-        cmds += [f"make q1-stage DATASET={dataset} STAGE={stage} Q1_PG_WORKERS={NPROC}" for stage in ("pg_load", "pg_index")]
+        loader = " && ".join(f"make q1-stage DATASET={dataset} STAGE={stage} Q1_PG_WORKERS={NPROC}"
+                             for stage in ("pg_load", "pg_index"))
     else:
-        cmds.append(f"PYTHONPATH=. {PY} -m scripts.pg_load_base --dataset {dataset} --base {settings(cfg, dataset)['base']}")
-    return Stage("pgvector_db", "pgvector_db", cmds)
+        loader = f"PYTHONPATH=. {PY} -m scripts.pg_load_base --dataset {dataset} --base {settings(cfg, dataset)['base']}"
+    return Stage("pgvector_db", "pgvector_db", [f"bash scripts/pg_update_base.sh build {dataset} -- '{loader}'"])
 
 
 def shift_stage(cfg: dict, dataset: str) -> Stage | None:

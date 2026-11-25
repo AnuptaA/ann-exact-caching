@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from recal import matrix, modes, sim
+from recal import matrix, matrix_hash, modes, sim
 from recal.backend import ExactBackend
 from tests.recal.test_system import make_stream, make_world
 
@@ -18,7 +18,8 @@ def cfg():
 
 def recal_cells(lines):
     for line in lines:
-        tokens = shlex.split(line.split("# ")[0].replace("{", " ").replace("}", " "))
+        unwrapped = matrix_hash.CLONE_WRAPPER.sub(r"\1", line)
+        tokens = shlex.split(unwrapped.split("# ")[0].replace("{", " ").replace("}", " "))
         if "recal.cells" in tokens and tokens[tokens.index("--method") + 1] == "recal":
             yield line, tokens
 

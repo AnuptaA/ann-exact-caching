@@ -77,11 +77,16 @@ def needs_of(w: dict, backend: str = "diskann", extra=()) -> tuple:
 
 
 def cell(d: str, stem: str, method: str, w: dict, budget, flags: str, prep: str | None = None,
-         stream: str | None = None) -> str:
+         stream: str | None = None, clone: str | None = None) -> str:
+    """One job line. With clone=<job id> the command runs between the creation and the destruction of that job's
+    pgvector clone (scripts/pg_clones.sh run; the command sees $PG_CLONES)."""
     b = budget if isinstance(budget, str) else f"{budget:g}"
-    return (f"[ -f {d}/{stem}.json ] || {{ mkdir -p {d} && {PYPATH} {PY} -u -m recal.cells --method {method} "
-            f"--prep {prep or w['prep']} --stream {stream or w['stream']} --budget {b} "
-            f"--coord-bytes {w['coord_bytes']:g} {flags} --out {d} > {d}/log.txt 2>&1; }}  # recal.cells")
+    command = (f"{PYPATH} {PY} -u -m recal.cells --method {method} "
+               f"--prep {prep or w['prep']} --stream {stream or w['stream']} --budget {b} "
+               f"--coord-bytes {w['coord_bytes']:g} {flags} --out {d}")
+    if clone is not None:
+        command = f"bash scripts/pg_clones.sh run {clone} -- '{command}'"
+    return f"[ -f {d}/{stem}.json ] || {{ mkdir -p {d} && {command} > {d}/log.txt 2>&1; }}  # recal.cells"
 
 
 def hit_job(exp: str, name: str, w: dict, label: str, stem: str, method: str, budget, backend: str, flags: str,
@@ -286,8 +291,9 @@ def update_cells(cfg: dict) -> list[tuple]:
 
 def q4_update_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
     """Update runs: one independent job each, with its own prep folder and its own live pgvector clone
-    ($PG_CLONES/<job id>.dsn). Every system answers misses with live searches on that clone and applies the
-    schedule's inserts and deletes in order; ground truth is the exact top-200 filtered by liveness."""
+    (created before the job and destroyed after it by scripts/pg_clones.sh; DSN in $PG_CLONES/<job id>.dsn).
+    Every system answers misses with live searches on that clone and applies the schedule's inserts and deletes
+    in order; ground truth is the exact top-200 filtered by liveness."""
     q4, out = cfg["q4"], []
     for name in q4["update_workloads"]:
         if name not in wl:
@@ -303,7 +309,7 @@ def q4_update_jobs(cfg: dict, wl: OrderedDict) -> list[Job]:
             strict = " --strict-modes" if method == "recal" else ""
             line = cell(d, stem, method, w, budget,
                         f"--backend pgvector --pg-dsn @$PG_CLONES/{job}.dsn --updates {prep}/updates.npz "
-                        f"{flags}{strict} --seed 0", prep=prep)
+                        f"{flags}{strict} --seed 0", prep=prep, clone=job)
             out.append(Job(line, "q4", name, f"update_{system}", "update", d,
                            needs_of(w, "exact", ("update_preps", "pgvector_db"))))
     return out

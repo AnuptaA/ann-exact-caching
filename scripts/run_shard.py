@@ -82,7 +82,7 @@ def run_exclusive(job: dict) -> bool:
 
 
 def run_shard(shard: dict, s=None, workers: int = 8, cores_per_job: int = 4, first_core: int = 8,
-              root: Path = Path(".")) -> dict:
+              root: Path = Path("."), max_update_jobs: int | None = None) -> dict:
     summary = {"ran": 0, "skipped": 0, "failed": 0, "pushed": 0}
     if s is not None:
         artifacts.pull_artifacts(s, shard["artifacts"], root)
@@ -102,7 +102,8 @@ def run_shard(shard: dict, s=None, workers: int = 8, cores_per_job: int = 4, fir
                 pending.append(job)
         concurrent = [j for j in pending if not j["exclusive"]]
         if concurrent:
-            failed = run_jobs.run_lines([j["line"] for j in concurrent], workers, cores_per_job, first_core)
+            failed = run_jobs.run_lines([j["line"] for j in concurrent], workers, cores_per_job, first_core,
+                                       max_update_jobs=max_update_jobs)
             summary["failed"] += len(failed)
             summary["ran"] += len(concurrent) - len(failed)
         for job in (j for j in pending if j["exclusive"]):
@@ -122,12 +123,14 @@ def main(argv=None) -> int:
     ap.add_argument("--store", default=None, help="s3://bucket/prefix or a directory (default: RECAL_STORE)")
     ap.add_argument("--no-store", action="store_true", help="run local files only")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--max-update-jobs", type=int, default=None, help="update jobs at once (default: from the machine)")
     ap.add_argument("--cores-per-job", type=int, default=4)
     ap.add_argument("--first-core", type=int, default=8)
     a = ap.parse_args(argv)
     shard = json.loads(a.shard.read_text())
     s = None if a.no_store else store_mod.open_store(a.store)
-    summary = run_shard(shard, s, a.workers, a.cores_per_job, a.first_core)
+    summary = run_shard(shard, s, a.workers, a.cores_per_job, a.first_core,
+                        max_update_jobs=a.max_update_jobs)
     print(json.dumps({"shard": shard["name"], **summary}))
     return 1 if summary["failed"] else 0
 

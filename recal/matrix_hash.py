@@ -20,12 +20,14 @@ CODE_MARKER = "matrix"
 EXTRA_EXCLUDED = ("records",)
 SUBSTITUTION = re.compile(r"\$\(([^)]*)\)")
 SHELL_STOPS = {"|", "||", "&&", ";", "&"}
+CLONE_WRAPPER = jobs_util.CLONE_WRAPPER
 REPO = str(Path(__file__).resolve().parents[1])
 
 
 def command_tokens(line: str) -> tuple[list[str], list[str]]:
     """The python command of a job line (after the interpreter) and the shell substitutions it contains."""
     substitutions: list[str] = []
+    line = CLONE_WRAPPER.sub(r"\1", line)
 
     def keep(match):
         substitutions.append(match.group(1))
@@ -71,7 +73,7 @@ def cell_hash(line: str) -> str:
 
 
 def out_dir(line: str) -> str:
-    found = re.search(r"--out (\S+)", line)
+    found = re.search(r"--out ([^\s']+)", line)
     if found:
         return found.group(1)
     found = re.search(r"mkdir -p (\S+)", line)

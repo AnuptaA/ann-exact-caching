@@ -123,19 +123,19 @@ Launch the instance by hand in the console (Ubuntu 24.04 x86_64, an IAM role tha
 curl -fsSL https://raw.githubusercontent.com/AnuptaA/ann-exact-caching/main/scripts/instance_setup.sh | bash -s -- <dataset>
 ```
 
-Console settings per prepare instance (estimates from the sizes table; the volume must cover the bootstrap's requirement plus its 20% margin). Pass the data volume's size with `--data-size-gb` (GiB, within 2%) so the script finds it even when the instance has other unformatted volumes:
+Console settings per prepare instance (estimates from the sizes table; the volume must cover the bootstrap's requirement plus its 20% margin). Pass the data volume's size with `--data-size-gb` (GiB, within 2%) so the script finds it even when the instance has other unformatted volumes. Datasets with update runs (SPACEV, MedRAG, LAION) get a second EBS volume for the ZFS pool of pgvector clones; pass its size with `--zfs-size-gb`. The two sizes must differ by more than 2%, and the ZFS volume sizes are estimates to adjust to the database size (the base database plus the changes of the concurrent clones):
 
-| Dataset | Type | Data volume | Command arguments |
-|---|---|---|---|
-| tripclick | m7i.4xlarge (64 GB RAM) | 100 GB | `--data-size-gb 100 tripclick` |
-| laion | m7i.4xlarge (64 GB RAM) | 300 GB | `--data-size-gb 300 laion` |
-| spacev | m7i.4xlarge (64 GB RAM) | 200 GB | `--data-size-gb 200 spacev` |
-| triviaqa | 128 GB RAM class | 300 GB | `--data-size-gb 300 triviaqa` |
-| medrag | 256 GB RAM class | 600 GB | `--data-size-gb 600 medrag` |
+| Dataset | Type | Data volume | ZFS volume | Command arguments |
+|---|---|---|---|---|
+| tripclick | m7i.4xlarge (64 GB RAM) | 100 GB | none | `--data-size-gb 100 tripclick` |
+| laion | m7i.4xlarge (64 GB RAM) | 300 GB | 200 GB | `--data-size-gb 300 --zfs-size-gb 200 laion` |
+| spacev | m7i.4xlarge (64 GB RAM) | 200 GB | 300 GB | `--data-size-gb 200 --zfs-size-gb 300 spacev` |
+| triviaqa | 128 GB RAM class | 300 GB | none | `--data-size-gb 300 triviaqa` |
+| medrag | 256 GB RAM class | 600 GB | 400 GB | `--data-size-gb 600 --zfs-size-gb 400 medrag` |
 
-For example `curl -fsSL https://raw.githubusercontent.com/AnuptaA/ann-exact-caching/main/scripts/instance_setup.sh | bash -s -- --data-size-gb 300 laion`. Instances for update runs also have a second unformatted volume (the ZFS volume for pgvector clones, set up separately); the script never formats any disk but the one matching the size, and without the flag it refuses when several unformatted disks are attached. On any doubt (none or several matching) it prints `lsblk` and stops without formatting.
+For example `curl -fsSL https://raw.githubusercontent.com/AnuptaA/ann-exact-caching/main/scripts/instance_setup.sh | bash -s -- --data-size-gb 300 --zfs-size-gb 200 laion`. The script never formats a disk other than the one matching `--data-size-gb`, and never touches one other than the one matching `--zfs-size-gb`; without the flags it refuses when several unformatted disks are attached (`--zfs-size-gb` needs `--data-size-gb`). On any doubt (none or several matching) it prints `lsblk` and stops without changing a disk. With `--zfs-size-gb` it installs `zfsutils-linux`, creates the pool `pgpool` (`ashift=12`) on that disk and the dataset `pgpool/base` (`recordsize=8k`, `compression=lz4`), owned by the setup user; without the flag nothing about ZFS happens. Rerunning skips what exists.
 
-The script installs the system packages and the AWS CLI, formats and mounts the one unformatted data volume at `/data` (it refuses when none or more than one is attached and prints `lsblk`), clones the code to `/data/thesis`, writes the `RECAL_*` settings to `~/.bashrc`, pulls the secrets and agent context from the private bucket, installs Claude Code, and starts a tmux session `main` (window `bootstrap` runs `sudo -E bash scripts/ec2_bootstrap.sh --role prepare --datasets <dataset>`, window `agent` is empty). It is safe to rerun and stops at the first failure. `--dry-run` prints every action; `--bucket`, `--prefix` and `--repo-url` change the defaults.
+The script installs the system packages and the AWS CLI, formats and mounts the one unformatted data volume at `/data` (it refuses when none or more than one is attached and prints `lsblk`), clones the code to `/data/thesis`, writes the `RECAL_*` settings to `~/.bashrc`, pulls the secrets and agent context from the private bucket, installs Claude Code, and starts a tmux session `main` (window `bootstrap` runs `sudo -E bash scripts/ec2_bootstrap.sh --role prepare --datasets <dataset>`, window `agent` is empty). It is safe to rerun and stops at the first failure. `--dry-run` prints every action; `--bucket`, `--prefix` and `--repo-url` change the defaults. The pgvector clones of update runs are described under "pgvector clones for update jobs".
 
 Secrets live under `s3://recal-eval-aa/ops/` (Block Public Access must be on): `secrets/env.local` (the `RECAL_DRIVE_*` links, installed as `.env.local`), `secrets/github_token`, `secrets/git_identity` (name on line 1, email on line 2), `context/common.md` and `context/<dataset>.md`. Upload them from the laptop with `scripts/upload_secrets.sh --env-file local/private/drive_links.env --token-file <file> --name <name> --email <email> --context-dir <dir>`; it checks Block Public Access first and never prints values. A missing secret is reported with its upload target and the setup continues.
 
@@ -192,7 +192,7 @@ make prepare MATRIX=experiments/matrix.tripclick-legacy.json DATASET=tripclick  
 - Equal bytes: `--coord-bytes` is the stored precision (1 for SPACEV); real Aker and Proximity are sized from the library's own counts (`--equal-bytes` on `eval_aker_real.py`) and every result carries `bytes`, `M` and `within_M`.
 - Backend answers and ground truth: `python -m scripts.precompute_answers --backend pgvector|diskann|exact ...` (answers to depth 7 x K_max, exact ground truth to depth 200 with `--gt-out`).
 - Q3: `recal/system_benefit/` has the split budgets, node cache sizing and the best split per result cache (`best_split.py`); `scripts/node_cache_curve.py` and `scripts/depth_latency_pgvector.py` measure the backend and are not part of the matrix. A split point is a hit-rate run at the result cache's share of the budget plus a throughput arm at 64 clients with the node cache at the other share (`throughput_replay.py --arm name=<run>,nodes=N`); the thread lines replay each result cache at its best split for 1 to 64 clients after the sweep.
-- Update runs are independent jobs, one per (workload, mode, rate, system, seed): each reads its own prep folder (`scripts/convert_streams.py updates --out`) and the DSN of its own PostgreSQL clone in `$PG_CLONES/<job id>.dsn` (`--pg-dsn @file`); no state is shared between jobs. Every system (ReCal, Aker, Proximity) answers its misses with live searches on that clone and applies the schedule's inserts and deletes to it in order; Aker and Proximity do so through a backend adapter in `eval_aker_real.py` (the library only sees miss answers and data-change events). `--precomputed-answers` keeps the old precomputed-and-filtered path for tests. QVCache is not in the update runs: the artifact has no update path and the paper leaves updates to the backend.
+- Update runs are independent jobs, one per (workload, mode, rate, system, seed): each reads its own prep folder (`scripts/convert_streams.py updates --out`) and the DSN of its own PostgreSQL clone in `$PG_CLONES/<job id>.dsn` (`--pg-dsn @file`), created before the job and destroyed after it by `scripts/pg_clones.sh run` (see "pgvector clones for update jobs"); no state is shared between jobs. Every system (ReCal, Aker, Proximity) answers its misses with live searches on that clone and applies the schedule's inserts and deletes to it in order; Aker and Proximity do so through a backend adapter in `eval_aker_real.py` (the library only sees miss answers and data-change events). `--precomputed-answers` keeps the old precomputed-and-filtered path for tests. QVCache is not in the update runs: the artifact has no update path and the paper leaves updates to the backend.
 - Q4: `recal/robustness.py` (burst mask; bursts are derived from existing records by `recal/analysis/bursts.py`), `scripts/make_shift_streams.py` (abrupt, gradual and correlated shifts over 64 k-means clusters), `scripts/convert_streams.py` (turns a shift stream or an update schedule into the prep folder every driver reads, with the update files in the formats of ReCal and the real Aker driver; request vectors come from the existing official vectors, no encoder runs; cluster runs need FAISS and refuse without it), `scripts/make_update_schedule.py` and `--updates` (inserts and deletes with live ground truth).
 
 
@@ -220,7 +220,7 @@ logic is in `recal/matrix.py` only. `MATRIX` selects the configuration (default 
   the code commit (`environment`).
 - Prepare stages per dataset (`recal/prepare.py`, `--dry-run` lists the commands): fetch and verify the data; request
   streams and exact top-500 answers (`top500.npy`) with exact ground truth to depth 100; the DiskANN index at recall@10 0.95 with a
-  search list of 700 (7 x K_max) and its answer tables; the pgvector database for the update workloads (SPACEV through the harness stages, TripClick and MedRAG loaded from their base file by `scripts/pg_load_base.py`; parallel HNSW build,
+  search list of 700 (7 x K_max) and its answer tables; the pgvector database for the update workloads, built in `pgpool/base` and snapshotted as `pgpool/base@built` by `scripts/pg_update_base.sh` (SPACEV through the harness stages, TripClick, MedRAG and LAION loaded from their base file by `scripts/pg_load_base.py`; skipped with a message and a record in `results/pgvector/<dataset>_base.json` when the instance has no `pgpool`; parallel HNSW build,
   `maintenance_work_mem` sized by the harness, workers from the core count); shift streams (k-means seed 0 once) and update
   schedules converted once; the MedRAG working set (`medrag_budgets.json`); the QVCache memory measurement. TripClick-derived
   artifacts are not uploaded unless `--upload-restricted` is given. The stage commands for the real datasets need the cluster
@@ -247,8 +247,23 @@ the largest instance.
 
 ### pgvector clones for update jobs
 
-Each update job gets its own clone of the prepared database, so jobs share no state. Create the clones once per run
-instance, outside the matrix: stop the prepared cluster, copy its data directory per job (`cp -a --reflink=auto` on a
-filesystem with reflinks, otherwise a plain copy), start each clone on a free port with its own data directory, and write
-the connection string of the clone to `$PG_CLONES/<job id>.dsn`. The job id is the update cell's name (for example
-`spacev-0.99_targeted10_recal_s0`, listed in `matrix_runs.json`); the job line passes it as `--pg-dsn @$PG_CLONES/<job id>.dsn`.
+Every update job inserts and deletes rows in its database, so each job needs its own copy of the prepared database, and
+copying tens to hundreds of GB per job is too slow. The database therefore lives on a ZFS pool: it is built once in
+`pgpool/base`, snapshotted as `pgpool/base@built`, and each job gets an instant copy-on-write clone `pgpool/<job id>`
+(it shares all unchanged blocks with the snapshot and stores only what the job changes), served by its own PostgreSQL
+instance on its own port. All of it is automatic:
+
+- `scripts/instance_setup.sh --zfs-size-gb N` creates the pool (see New instance).
+- The prepare's `pgvector_db` stage (`make prepare DATASET=<name>`) loads and indexes the database in `pgpool/base`
+  (`maintenance_work_mem` is half of the RAM and `max_parallel_maintenance_workers` follows the core count), stops the server
+  cleanly and takes the snapshot. Without `pgpool` it reports that update runs need `--zfs-size-gb` and skips the database.
+- Each update job line runs through `scripts/pg_clones.sh run <job id> -- <command>`: it creates the clone, starts a server on
+  a free port of `PG_CLONE_PORT_RANGE` (default 55000-55999, taken under a lock so concurrent jobs never collide), writes
+  `$PG_CLONES/<job id>.dsn` (default `/data/pg_clones`), runs the job and destroys the clone afterwards, also when the job fails.
+  `shared_buffers` of a clone is small and fixed (`PG_CLONE_SHARED_BUFFERS`, default 256MB; these jobs measure hit rate and
+  recall, not timing) and is recorded in `$PG_CLONES/<job id>.json`.
+- The runner limits concurrent update jobs by free memory and free pool space (`--max-update-jobs` of `run_jobs.py` and
+  `run_shard.py`, or `PG_CLONE_MAX_JOBS`; `PG_CLONE_JOB_GB` and `PG_CLONE_JOB_DISK_GB` tune the estimates).
+- `bash scripts/pg_clones.sh list` shows the clones, `gc` destroys those whose job is no longer running (after a crash), `create <job>` and
+  `destroy <job>` do the two halves by hand. The job id is the update cell's name (for example
+  `spacev-0.99_targeted10_recal_s0`, listed in `matrix_runs.json`).

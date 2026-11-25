@@ -246,12 +246,13 @@ def test_diskann_outputs_go_where_the_matrix_and_the_manifest_expect_them():
     assert "args.out_dir" in eval_source
 
 
-def test_tripclick_loads_postgresql_from_its_base_file_and_starts_the_server_first():
+def test_tripclick_loads_postgresql_from_its_base_file_into_the_zfs_base():
     stage = next(s for s in prepare.stages(CONFIG, "tripclick") if s.name == "pgvector_db")
-    assert stage.commands[0] == "make q1-pg-start"
-    assert "scripts.pg_load_base --dataset tripclick --base datasets/aker/tripclick-ip-docs.npy" in stage.commands[1]
+    assert stage.commands[0].startswith("bash scripts/pg_update_base.sh build tripclick -- ")
+    assert "scripts.pg_load_base --dataset tripclick --base datasets/aker/tripclick-ip-docs.npy" in stage.commands[0]
     spacev = next(s for s in prepare.stages(CONFIG, "spacev") if s.name == "pgvector_db")
-    assert spacev.commands[0] == "make q1-pg-start" and "q1-stage DATASET=spacev STAGE=pg_load" in spacev.commands[1]
+    assert spacev.commands[0].startswith("bash scripts/pg_update_base.sh build spacev -- ")
+    assert "q1-stage DATASET=spacev STAGE=pg_load" in spacev.commands[0] and "STAGE=pg_index" in spacev.commands[0]
     from harness import datasets as harness_datasets
     assert set(prepare.HARNESS_DATASETS) <= set(harness_datasets.SPECS) and "tripclick" not in harness_datasets.SPECS
 

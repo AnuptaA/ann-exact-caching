@@ -36,7 +36,7 @@ def local_paths(cfg: dict, dataset: str) -> dict[str, list[str]]:
                         for kind in ("abrupt", "gradual", "correlated") for s in cfg["shift_seeds"]],
         "update_preps": [f"{q4['update_prep_dir']}/{n}_{mode}{round(100 * rate):d}" for n in q4["update_workloads"]
                          if n in ws for mode in q4["update_modes"] for rate in q4["update_rates"]],
-        "pgvector_db": [],
+        "pgvector_db": [f"results/pgvector/{dataset}_base.json"],
         "medrag_budgets": [cfg["medrag_budgets_file"]] if dataset == "medrag" and cfg.get("medrag_budgets_file") else [],
     }
     return out

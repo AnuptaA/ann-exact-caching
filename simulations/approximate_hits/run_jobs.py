@@ -46,6 +46,46 @@ def assign_cores(n_cpu, workers, cores_per_job, first_core):
     return Assignment(workers, first_core, True, "")
 
 
+def is_update_job(line):
+    return "pg_clones.sh run" in line
+
+
+def meminfo_gb(key):
+    try:
+        for row in Path("/proc/meminfo").read_text().splitlines():
+            if row.startswith(key + ":"):
+                return int(row.split()[1]) / 2 ** 20
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def pool_free_gb():
+    pool = os.environ.get("PG_POOL", "pgpool")
+    try:
+        out = subprocess.run(["zfs", "list", "-Hp", "-o", "avail", pool], capture_output=True, text=True, check=True)
+        return int(out.stdout.split()[0]) / 2 ** 30
+    except (OSError, subprocess.CalledProcessError, ValueError, IndexError):
+        return None
+
+
+def update_job_cap(workers, max_update_jobs=None):
+    """Update jobs allowed at once: PG_CLONE_MAX_JOBS or --max-update-jobs when given, else from free memory (each
+    clone's shared_buffers plus PG_CLONE_JOB_GB, default 2 GB, for the server and the job) and free pool space
+    (PG_CLONE_JOB_DISK_GB, default 10 GB of changed blocks per clone)."""
+    given = max_update_jobs if max_update_jobs is not None else os.environ.get("PG_CLONE_MAX_JOBS")
+    if given:
+        return max(1, int(given))
+    cap = workers
+    mem = meminfo_gb("MemAvailable")
+    if mem is not None:
+        cap = min(cap, int(mem // (0.25 + float(os.environ.get("PG_CLONE_JOB_GB", "2")))))
+    disk = pool_free_gb()
+    if disk is not None:
+        cap = min(cap, int(disk // float(os.environ.get("PG_CLONE_JOB_DISK_GB", "10"))))
+    return max(1, cap)
+
+
 def pin_line(line, c0, c1):
     if "taskset" in line:
         return line
@@ -66,12 +106,12 @@ def result_status(line, strict_hash, trust_existing):
 def job_name(line, path):
     if path:
         return path
-    m = re.search(r"(hit_tables/\S+\.npz)", line) or re.search(r"--out (\S+)", line)
+    m = re.search(r"(hit_tables/\S+\.npz)", line) or re.search(r"--out ([^\s']+)", line)
     return m.group(1) if m else line[:80]
 
 
 def run_lines(lines, workers=8, cores_per_job=4, first_core=8, first="0.01,0.1,0.001,0.0001",
-              trust_existing=False, strict_hash=False):
+              trust_existing=False, strict_hash=False, max_update_jobs=None):
     """Run job lines: lines that are not jobs one after the other, jobs concurrently; returns the failed lines."""
     prep = [l for l in lines if not is_job(l)]
     jobs = [l for l in lines if is_job(l)]
@@ -95,6 +135,7 @@ def run_lines(lines, workers=8, cores_per_job=4, first_core=8, first="0.01,0.1,0
     print(f"{len(jobs)} jobs, {asg.workers} at a time", flush=True)
     free = list(range(asg.workers))
     lock = threading.Lock()
+    updates = threading.Semaphore(update_job_cap(asg.workers, max_update_jobs))
 
     def run(l):
         path, status = result_status(l, strict_hash, trust_existing)
@@ -104,6 +145,9 @@ def run_lines(lines, workers=8, cores_per_job=4, first_core=8, first="0.01,0.1,0
         if status == 2:
             print(f"stale result, rerun: {path}", flush=True)
             os.replace(path, path + ".stale")
+        limited = is_update_job(l)
+        if limited:
+            updates.acquire()
         with lock:
             w = free.pop(0)
         c0 = first_core + w * cores_per_job
@@ -114,6 +158,8 @@ def run_lines(lines, workers=8, cores_per_job=4, first_core=8, first="0.01,0.1,0
             with lock:
                 free.append(w)
                 free.sort()
+            if limited:
+                updates.release()
         if rc == 0 and path is not None and result_status(l, strict_hash, trust_existing)[1] != 0:
             rc = -1
         name = job_name(l, path)
@@ -138,9 +184,12 @@ def main():
     ap.add_argument("--first", default="0.01,0.1,0.001,0.0001", help="budgets run first")
     ap.add_argument("--trust-existing", action="store_true", help="a result that exists counts as done")
     ap.add_argument("--strict-hash", action="store_true", help="no effect: a result without a scheme 2 config hash is always stale")
+    ap.add_argument("--max-update-jobs", type=int, default=None,
+                    help="update jobs at once (default PG_CLONE_MAX_JOBS, else from free memory and pool space)")
     a = ap.parse_args()
     lines = [l for l in open(a.lines).read().splitlines() if l.strip()]
-    failures = run_lines(lines, a.workers, a.cores_per_job, a.first_core, a.first, a.trust_existing, a.strict_hash)
+    failures = run_lines(lines, a.workers, a.cores_per_job, a.first_core, a.first, a.trust_existing, a.strict_hash,
+                         a.max_update_jobs)
     if failures:
         print(f"{len(failures)} lines failed", flush=True)
         return 1

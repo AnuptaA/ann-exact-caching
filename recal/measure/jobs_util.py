@@ -209,8 +209,17 @@ def stamp_result(result: dict, argv: Optional[list] = None) -> dict:
     return result
 
 
+CLONE_WRAPPER = re.compile(r"bash scripts/pg_clones\.sh run \S+ -- '([^']*)'")
+
+
+def unwrap_clone(line: str) -> str:
+    """The job line without the pgvector clone wrapper of update jobs (scripts/pg_clones.sh run <job> -- '<command>')."""
+    return CLONE_WRAPPER.sub(r"\1", line)
+
+
 def jobline_args(line: str) -> dict:
     """Argument dict of the first known script invocation in a job line."""
+    line = unwrap_clone(line)
     try:
         tokens = shlex.split(line)
     except ValueError:
@@ -241,6 +250,7 @@ def is_job_line(line: str) -> bool:
 
 def jobline_hash(line: str, repo: Optional[Path] = None) -> Optional[str]:
     """Hash the script of a job line would store, from `<interpreter> ... --print-config-hash`."""
+    line = unwrap_clone(line)
     try:
         tokens = shlex.split(line)
     except ValueError:
