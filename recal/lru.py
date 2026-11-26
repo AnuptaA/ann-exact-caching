@@ -16,9 +16,9 @@ from types import SimpleNamespace
 import numpy as np
 
 from recal.core import MAIN_HIT, MISS_ABSTAIN, MISS_NO_CANDIDATE, MISS_SCORE
+from recal.shell_quant import default_step, shell_codes, shell_step
 
 EPS = 1e-12
-LEVELS = 15
 INDEX_BYTES_PER_ENTRY = 164.0
 SHORTLIST = 3
 SHELL_CHUNK = 20_000
@@ -29,8 +29,8 @@ class LruCache:
     def __init__(self, dim: int, budget: float, coord_bytes: float = 4.0, lo=None, hi=None):
         self.d, self.budget, self.cb = dim, float(budget), float(coord_bytes)
         self.lo = np.zeros(dim, np.float32) if lo is None else np.asarray(lo, np.float32)
-        span = np.ones(dim, np.float32) if hi is None else np.maximum(np.asarray(hi, np.float32) - self.lo, EPS)
-        self.step = (span / LEVELS).astype(np.float32)
+        # the core's quantizer: float64 span, step rounded to float32, codes rounded half away from zero
+        self.step = default_step(dim) if hi is None else shell_step(self.lo, hi)
         self.pool: dict = {}       # id -> pool slot
         self.shell: dict = {}      # id -> shell slot
         self.entries: dict = {}    # entry id -> dict(resp (pool slots), shell (shell slots), radius, row, K)
@@ -201,7 +201,7 @@ class LruCache:
     # ---- admission and eviction ------------------------------------------------------------------
 
     def _quantize(self, v: np.ndarray) -> np.ndarray:
-        return np.clip(np.rint((v - self.lo) / self.step), 0, LEVELS).astype(np.uint8)
+        return shell_codes(v, self.lo, self.step)
 
     def _grow(self, name: str, n: int) -> None:
         for attr in {"p": ("pvec", "pid", "pref", "psq"), "s": ("scode", "sid", "sref", "s_pooled")}[name]:
@@ -245,14 +245,19 @@ class LruCache:
             else:
                 self.pref[slot] += 1
             resp.append(slot)
-        shell = []
-        for i, v in zip(ids[n:2 * n].tolist(), vectors[n:2 * n]):
+        shell, fresh = [], []
+        for i in ids[n:2 * n].tolist():
             if i in self.pool:
                 continue
+            fresh.append(i)
+        rows = {i: v for i, v in zip(ids[n:2 * n].tolist(), vectors[n:2 * n])}
+        new_ids = [i for i in dict.fromkeys(fresh) if i not in self.shell]
+        codes = dict(zip(new_ids, self._quantize(np.asarray([rows[i] for i in new_ids], np.float32)))) if new_ids else {}
+        for i in fresh:
             slot = self.shell.get(i)
             if slot is None:
                 slot = self._shell_slot()
-                self.scode[slot] = self._quantize(np.asarray(v, np.float32))
+                self.scode[slot] = codes[i]
                 self.sid[slot] = i
                 self.sref[slot] = 1
                 self.s_pooled[slot] = False

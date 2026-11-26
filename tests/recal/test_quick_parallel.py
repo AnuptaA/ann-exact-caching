@@ -173,6 +173,54 @@ def test_lru_lookup_equals_the_core_and_the_old_lookup_except_pooled_shell_vecto
     assert differs > 0
 
 
+def shell_code_pairs(data: np.ndarray, K: int = 5, n_entries: int = 12):
+    """(LRU code, core code) of every shell vector both hold, from the same entries over the same quantizer range."""
+    from recal.lru import LruCache
+    centers = data[np.random.default_rng(1).choice(len(data), n_entries, replace=False)] + 0.01
+    core, ids, lists = build_core(data, centers, K, np.full(n_entries, 2))
+    cache = LruCache(data.shape[1], 1e12, 4.0, data.min(axis=0), data.max(axis=0))
+    orders = [exact_order(data, c)[:4 * K] for c in centers]
+    for c, order in zip(centers, orders):
+        dists = np.linalg.norm(data[order].astype(np.float64) - c.astype(np.float64), axis=1).astype(np.float32)
+        cache.admit(c, K, order + ID_BASE, dists, data[order])
+    packed, d = core.shell_codes(), data.shape[1]
+    core_codes = np.zeros((len(packed), d), np.uint8)
+    core_codes[:, 0::2] = packed & 15
+    core_codes[:, 1::2] = (packed >> 4)[:, :d // 2]
+    final_pool = {int(i) + ID_BASE for o in orders for i in o[:2 * K]}
+    pairs = []
+    for e, order in enumerate(orders):
+        shell_ids = [int(i) + ID_BASE for i in order[2 * K:] if int(i) + ID_BASE not in final_pool]
+        slots = core.entry(e)["shell_slots"]
+        assert len(slots) == len(shell_ids)
+        pairs += [(cache.scode[cache.shell[i]], core_codes[slot]) for i, slot in zip(shell_ids, slots)
+                  if i in cache.shell]
+    return core, cache, pairs
+
+
+def tie_heavy_int_data(rng, n=300, d=8):
+    """Integers 0..30 with both ends in every coordinate: the step is exactly 2, so every odd value is a midpoint."""
+    x = rng.integers(0, 31, size=(n, d)).astype(np.float32)
+    x[0], x[1] = 0.0, 30.0
+    return x
+
+
+@pytest.mark.parametrize("kind", ["int8_ties", "float"])
+def test_lru_shell_codes_equal_the_cores(kind):
+    from recal.lru import LruCache
+    rng = np.random.default_rng(4)
+    data = tie_heavy_int_data(rng) if kind == "int8_ties" else rng.normal(size=(300, 8)).astype(np.float32)
+    core, cache, pairs = shell_code_pairs(data)
+    lo, step = core.quantizer()
+    np.testing.assert_array_equal(cache.lo, lo)
+    np.testing.assert_array_equal(cache.step, step)                  # the same float32 step as Core.set_quantizer
+    assert len(pairs) > 50 and all(np.array_equal(a, b) for a, b in pairs)
+    old = lru_old.LruCache(data.shape[1], 1e12, 4.0, data.min(axis=0), data.max(axis=0))
+    differs = (old._quantize(data) != cache._quantize(data)).any()
+    assert differs == (kind == "int8_ties")                          # the old rule only disagreed on ties
+    assert (LruCache(8, 1e9).step == np.float32(1.0 / 15)).all()     # the core's default range [0, 1]
+
+
 def test_lru_m_nearest_and_eviction_keep_the_arrays_consistent():
     rng, core, new, old, K = lru_case(seed=3)
     q = rng.normal(size=8).astype(np.float32)

@@ -18,7 +18,7 @@ CORE_DIR = "recal/core"
 COMMON = (
     "recal/accounting.py", "recal/backend.py", "recal/build.py", "recal/history.py", "recal/history_mode.py",
     "recal/ksets.py", "recal/params.py", "recal/policy.py", "recal/records.py", "recal/sim.py", "recal/stored.py",
-    "recal/system.py", "recal/core/__init__.py", "recal/core/recal_core.cpp",
+    "recal/shell_quant.py", "recal/system.py", "recal/core/__init__.py", "recal/core/recal_core.cpp",
     "recal/micro/common.py", "recal/micro/fit.py", "recal/micro/world.py", "recal/micro/topk.py",
     "recal/micro/golden.py", "recal/micro/preflight.py", "recal/micro/units.py", "recal/micro/provenance.py",
     "scripts/micro/run.py",
