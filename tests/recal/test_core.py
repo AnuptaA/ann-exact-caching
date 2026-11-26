@@ -326,3 +326,31 @@ def test_center_index_keeps_no_copy_of_the_centers():
     assert index_bytes < 30 * 4 * d    # a copy of the centers alone would exceed this per element sum
     # allocated size: level-0 blocks and pointers charged for every slot, links above level 0 on top
     assert index_bytes >= 30 * (12 + 8 + 4)
+
+
+def test_entries_read_and_shell_codes_are_exposed():
+    rng, data, centers, js, K = random_case(seed=3)
+    core, ids, lists = build_core(data, centers, K, js)
+    queries = rng.normal(size=(15, data.shape[1])).astype(np.float32)
+    for m in (4, 0, 100):
+        read = core.entries_read_batch(queries, m)
+        width = len(centers) if m in (0, 100) else m
+        assert read.shape == (len(queries), width)
+        for q, row in zip(queries, read):
+            want = np.argsort(np.linalg.norm(centers - q, axis=1), kind="stable")[:width]
+            assert np.array_equal(row, want)
+    pool = pool_ids(core, K, js, lists)
+    expected, seen = [], set()
+    for j, order in zip(js, lists):
+        for i in order[j * K:]:
+            if int(ids[i]) not in pool and int(i) not in seen:
+                seen.add(int(i))
+                expected.append(int(i))
+    lo, step = core.quantizer()
+    codes = core.shell_codes()
+    assert codes.shape == (core.n_shell_slots(), (data.shape[1] + 1) // 2) and len(expected) == len(codes)
+    want = np.clip(np.rint((data[expected] - lo) / step), 0, 15).astype(np.uint8)
+    got = np.zeros_like(want)
+    got[:, 0::2] = codes[:, : want[:, 0::2].shape[1]] & 15
+    got[:, 1::2] = codes[:, : want[:, 1::2].shape[1]] >> 4
+    assert np.array_equal(got, want)

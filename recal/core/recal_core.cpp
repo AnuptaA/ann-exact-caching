@@ -649,6 +649,30 @@ class Core {
         for (const auto& e : entries_) out.push_back((int32_t)e.resp.size());
         return out;
     }
+    // entries read for each query, nearest center first, padded with -1: the m of candidates_batch
+    py::array_t<int32_t> entries_read_batch(py::array_t<float, py::array::c_style | py::array::forcecast> Q, int m) {
+        if (Q.ndim() != 2 || Q.shape(1) != d) throw std::invalid_argument("queries have wrong shape");
+        size_t n = Q.shape(0), ne = entries_.size();
+        size_t width = (m <= 0 || (size_t)m >= ne) ? ne : (size_t)m;
+        py::array_t<int32_t> out({(py::ssize_t)n, (py::ssize_t)width});
+        auto o = out.mutable_unchecked<2>();
+        std::vector<std::pair<double, int>> read;
+        for (size_t i = 0; i < n; i++) {
+            nearest_entries(Q.data() + i * d, m, read);
+            for (size_t t = 0; t < width; t++) o(i, t) = t < read.size() ? (int32_t)read[t].second : -1;
+        }
+        return out;
+    }
+    // 4-bit codes of every shell slot (two coordinates per byte, even coordinate in the low nibble)
+    py::array_t<uint8_t> shell_codes() const {
+        size_t ns = shell_codes_.size() / code_bytes_;
+        py::array_t<uint8_t> out({(py::ssize_t)ns, (py::ssize_t)code_bytes_});
+        if (!shell_codes_.empty()) std::copy(shell_codes_.begin(), shell_codes_.end(), out.mutable_data());
+        return out;
+    }
+    // (lo, step) of the shell quantizer: coordinate = lo + code * step
+    py::tuple quantizer() const { return py::make_tuple(py::array_t<float>(lo_.size(), lo_.data()),
+                                                        py::array_t<float>(step_.size(), step_.data())); }
     int n_data_slots() const { return (int)rev_.size(); }  // live slots
     int n_dead_slots() const { return (int)(data_id_.size() - rev_.size()); }
 
@@ -1032,6 +1056,9 @@ PYBIND11_MODULE(_recal_core, mod) {
              py::arg("use_mini") = true)
         .def("candidates_batch", &Core::candidates_batch, py::arg("Q"), py::arg("K"), py::arg("m") = 0)
         .def("entries_needed_batch", &Core::entries_needed_batch)
+        .def("entries_read_batch", &Core::entries_read_batch, py::arg("Q"), py::arg("m") = 0)
+        .def("shell_codes", &Core::shell_codes)
+        .def("quantizer", &Core::quantizer)
         .def("hash_vector", &Core::hash_vector)
         .def("mini_set_capacity", &Core::mini_set_capacity)
         .def("mini_put", &Core::mini_put)
