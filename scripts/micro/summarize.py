@@ -29,15 +29,18 @@ def unit_rows(workload_dir: Path) -> list[dict]:
     return rows
 
 
+def folder_tier(name: str, row: dict) -> str:
+    return str(row.get("tier") or ("quick" if name.endswith("-quick") else "full"))
+
+
 def read_rows(directory: Path, experiment: str) -> list[dict]:
-    """Rows of every workload of one experiment: its result file, else the units finished so far."""
+    """Rows of every workload folder of one experiment, both <workload> (full tier) and <workload>-quick: its result
+    file, else the units finished so far. Each row gets the folder it came from and its tier."""
     rows = []
     for workload_dir in sorted(p for p in Path(directory, experiment).iterdir() if p.is_dir()):
         final = workload_dir / f"{experiment.lower()}.json"
-        if final.exists():
-            rows += json.loads(final.read_text())["results"]["rows"]
-        else:
-            rows += unit_rows(workload_dir)
+        found = json.loads(final.read_text())["results"]["rows"] if final.exists() else unit_rows(workload_dir)
+        rows += [dict(row, folder=workload_dir.name, tier=folder_tier(workload_dir.name, row)) for row in found]
     return rows
 
 

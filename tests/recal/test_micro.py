@@ -80,15 +80,44 @@ def test_e3_eight_bits_stay_closer_than_four(world):
 
 def test_e4_methods_and_the_unbounded_intruder_check(world):
     rows, diag = e4.run(world)
-    by = {r["method"]: r for r in rows}
-    assert list(by) == list(e4.METHODS)
-    shares = [by[f"c{c}"]["contains_reference_share"] for c in e4.NEAREST]
-    assert shares == sorted(shares)
+    main = {r["method"]: r for r in rows if r["section"] == "methods"}
+    assert list(main) == list(e4.METHODS)
+    for prefix, sizes in (("c", e4.NEAREST), ("v11_c", e4.V11_NEAREST)):
+        shares = [main[f"{prefix}{c}"]["contains_reference_share"] for c in sizes]
+        assert shares == sorted(shares)
     assert all(0 <= r["contains_reference_share"] <= 1 for r in rows)
     ex = diag["intruder_examined"]
     assert ex["median"] <= ex["p95"] <= ex["p99"] <= ex["max"]
     agree = diag["core_agreement"]
-    assert agree["offset_abs_diff_p95"] < 1e-3 and agree["size_abs_diff_p95"] < 1e-3
+    assert agree["decoded"]["offset_abs_diff_p95"] < 1e-3 and agree["decoded"]["size_abs_diff_p95"] < 1e-3
+    assert agree["decoded"]["rate_equal_share"] == 1.0 and agree["exact"]["rate_equal_share"] < 1.0
+
+
+def test_e4_states_where_the_answer_comes_from(world):
+    rows, diag = e4.run(world)
+    main = {r["method"]: r for r in rows if r["section"] == "methods"}
+    pool = {n for n, r in main.items() if r["answer_source"] == e4.POOL}
+    assert pool == {"pool_knn", "v11_m_nearest"} | {f"v11_c{c}" for c in e4.V11_NEAREST}
+    assert {n for n, r in main.items() if r["answer_source"] == e4.UNION} == {"m_core", "m_nearest"} | {
+        f"c{c}" for c in e4.NEAREST}
+    assert diag["answer_sources"] == {n: r["answer_source"] for n, r in main.items()}
+    held = world.heldout()
+    out = e4.compute(e4.EntryTable(world), held["vec"][:80], held["truth"][:80], world.m, 1, world.core)["methods"]
+    for c in e4.NEAREST:       # the pool's top-K can only be at least as good as the K nearest of c lists
+        assert out[f"v11_c{c}"]["recall"].mean() >= out[f"c{c}"]["recall"].mean() - 1e-12
+    assert np.array_equal(out["v11_c4"]["has"], np.ones(80, bool))
+
+
+def test_e4_decomposition_crosses_entry_search_and_shells_and_reproduces_the_core(world):
+    rows, _ = e4.run(world)
+    cells = [r for r in rows if r["section"] == "decomposition"]
+    assert [r["cell"] for r in cells] == ["core HNSW entries + decoded 4-bit shells",
+                                          "exact m nearest + decoded 4-bit shells",
+                                          "core HNSW entries + exact shells", "exact m nearest + exact shells"]
+    assert all("recall_of_hits" in r and "hit_rate" in r for r in cells)
+    assert len([r for r in rows if r["section"] == "exact_shells"]) == len(e4.METHODS)
+    core_like = [r for r in e1.run(world) if r["model"] == "logit"][0]
+    assert cells[0]["hit_rate"] == pytest.approx(core_like["hit_rate"], abs=0.01)   # the core, rebuilt in Python
 
 
 def test_e4_with_all_entries_the_set_contains_the_reference(world):

@@ -11,6 +11,7 @@ definitions. nr is the core's for a, b, c and E4's own for d.
 
 import numpy as np
 
+from recal import build as builder
 from recal.micro import e1, e4, fit, quantize, world as w
 
 NAME = "intruder_check"
@@ -73,13 +74,16 @@ def pair_stats(x: np.ndarray, y: np.ndarray, K: int) -> dict:
 def run(world: w.World) -> tuple[list[dict], dict]:
     K, core, m = world.k, world.core, world.m
     held = world.heldout()
-    vec = held["vec"]
+    vec, truth = held["vec"], held["truth"]
     if len(vec) > MAX_QUERIES:
         keep = np.linspace(0, len(vec) - 1, MAX_QUERIES).astype(int)
-        vec = vec[keep]
+        vec, truth = vec[keep], truth[keep]
     Q = np.ascontiguousarray(vec, dtype=np.float32)
-    feat, _, _ = core.candidates_batch(Q, K, m)
+    feat, cand_ids, _ = core.candidates_batch(Q, K, m)
     has = feat[:, 0] == 1
+    recall = np.zeros(len(Q))
+    if has.any():
+        recall[has] = builder._recall(cand_ids[has], truth[has][:, :K])
     nr, count_core = feat[:, 1], feat[:, 5].astype(np.int64)
     read = core.entries_read_batch(Q, m)
     table_asis = e4.EntryTable(world, exclude_pool=False)
@@ -121,7 +125,7 @@ def run(world: w.World) -> tuple[list[dict], dict]:
             for name, (Dc, Dp, Ds, t) in dists.items():
                 res = e4._features(t, S, Dc[i], Dp[i], Ds[i], K, Q[g])
                 counts[name][g] = int(round(np.exp(res["F"][2]) * K - 1.0)) if res["has"] else 0
-    rows = pair_rows(world, counts, feat, has, K)
+    rows = pair_rows(world, counts, feat, has, K, recall)
     spread = {f"vectors_within_{int(b * 100)}pct_of_nr_mean": float(band[b][has].mean()) for b in RELATIVE_BANDS}
     extra = dict(workload=world.name, budget=world.budget, n_queries=int(has.sum()), n_entries_read=int(m),
                  core_count_mean=float(counts["a"][has].mean()), shell_vectors_examined_mean=float(examined[has].mean()),
@@ -136,7 +140,12 @@ def hit_decisions(world: w.World, feat: np.ndarray, has: np.ndarray, counts: np.
     return fit.decide(scores, has, lam)
 
 
-def pair_rows(world: w.World, counts: dict, feat: np.ndarray, has: np.ndarray, K: int) -> list[dict]:
+def mean_recall(recall: np.ndarray, hit: np.ndarray) -> float:
+    """Mean recall of the candidate answers that are served (the answer is the core's in every pair)."""
+    return float(recall[hit].mean()) if hit.any() else float("nan")
+
+
+def pair_rows(world: w.World, counts: dict, feat: np.ndarray, has: np.ndarray, K: int, recall: np.ndarray) -> list[dict]:
     model = e1.fit_models(world)[fit.LOGIT]
     lam = None
     if model is not None:
@@ -150,5 +159,6 @@ def pair_rows(world: w.World, counts: dict, feat: np.ndarray, has: np.ndarray, K
         rows.append(dict(workload=world.name, budget=world.budget, pair=f"{x}_vs_{y}", n_queries=int(has.sum()),
                          **stats, decision_flip_share=float((hits[x][has] != hits[y][has]).mean()),
                          hit_rate_x=float(hits[x][has].mean()), hit_rate_y=float(hits[y][has].mean()),
+                         recall_of_hits_x=mean_recall(recall, hits[x]), recall_of_hits_y=mean_recall(recall, hits[y]),
                          lam=lam))
     return rows

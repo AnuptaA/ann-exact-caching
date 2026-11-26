@@ -444,10 +444,24 @@ def test_inputs_are_pushed_and_pulled_with_hashes(tiny, tmp_path):
         shutil.move(str(moved), str(prep))
 
 
-def test_plan_prints_a_projection_and_stops(tiny, capsys):
-    assert run_cli(tiny, "--plan", "--experiments", "E1", "--no-upload") == 0
+def test_time_features_prints_what_it_timed_and_stops(tiny, capsys):
+    assert run_cli(tiny, "--time-features", "--experiments", "E1,E4", "--no-upload") == 0
     out = capsys.readouterr().out
-    assert "[plan]" in out and "ms per query" in out
+    assert "[time]" in out and "ms per query" in out and "Only the build and the core's features were timed" in out
+    with pytest.raises(SystemExit):
+        run_cli(tiny, "--plan", "--experiments", "E1", "--no-upload")
+
+
+def test_summarize_reads_both_the_full_and_the_quick_folder(tiny, tmp_path):
+    store = tmp_path / "store_both"
+    run_cli(tiny, "--experiments", "E1", "--store", str(store), "--force", out="both_full")
+    run_cli(tiny, "--tier", "quick", "--experiments", "E1", "--store", str(store), "--force", out="both_quick")
+    rows = summarize.read_rows(store / "micro", "E1")
+    assert {(r["folder"], r["tier"]) for r in rows} == {("tiny-a", "full"), ("tiny-a-quick", "quick")}
+    assert len([r for r in rows if r["tier"] == "full"]) == 4 and len([r for r in rows if r["tier"] == "quick"]) == 2
+    assert summarize.main(["--store", str(store), "--pulled", str(tmp_path / "pb"), "--out", str(tmp_path / "tb")]) == 0
+    header = (tmp_path / "tb" / "E1.csv").read_text().splitlines()[0].split(",")
+    assert "tier" in header and "folder" in header
 
 
 def test_summarize_reads_quick_folders_and_golden_units(tiny, tmp_path):

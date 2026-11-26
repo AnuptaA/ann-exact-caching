@@ -47,6 +47,9 @@ def test_intruder_check_reproduces_the_core_and_explains_the_definitions(world):
     assert pairs["b_vs_c"]["count_agree_share"] < 1.0           # 4-bit codes change counts
     assert extra["mean_count"]["d_asis"] > extra["mean_count"]["d_fixed"]
     assert extra["vectors_within_5pct_of_nr_mean"] >= extra["vectors_within_1pct_of_nr_mean"]
+    for r in rows:
+        assert 0 <= r["recall_of_hits_x"] <= 1 and 0 <= r["recall_of_hits_y"] <= 1
+    assert pairs["a_vs_c"]["recall_of_hits_x"] == pairs["a_vs_c"]["recall_of_hits_y"]     # the same decisions
 
 
 def test_e4_shells_never_hold_cached_vectors(world):
@@ -259,6 +262,49 @@ def test_e10_intervals_hold_and_precision_costs_hit_rate(world):
             assert np.isnan(r["hit_rate_wc"])
     if by[4]["certified"] and by[16]["certified"]:
         assert by[16]["ambiguous_share"] <= by[4]["ambiguous_share"] + 1e-12
+    for r in rows:
+        assert r["error_ratio_max"] <= 2.0 + 1e-9 or r["error_ratio_max"] != r["error_ratio_max"]
+        assert r["error_ratio_median"] <= r["error_ratio_p95"] + 1e-12 <= r["error_ratio_max"] + 2e-12 \
+            or r["error_ratio_median"] != r["error_ratio_median"]
+        assert r["prob_level"] == 0.99 and r["prob_coverage_held"] >= 0.9       # conformal: about 99% of held-out inside
+        assert r["certified_prob"] in (True, False) and "bound_gap" in r and "recall_of_hits_prob" in r
+        if r["certified"]:
+            assert r["bound_gap"] >= -1e-12
+        if r["certified_prob"] and r["certified"]:
+            assert r["prob_halfwidth"] <= max(2.0, r["prob_halfwidth"])        # present and finite
+            assert np.isfinite(r["hit_rate_prob"])
+
+
+def test_the_probabilistic_halfwidth_is_a_conformal_order_statistic():
+    errors = np.arange(1.0, 100.0)                                              # n = 99, level 0.99: k = 99
+    assert e10.conformal_halfwidth(errors, 0.99) == 99.0
+    assert e10.conformal_halfwidth(np.arange(1.0, 11.0), 0.99) == float("inf")   # k = 11 > n: no valid interval
+    assert e10.conformal_halfwidth(np.arange(1.0, 11.0), 0.5) == 6.0             # ceil(0.5 * 11) = 6
+
+
+def test_native_info_reads_what_a_vector_file_really_holds():
+    ints = np.random.default_rng(0).integers(-128, 128, size=(300, 6)).astype(np.float32)   # int8 saved as float32
+    info = quantize.native_info(ints)
+    assert info["dtype"] == "float32" and info["integer_valued"] and info["native_bits"] == 8
+    assert quantize.native_info(ints + 0.5)["native_bits"] == 32
+    assert quantize.native_info(ints * 2.0)["native_bits"] == 32                # integers outside the int8 range
+    assert quantize.native_info(ints.astype(np.int8))["dtype"] == "int8"
+
+
+def test_e10_native_precision_is_exact_for_int8_vectors(world, monkeypatch):
+    assert e10.precisions_for(world) == e10.BITS                                # the tiny data are float
+    real = e10.quantize.native_info
+    monkeypatch.setattr(e10.quantize, "native_info", lambda X, **k: dict(real(X), native_bits=8))
+    rows = e10.run(world)
+    native = [r for r in rows if r["bits"] == "native"]
+    assert len(native) == 1
+    r = native[0]
+    assert r["error_mean"] == 0.0 and r["ambiguous_share"] == 0.0 and r["violations"] == 0
+    assert r["hit_rate_wc"] == r["hit_rate_full"] and r["lam_wc"] == r["lam_full"]
+    assert {"query_dtype", "query_integer_valued", "native_bits", "db_dtype"} <= set(r)
+    assert e11.item_bytes(100, 10, "native") == e11.item_bytes(100, 10, 8)
+    e11_rows = e11.run(world, shares=(0.03,), precisions=(8,), deltas=(0.05,))
+    assert [r["bits"] for r in e11_rows] == [8, "native"]
 
 
 def test_e11_memory_arithmetic_rows_and_summary(world):
@@ -273,7 +319,43 @@ def test_e11_memory_arithmetic_rows_and_summary(world):
     wide = [r for r in rows if r["window_share_of_M"] == max(e11.SHARES) and r["certified_share"] > 0]
     assert all(r["quantization_slack"] >= -1e-9 for r in wide if r["quantization_slack"] == r["quantization_slack"])
     out = e11.summary(rows)
-    assert out and set(out[0]) == {"workload", "budget", "smallest_share_certifying", "better_bits"}
+    assert out and set(out[0]) == {"workload", "budget", "n_rows", "n_in_sample_excluded", "smallest_share_certifying",
+                                   "better_bits"}
+    assert out[0]["n_rows"] + out[0]["n_in_sample_excluded"] == len(rows)
+
+
+def test_e11_measures_the_window_and_summaries_leave_out_in_sample_rows_and_absent_deltas(world):
+    rows = e11.run(world, shares=(0.01, 0.03, 0.05), precisions=(8, 16), deltas=(0.05,))
+    for r in rows:
+        for key in ("labeled_per_half", "audited_hits_per_half", "n_eff_served", "n_eff_all_labeled", "min_ess",
+                    "min_ess_blocks_share", "ess_min_certified", "n_stretches", "in_sample"):
+            assert key in r
+        assert r["n_eff_served"] == pytest.approx(r["audited_hits_per_half"])      # audited hits all weigh 1/a
+        assert r["n_eff_all_labeled"] >= r["n_eff_served"] - 1e-9
+        assert 0 <= r["min_ess_blocks_share"] <= 1 - r["certified_share"] + 1e-9
+    assert any(r["in_sample"] for r in rows) and any(not r["in_sample"] for r in rows)
+    out = e11.summary(rows)[0]
+    assert all(k.endswith("delta0.05") for k in out["smallest_share_certifying"])      # no keys for the absent 0.10
+    assert all(k.endswith("delta0.05") for k in out["better_bits"])
+    shares_used = {float(k.split("share")[1].split("_")[0]) for k in out["better_bits"]}
+    assert shares_used <= {r["window_share_of_M"] for r in rows if not r["in_sample"]}
+    assert out["n_in_sample_excluded"] == sum(r["in_sample"] for r in rows)
+
+
+def test_a_window_blocked_only_by_min_ess_is_reported_as_such():
+    rng = np.random.default_rng(0)
+    n = 4000
+    score = rng.uniform(size=n)
+    y = np.clip(0.55 + 0.5 * score + rng.normal(0, 0.05, n), 0, 1)
+    p = world_mod.Params(K=10, min_ess=1e6)           # unreachable: only the effective sample size can block
+    edges = policy.threshold_edges(score)
+    out = e11.stretch_rows(score, score, score, np.ones(n, bool), y, np.arange(n), 1000, 0.5, edges, p, 0.05,
+                           np.random.default_rng(1))
+    assert out and all(not r["certified"] and r["min_ess_blocks"] for r in out)
+    p = world_mod.Params(K=10, min_ess=10.0)
+    out = e11.stretch_rows(score, score, score, np.ones(n, bool), y, np.arange(n), 1000, 0.5, edges, p, 0.05,
+                           np.random.default_rng(1))
+    assert any(r["certified"] for r in out) and not any(r["min_ess_blocks"] for r in out if r["certified"])
 
 
 def test_e12_stale_features_give_a_correlated_model(world):

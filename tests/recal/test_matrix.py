@@ -27,7 +27,10 @@ def test_distinct_runs_follow_the_appendix():
     assert table["q4"]["cells"] == 93 and table["q4"]["runs_emitted"] == 90
 
 
-def test_without_medrag_budgets_no_medrag_cell_is_emitted():
+def test_without_medrag_budgets_no_medrag_cell_is_emitted(tmp_path, monkeypatch):
+    # the budgets file is looked up relative to the working directory: an empty one has none, whatever was prepared
+    monkeypatch.chdir(tmp_path)
+    assert not Path(cfg()["medrag_budgets_file"]).exists()
     jobs, skipped = matrix.cell_jobs(cfg(), None)
     assert skipped == ["medrag"]
     assert not [j for v in jobs.values() for j in v if j.workload == "medrag"]

@@ -45,7 +45,7 @@ DEFAULT_WINDOW = e9.WINDOW
 DEFAULT_EXPERIMENTS = "E1,E3,E4,E7,E8,E9"
 QUICK_EXPERIMENTS = ("intruder_check", "E1", "E3", "E4", "E10", "E11", "E13")
 QUICK_SAMPLE_REQUESTS = 2000
-QUICK_E11_REQUESTS = 8000
+QUICK_E11_REQUESTS = 35_000
 QUICK_E11_GRID = dict(shares=(0.01, 0.03), precisions=(8, 16), deltas=(0.05,))
 GOLDEN = "golden"
 
@@ -432,8 +432,11 @@ def parallel_map(fn, tasks: list[tuple], jobs: int, on_result=None) -> list:
         return [future.result() for future in futures]
 
 
-def plan(cfg: dict, name: str, w: dict, experiments: list[str], params: dict, tier: str, workers: int) -> None:
-    """Time a probe cache and a few feature queries and project the cost of the run (an estimate)."""
+def time_features(cfg: dict, name: str, w: dict, experiments: list[str], params: dict, tier: str, workers: int) -> None:
+    """Time a probe cache and the core's feature pass on a few queries and project the E1-style feature pass.
+
+    It times the cache build and the core's features only, not each experiment: E4, E10, E11, E13 and E9 cost more per
+    query. Use it to see the build time and the per-query feature cost before a long run."""
     import time
     budgets = budgets_for(cfg, name, w)
     preflight.run_checks(w["prep"], w["stream"], experiments, 0, min(budgets), w["coord_bytes"], params, probe=False)
@@ -449,11 +452,12 @@ def plan(cfg: dict, name: str, w: dict, experiments: list[str], params: dict, ti
     n_unique = len(np.unique(np.load(Path(w["prep"]) / "streams.npz")[w["stream"]][-int(0.7 * 100_000):]))
     n_unique = min(n_unique, QUICK_SAMPLE_REQUESTS) if tier == "quick" else n_unique
     n_budgets = len(experiment_budgets("E1", budgets, tier))
-    print(f"[plan] probe cache ({preflight.PROBE_REQUESTS} requests) built in {build_s:.0f} s; core features "
+    print(f"[time] probe cache ({preflight.PROBE_REQUESTS} requests) built in {build_s:.0f} s; core features "
           f"{per_query * 1000:.1f} ms per query; about {n_unique} unique held-out queries per budget, {n_budgets} budget(s)")
-    print(f"[plan] E1 feature pass alone: about {per_query * n_unique / 60 / max(workers, 1):.0f} min per budget with "
+    print(f"[time] core feature pass alone: about {per_query * n_unique / 60 / max(workers, 1):.0f} min per budget with "
           f"{workers} worker(s); the full-history cache build is longer than the probe's (it grows with the history) "
-          "and is not parallel within a budget. This is an estimate, not a measurement of the run.")
+          "and is not parallel within a budget. Only the build and the core's features were timed, not the "
+          f"experiments ({', '.join(experiments)}); this is an estimate.")
 
 
 def main(argv=None) -> int:
@@ -474,14 +478,15 @@ def main(argv=None) -> int:
     ap.add_argument("--jobs", type=int, default=None, help="override: processes over budgets and E9 runs")
     ap.add_argument("--world-workers", type=int, default=None, help="override: forked processes per budget")
     ap.add_argument("--no-probe", action="store_true", help="skip the preflight build of a small cache")
-    ap.add_argument("--plan", action="store_true", help="time a probe cache and print the projected cost, then stop")
+    ap.add_argument("--time-features", action="store_true",
+                    help="time a probe cache build and the core's feature pass, print the projection, then stop")
     a = ap.parse_args(argv)
     cfg = json.loads(a.config.read_text())
     experiments = parse_experiments(a.experiments)
     check_tier(experiments, a.tier)
-    if a.plan:
+    if a.time_features:
         for name, w in workloads_for(cfg, a.dataset).items():
-            plan(cfg, name, w, experiments, json.loads(a.params), a.tier, a.workers)
+            time_features(cfg, name, w, experiments, json.loads(a.params), a.tier, a.workers)
         return 0
     if a.store is not None or not a.no_upload:
         store_mod.open_store(a.store)       # fails now when the store is not configured

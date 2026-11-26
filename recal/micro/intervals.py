@@ -22,9 +22,13 @@ BLOCK_ELEMENTS = 20_000_000
 TOLERANCE = 1e-9
 
 
-def quantize_with_error(X: np.ndarray, bits: int) -> tuple[np.ndarray, np.ndarray]:
-    """(q_hat, e): the vectors after a round trip through `bits` bits (16: float16) and the stored error bound."""
+def quantize_with_error(X: np.ndarray, bits) -> tuple[np.ndarray, np.ndarray]:
+    """(q_hat, e): the vectors after a round trip through `bits` bits (16: float16) and the stored error bound.
+
+    bits = "native": the vectors as they are (int8 data stays exact, error 0)."""
     X = np.asarray(X, dtype=np.float32)
+    if bits == "native":
+        return X, np.zeros(len(X))
     Xq = X.astype(np.float16).astype(np.float32) if bits == 16 else quantize(X, bits)
     err = np.linalg.norm(X.astype(np.float64) - Xq.astype(np.float64), axis=1)
     stored = err.astype(np.float16)
