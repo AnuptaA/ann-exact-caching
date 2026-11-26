@@ -112,8 +112,19 @@ def run_workload(cfg: dict, name: str, w: dict, experiments: list[str], out_root
         extra9 = e9.sim_extra(params)
         tasks = [(name, w["prep"], w["stream"], budget, w["coord_bytes"], method, lru, mini, extra9, window)
                  for budget in budgets for method, lru, mini in e9.variants()]
-        out = parallel_map(e9_task, tasks, jobs)
+        out = parallel_map(e9_task, tasks, jobs, on_result=lambda row: push_partial(row, name, dirs["E9"], s))
         finish("E9", name, settings["E9"], dirs["E9"], out, {}, s)
+
+
+def push_partial(row: dict, name: str, directory: Path, s) -> None:
+    """Write one finished E9 run under partial/ (and push it), so results show before all runs end."""
+    path = directory / "partial" / f"{row['budget']:g}_{row['method']}_mini-{'on' if row['mini_cache'] else 'off'}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(row, indent=1))
+    if s is not None:
+        s.push_file(f"micro/E9/{name}/partial/{path.name}", path)
+    print(f"[{name}] E9 partial: {path.name} hit_rate={row['hit_rate']:.4f} "
+          f"recall_of_hits={row['recall_of_hits']:.4f}", flush=True)
 
 
 def world_budget(name: str, w: dict, budget: float, based: list[str], max_requests: int,
@@ -153,10 +164,17 @@ def _limit_blas(threads: int) -> None:
     threadpool_limits(limits=threads)
 
 
-def parallel_map(fn, tasks: list[tuple], jobs: int) -> list:
-    """fn(*task) for every task, in task order; with jobs > 1 in forked worker processes."""
+def parallel_map(fn, tasks: list[tuple], jobs: int, on_result=None) -> list:
+    """fn(*task) for every task, in task order; with jobs > 1 in forked worker processes.
+
+    on_result(result) runs in this process as each task finishes (in finishing order)."""
     if jobs <= 1 or len(tasks) <= 1:
-        return [fn(*t) for t in tasks]
+        out = []
+        for t in tasks:
+            out.append(fn(*t))
+            if on_result is not None:
+                on_result(out[-1])
+        return out
     from concurrent.futures import ProcessPoolExecutor
     import multiprocessing
     import os
@@ -164,7 +182,12 @@ def parallel_map(fn, tasks: list[tuple], jobs: int) -> list:
     threads = max(1, len(os.sched_getaffinity(0)) // workers)
     with ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("fork"),
                              initializer=_limit_blas, initargs=(threads,)) as pool:
-        return list(pool.map(fn, *zip(*tasks)))
+        futures = [pool.submit(fn, *t) for t in tasks]
+        if on_result is not None:
+            from concurrent.futures import as_completed
+            for future in as_completed(futures):
+                on_result(future.result())
+        return [future.result() for future in futures]
 
 
 def main(argv=None) -> int:

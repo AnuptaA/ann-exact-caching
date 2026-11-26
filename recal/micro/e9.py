@@ -15,12 +15,13 @@ from recal.records import Records
 NAME = "E9"
 VARIANTS = (("recal", False), ("lru", True))
 WINDOW = 5000
+PROGRESS = 5000    # requests between progress lines
 
 
 def sim_args(prep: str, stream: str, budget: float, coord_bytes: float, lru: bool, mini: bool, out: str,
              extra: list[str] | None = None):
     argv = ["--prep", prep, "--stream", stream, "--budget", str(budget), "--coord-bytes", str(coord_bytes),
-            "--backend", "stored", "--idealized", "--out", out, *(extra or [])]
+            "--backend", "stored", "--idealized", "--out", out, "--progress", str(PROGRESS), *(extra or [])]
     if lru:
         argv.append("--lru")
     if not mini:

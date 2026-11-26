@@ -244,3 +244,19 @@ def test_world_workers_do_not_change_features_or_e4(tiny, monkeypatch):
     for a, b in zip(r1, r3):
         for key in ("contains_reference_share", "has_candidate_share", "hit_rate", "lam"):
             assert a[key] == b[key]
+
+
+def test_e9_writes_and_pushes_each_finished_run_under_partial(tiny, capfd, monkeypatch):
+    monkeypatch.setattr(e9, "PROGRESS", 500)
+    store = tiny / "store_partial"
+    assert run_cli(tiny, "--experiments", "E9", "--jobs", "4", "--store", str(store), "--max-requests", "1500",
+                   "--window", "200", "--force") == 0
+    out = capfd.readouterr().out
+    # E9 runs the whole 3,000-request stream: 2,100 scored, a progress line every 500
+    assert out.count("E9 partial:") == 4 and out.count("[sim] budget 0.6") == 16
+    pushed = sorted(p.name for p in (store / "micro" / "E9" / "tiny-a" / "partial").glob("*.json"))
+    assert pushed == ["0.6_lru_mini-off.json", "0.6_lru_mini-on.json", "0.6_recal_mini-off.json",
+                      "0.6_recal_mini-on.json"]
+    rows = json.loads((tiny / "out" / "E9" / "tiny-a" / "e9.json").read_text())["results"]["rows"]
+    partial = json.loads((store / "micro" / "E9" / "tiny-a" / "partial" / "0.6_lru_mini-on.json").read_text())
+    assert partial == rows[2]

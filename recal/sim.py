@@ -156,6 +156,10 @@ def run(args, records: Records | None = None) -> dict:
             timing["hit"].append(bool(served))
             timing["dt_ms"].append(r.cache_ms)
             timing["rereads"].append(r.rereads)
+        if args.progress and (pos + 1 - history_len) % args.progress == 0:
+            label = f"{'lru' if args.lru else 'recal'} mini {'off' if args.no_mini_cache else 'on'}"
+            print(f"[sim] budget {args.budget:g} {label}: {pos + 1}/{len(idx)} requests, "
+                  f"constructions {system.constructions}, {time.time() - t0:.0f}s", flush=True)
         if batch["n"] == args.batch:
             b = system.bytes_by_structure()
             log.append({"t": pos + 1, "n": batch["n"], "served": batch["served"], "served_retention_sum": batch["ret"],
@@ -224,6 +228,7 @@ def parser() -> argparse.ArgumentParser:
                          "idealized: exact); on in every generated line")
     ap.add_argument("--timing", action="store_true", help="record hit and cache-path time per request")
     ap.add_argument("--log-served", action="store_true")
+    ap.add_argument("--progress", type=int, default=0, help="print a progress line every N scored requests")
     ap.add_argument("--tag", default="")
     ap.add_argument("--out", required=True)
     add_hash_flag(ap)
