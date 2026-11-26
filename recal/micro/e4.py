@@ -70,8 +70,20 @@ def sq_dist(Q: np.ndarray, X: np.ndarray) -> np.ndarray:
     return np.sqrt(np.maximum(d2, 0.0))
 
 
-def compute(table: EntryTable, Q: np.ndarray, truth: np.ndarray, m: int) -> dict:
-    """Per method: has, features, candidate recall, set size; plus the reference and the unbounded intruder checks."""
+def compute(table: EntryTable, Q: np.ndarray, truth: np.ndarray, m: int, workers: int = 1) -> dict:
+    """Per method: has, features, candidate recall, set size; plus the reference and the unbounded intruder checks.
+
+    Queries are independent, so with workers > 1 consecutive ranges run in forked processes."""
+    parts = w.fork_map(lambda lo, hi: _compute(table, Q[lo:hi], truth[lo:hi], m), len(Q), workers)
+    if len(parts) == 1:
+        return parts[0]
+    return dict(methods={name: {key: np.concatenate([p["methods"][name][key] for p in parts])
+                                for key in parts[0]["methods"][name]} for name in METHODS},
+                ref={key: np.concatenate([p["ref"][key] for p in parts]) for key in parts[0]["ref"]},
+                examined=np.concatenate([p["examined"] for p in parts]))
+
+
+def _compute(table: EntryTable, Q: np.ndarray, truth: np.ndarray, m: int) -> dict:
     Q = np.ascontiguousarray(Q, dtype=np.float32)
     n, K = len(Q), table.k
     out = {name: dict(has=np.zeros(n, bool), F=np.zeros((n, 3)), recall=np.zeros(n), size=np.zeros(n, np.int64),
@@ -139,9 +151,9 @@ def run(world: w.World) -> tuple[list[dict], dict]:
     cal_truth = e3.role_truth(world, "cal")
     held = world.heldout()
     m = world.m
-    tr = compute(table, train_vec, train_truth, m)
-    ca = compute(table, cal_vec, cal_truth, m)
-    he = compute(table, held["vec"], held["truth"], m)
+    tr = compute(table, train_vec, train_truth, m, world.workers)
+    ca = compute(table, cal_vec, cal_truth, m, world.workers)
+    he = compute(table, held["vec"], held["truth"], m, world.workers)
     inverse, n_req = held["inverse"], len(held["inverse"])
     rows = []
     for name in METHODS:

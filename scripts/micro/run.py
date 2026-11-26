@@ -83,7 +83,7 @@ def finish(experiment, name, settings, directory, rows, extra, s):
 
 
 def run_workload(cfg: dict, name: str, w: dict, experiments: list[str], out_root: Path, s, params: dict,
-                 max_requests: int, window: int, force: bool, jobs: int = 1) -> None:
+                 max_requests: int, window: int, force: bool, jobs: int = 1, world_workers: int = 1) -> None:
     budgets = budgets_for(cfg, name, w)
     settings = {e: settings_of(e, name, w, budgets, params, max_requests, window) for e in experiments}
     dirs = {e: common.out_dir(e, name, out_root) for e in experiments}
@@ -94,11 +94,11 @@ def run_workload(cfg: dict, name: str, w: dict, experiments: list[str], out_root
         else:
             pending.append(e)
     based = [e for e in pending if e in WORLD_BASED]
-    if "E7" in based and jobs > 1:
-        raise SystemExit("E7 times single-thread searches on an idle machine: run it with --jobs 1")
+    if "E7" in based and (jobs > 1 or world_workers > 1):
+        raise SystemExit("E7 times single-thread searches on an idle machine: run it with --jobs 1 --world-workers 1")
     rows = {e: [] for e in based}
     extra = {e: {} for e in based}
-    args = [(name, w, budget, based, max_requests, params) for budget in budgets] if based else []
+    args = [(name, w, budget, based, max_requests, params, world_workers) for budget in budgets] if based else []
     for budget_rows, budget_extra in parallel_map(world_budget, args, jobs):
         for e in based:
             rows[e] += budget_rows[e]
@@ -117,11 +117,12 @@ def run_workload(cfg: dict, name: str, w: dict, experiments: list[str], out_root
 
 
 def world_budget(name: str, w: dict, budget: float, based: list[str], max_requests: int,
-                 params: dict) -> tuple[dict, dict]:
+                 params: dict, world_workers: int = 1) -> tuple[dict, dict]:
     """Build the cache of one budget and run the world-based experiments on it: rows and extras per experiment."""
     print(f"[{name}] building the cache at budget {budget:g}", flush=True)
     world = world_mod.build_world(w["prep"], w["stream"], budget, w["coord_bytes"], name=name,
                                   max_requests=max_requests, params=params)
+    world.workers = world_workers
     rows = {}
     extra = {e: {} for e in based}
     for e in based:
@@ -180,13 +181,15 @@ def main(argv=None) -> int:
     ap.add_argument("--window", type=int, default=DEFAULT_WINDOW, help="E9 window of main-path requests")
     ap.add_argument("--jobs", type=int, default=1,
                     help="worker processes: budgets of the world-based experiments, E9 runs (not with E7)")
+    ap.add_argument("--world-workers", type=int, default=1,
+                    help="forked processes per budget for the per-query work of E1, E3, E4, E8 (not with E7)")
     a = ap.parse_args(argv)
     cfg = json.loads(a.config.read_text())
     experiments = parse_experiments(a.experiments)
     s = None if a.no_upload else store_mod.open_store(a.store)
     for name, w in workloads_for(cfg, a.dataset).items():
         run_workload(cfg, name, w, experiments, a.out, s, json.loads(a.params), a.max_requests, a.window, a.force,
-                     a.jobs)
+                     a.jobs, a.world_workers)
     return 0
 
 

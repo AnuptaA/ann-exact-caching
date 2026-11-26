@@ -227,3 +227,20 @@ def test_jobs_give_the_serial_rows_in_order(tiny):
 def test_e7_is_refused_with_jobs(tiny):
     with pytest.raises(SystemExit, match="E7"):
         run_cli(tiny, "--experiments", "E7", "--jobs", "2", "--no-upload", "--force")
+
+
+def test_world_workers_do_not_change_features_or_e4(tiny, monkeypatch):
+    monkeypatch.setattr(world_mod, "MIN_CHUNK", 16)
+    out = {}
+    for workers in (1, 3):
+        w = world_mod.build_world("results/online/tiny-a", "trace", BUDGET, 4, name="tiny-a", params=PARAMS)
+        w.workers = workers
+        held = w.heldout()
+        rows, diag = e4.run(w)
+        out[workers] = (held["features"], rows, diag["intruder_examined"])
+    (f1, r1, x1), (f3, r3, x3) = out[1], out[3]
+    assert np.array_equal(f1.F, f3.F) and np.array_equal(f1.cand_ids, f3.cand_ids)
+    assert x1 == x3
+    for a, b in zip(r1, r3):
+        for key in ("contains_reference_share", "has_candidate_share", "hit_rate", "lam"):
+            assert a[key] == b[key]

@@ -5,8 +5,10 @@ The history is the first part of the stream (recal.history_mode), labeled with t
 ones the implementation builds. Features come from the compiled core (offset, size, intruder rate).
 """
 
+import multiprocessing
 import shutil
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,6 +23,35 @@ TARGET = 0.9
 DELTA = 0.05
 AUDIT = 0.1
 ROLE_CODES = {name: i for i, name in enumerate(builder.ROLE_NAMES)}
+MIN_CHUNK = 256
+_FORKED: dict = {}
+
+
+def fork_map(fn, n: int, workers: int) -> list:
+    """fn(lo, hi) over consecutive ranges covering range(n), results in order.
+
+    With workers > 1 the ranges run in forked processes, which see the parent's memory (the built cache)
+    copy-on-write; fn must not depend on state another range changes."""
+    if workers <= 1 or n <= MIN_CHUNK:
+        return [fn(0, n)]
+    parts = min(4 * workers, -(-n // MIN_CHUNK))
+    bounds = np.linspace(0, n, parts + 1).astype(int)
+    _FORKED["fn"] = fn
+    try:
+        with ProcessPoolExecutor(min(workers, parts), mp_context=multiprocessing.get_context("fork"),
+                                 initializer=_one_blas_thread) as pool:
+            return list(pool.map(_call_forked, bounds[:-1], bounds[1:]))
+    finally:
+        _FORKED.clear()
+
+
+def _call_forked(lo: int, hi: int):
+    return _FORKED["fn"](int(lo), int(hi))
+
+
+def _one_blas_thread() -> None:
+    from threadpoolctl import threadpool_limits
+    threadpool_limits(limits=1)
 
 
 @dataclass
@@ -49,6 +80,7 @@ class World:
     role: np.ndarray
     k: int
     cache: dict = field(default_factory=dict)
+    workers: int = 1
 
     @property
     def core(self):
@@ -72,7 +104,10 @@ class World:
             n = len(Q)
             return Features(np.zeros(n, bool), np.zeros((n, 3)), -np.ones((n, self.k), np.int64), np.zeros(n),
                             np.zeros(n))
-        feat, cand, _ = self.core.candidates_batch(Q, self.k, self.m if m is None else m)
+        m = self.m if m is None else m
+        parts = fork_map(lambda lo, hi: self.core.candidates_batch(Q[lo:hi], self.k, m)[:2], len(Q), self.workers)
+        feat = np.concatenate([part[0] for part in parts])
+        cand = np.concatenate([part[1] for part in parts])
         has = feat[:, 0] == 1
         recall = np.zeros(len(Q))
         if has.any():
