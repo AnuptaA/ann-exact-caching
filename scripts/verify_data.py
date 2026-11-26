@@ -22,7 +22,8 @@ ZIPF = ("0.3", "0.6", "0.99")
 AKER_EXPECTED = {
     "spacev-10m.npy": ((10_000_000, 100), "int8", "cluster only"),
     "sphere-ip-10m.npy": ((10_000_000, 769), "float32", "cluster only"),
-    **{f"spacev-sim-100k-{z}.npy": ((100_000, 100), "int8", "local") for z in ZIPF},
+    **{f"spacev-sim-100k-{z}.npy": ((n, 100), "int8", "local")
+       for z, n in (("0.3", 99_914), ("0.6", 99_982), ("0.99", 99_852))},
     **{f"triviaqa-ip-sim-100k-{z}.npy": ((n, 769), "float32", "local")
        for z, n in (("0.3", 99_903), ("0.6", 99_990), ("0.99", 99_907))},
 }

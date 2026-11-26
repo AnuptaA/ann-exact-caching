@@ -77,7 +77,7 @@ def test_spacev_verifier_reports_shape_problem(tmp_path, capsys):
     write_npy(tmp_path / "spacev-sim-100k-0.3.npy", np.zeros((5, 100), np.int8))
     assert verify_data.verify_spacev(tmp_path) == 1
     assert "spacev-sim-100k-0.3.npy" in capsys.readouterr().out
-    write_npy(tmp_path / "spacev-sim-100k-0.3.npy", np.zeros((100_000, 100), np.int8))
+    write_npy(tmp_path / "spacev-sim-100k-0.3.npy", np.zeros((99_914, 100), np.int8))
     assert verify_data.verify_spacev(tmp_path) == 0
 
 
