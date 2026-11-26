@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recal.micro import world as world_mod
+from recal.micro import golden, world as world_mod
 
 MIN_STREAM = 1000          # requests: below this the 30% history and the held-out part are too small to certify
 NEEDS_CORE_ACCESSORS = ("intruder_check", "E10", "E11", "E13")
@@ -67,6 +67,11 @@ def probe_build(prep: Path, stream: str, budget: float, coord_bytes: float, para
                 f"{type(error).__name__}: {error}"]
     if not world.built.n_entries:
         return [f"the probe cache of {prep} ({stream}) at budget {budget:g} has no entries; check the budget"]
+    try:
+        summary = golden.check(world, n_held=60, n_cal=30, strict=True, scan_rows=0)
+    except golden.GoldenFailure as error:
+        return [str(error)]
+    print(f"golden comparison on the probe cache ok ({summary['n_queries']} queries)", flush=True)
     return []
 
 

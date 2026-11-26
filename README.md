@@ -246,6 +246,34 @@ make micro DATASET=spacev EXPERIMENTS=intruder_check,E10,E11,E12,E13,E7
 
 The intruder check goes first: its outcome (a fix in E4, or the quantization report) decides what the others compare against.
 
+#### Quick tier, workers, hashes, inputs
+
+```bash
+make micro DATASET=spacev TIER=quick EXPERIMENTS=intruder_check,E1,E3,E4,E10,E11,E13 WORKERS=16
+make micro DATASET=spacev WORKERS=16 EXPERIMENTS=E1,E3,E4,E8,E10   # full tier, parallel (E7 needs WORKERS=1)
+make micro-inputs ACTION=push DATASET=spacev      # on the instance that prepared it
+make micro-inputs ACTION=pull DATASET=spacev      # on a fresh instance, instead of preparing
+python -m scripts.micro.run --dataset spacev --plan --tier quick   # time a probe cache, project the cost
+```
+
+- `TIER=quick`: the middle budget only, a seeded sample of 2,000 held-out requests (E11 scores the first 8,000
+  requests of the held-out stream so its stretches stay real), E11 shares 1% and 3%, bits 8 and 16, delta 0.05, E13 c = 32,
+  degree 16, ef 64 and 128. Results go to `<workload>-quick` (rows carry `tier`); E7, E8, E9 and E12 are full-tier only.
+- `--workers N` (`WORKERS=N`): budgets are built in parallel processes and the per-query work of each (features, E4,
+  intruder counts, intervals) is split across forked processes; results are identical to one worker (tested for every
+  experiment except E7, which times single-thread searches and refuses `--workers` above 1). `--jobs` and
+  `--world-workers` still override the split.
+- Units are reused only when `code_hash` (the sources the experiment uses, the core source and the compiled core),
+  `prep_hash` (q.npy, top500.npy, streams.npz, meta.json) and the library versions are unchanged; a commit that changes
+  none of them keeps its units, an uncommitted edit or a rebuilt core invalidates them. Every result records
+  python and library versions, instance type, the worker counts and the code commit (information only).
+- Every built cache is compared with the core's definitions before an experiment uses it (`recal/micro/golden.py`:
+  candidate ids and distances, nr, offset, size, best entry, intruder count and rate, score, recall label,
+  `entries_needed_batch`, features over all entries, interval soundness and collapse at zero error, the worst-case
+  certification, the stored answers against the corpus, ties at rank K, by-id against by-distance recall). A mismatch
+  stops the run and names the quantity. Caches that are identical to a smaller budget's (the 5% and 10% caches on
+  SPACEV, TriviaQA and LAION) reuse that result for the experiments that do not depend on M.
+
 ## Running on many instances
 
 One instance prepares each dataset, the run instances map shards of the job list, one instance reduces.

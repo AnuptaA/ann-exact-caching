@@ -356,7 +356,7 @@ SHARD_BY ?= workload
 RECAL_PY ?= .venv-core/bin/python
 MATRIX_FILTERS = $(if $(SYSTEM),--system $(SYSTEM),) $(if $(WORKLOAD),--workload $(WORKLOAD),)
 
-.PHONY: prepare micro shards run q1 q2 q3 q4 reduce status
+.PHONY: prepare micro micro-inputs shards run q1 q2 q3 q4 reduce status
 
 # make prepare DATASET=<spacev|triviaqa|medrag|tripclick|all> [STAGES=fetch,prep,working_set]: build the shared
 # artifacts and push them to the store (STAGES runs only those stages)
@@ -364,12 +364,20 @@ prepare:
 	@test -n "$(DATASET)" || { echo "set DATASET=<spacev|triviaqa|medrag|tripclick|all>"; exit 1; }
 	$(RECAL_PY) -m scripts.prepare --config $(MATRIX) --dataset $(DATASET) $(if $(STAGES),--stages $(STAGES),)
 
-# make micro DATASET=<spacev|triviaqa|medrag|laion> [EXPERIMENTS=E1,E3,...] [MICRO_FLAGS="--jobs 4"]: micro-experiments
-# (default E1 E3 E4 E7 E8 E9; also intruder_check E10 E11 E12 E13), units pushed to micro/ as they finish
+# make micro DATASET=<spacev|triviaqa|medrag|laion> [EXPERIMENTS=E1,E3,...] [TIER=quick] [WORKERS=16] [MICRO_FLAGS=...]:
+# micro-experiments (default E1 E3 E4 E7 E8 E9; also intruder_check E10 E11 E12 E13), units pushed to micro/ as they
+# finish. TIER=quick runs the middle budget on a sample of 2,000 held-out requests (intruder_check E1 E3 E4 E10 E11 E13).
+# make micro-inputs ACTION=<push|pull|verify> DATASET=<d>: the prepared inputs in the store (a fresh instance pulls them).
 MICRO_EXPERIMENTS = E1,E3,E4,E7,E8,E9
+TIER ?= full
+WORKERS ?= 1
 micro:
 	@test -n "$(DATASET)" || { echo "set DATASET=<spacev|triviaqa|medrag|laion>"; exit 1; }
-	PYTHONPATH=. $(RECAL_PY) -m scripts.micro.run --dataset $(DATASET) --experiments $(or $(EXPERIMENTS),$(MICRO_EXPERIMENTS)) $(MICRO_FLAGS)
+	PYTHONPATH=. $(RECAL_PY) -m scripts.micro.run --dataset $(DATASET) --experiments $(or $(EXPERIMENTS),$(MICRO_EXPERIMENTS)) --tier $(TIER) --workers $(WORKERS) $(MICRO_FLAGS)
+
+micro-inputs:
+	@test -n "$(DATASET)" -a -n "$(ACTION)" || { echo "set DATASET=<d> ACTION=<push|pull|verify>"; exit 1; }
+	PYTHONPATH=. $(RECAL_PY) -m scripts.micro.inputs $(ACTION) --dataset $(DATASET)
 
 # Shard job files in $(JOBS)/shards, one per workload (SHARD_BY=question|system)
 shards:

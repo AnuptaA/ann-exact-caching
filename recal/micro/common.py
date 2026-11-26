@@ -35,11 +35,13 @@ def is_fresh(directory: Path, experiment: str, settings: dict) -> bool:
         return False
 
 
-def write_result(directory: Path, experiment: str, settings: dict, results, rows: list[dict] | None = None) -> Path:
+def write_result(directory: Path, experiment: str, settings: dict, results, rows: list[dict] | None = None,
+                 runtime: dict | None = None) -> Path:
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     body = {"experiment": experiment, "settings": settings, "config_hash": config_hash(settings),
-            "results": results, "environment": environment.describe(), "code_commit": jobs_util.code_commit()}
+            "results": results, "environment": environment.describe(), "code_commit": jobs_util.code_commit(),
+            "runtime": runtime or {}}
     path = result_path(directory, experiment)
     tmp = path.with_name("." + path.name + ".tmp")
     tmp.write_text(json.dumps(body, indent=1, default=_plain))
