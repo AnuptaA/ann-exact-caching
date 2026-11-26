@@ -103,10 +103,13 @@ def load_base(name: str) -> np.ndarray:
     """Database vectors: int8 kept as is; floating data as float32. For
     floating data a float32 copy next to the file (<stem>-f32.npy, e.g.
     SPHERE: float64 on disk) is memory-mapped instead, so parallel processes
-    share one copy."""
+    share one copy. A float32 file is memory-mapped directly for the same
+    reason (sphere-ip-10m.npy)."""
     path = AKER / WORKLOADS[name]["base"]
     f32 = path.with_name(path.stem + "-f32.npy")
     arr = np.load(path, mmap_mode="r")
+    if arr.dtype == np.float32:
+        return arr
     if not np.issubdtype(arr.dtype, np.integer) and f32.exists():
         return np.load(f32, mmap_mode="r")
     if np.issubdtype(arr.dtype, np.integer):
