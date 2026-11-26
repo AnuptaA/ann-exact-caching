@@ -15,7 +15,6 @@ def build_lru(snap: dict, backend, p, M: float, request: int, hashes, core, rng)
     w_est, _ = policy.window_size(p.H, p.a, 0.2, p.window_items)
     fixed = (p.headroom * M + R * (40.0 + 8.0 * p.K) + w_est * p.item_bytes + 32.0 * (p.n_thresholds + 1)
              + MODEL_BYTES + 8.0 * d)
-    cache = LruCache(d, M - fixed, p.coord_bytes, vec.min(axis=0), vec.max(axis=0))
     roles = builder.split_roles(len(vec), p.roles, rng, vec, p.split_by_query)
     admit = np.sort(np.concatenate([roles["cand"], roles["sel"]]))
     deep = {}
@@ -24,6 +23,13 @@ def build_lru(snap: dict, backend, p, M: float, request: int, hashes, core, rng)
         got_ids, got_d = backend.search(vec[rows], int(4 * Kv), kind="candidate")
         for local, i in enumerate(rows):
             deep[int(i)] = (got_ids[local], got_d[local])
+    # shell codes use the range of the cached database vectors, as the core's quantizer does (not the queries')
+    lo = np.full(d, np.inf, np.float32)
+    hi = np.full(d, -np.inf, np.float32)
+    for i in admit:
+        held = backend.vectors_of(deep[int(i)][0])
+        lo, hi = np.minimum(lo, held.min(axis=0)), np.maximum(hi, held.max(axis=0))
+    cache = LruCache(d, M - fixed, p.coord_bytes, lo, hi)
     for i in admit:
         got_ids, got_d = deep[int(i)]
         cache.admit(vec[i], int(K[i]), got_ids, got_d, backend.vectors_of(got_ids))

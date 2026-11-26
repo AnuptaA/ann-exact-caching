@@ -2,8 +2,12 @@
 
 A miss admits one entry of 2K vectors for its query, with a shell of the next 2K ranks, and evicts
 least recently used entries until the bytes fit. An entry counts as used when it contributes a vector
-to a served answer. Serving follows the core: read the m nearest centers, union their lists, score the
-answer with the offset, size and shell-intruder features. Centers are searched by brute force.
+to a served answer. Serving follows the core: read the m nearest centers (exact search), union their lists,
+score the answer with the offset, size and shell-intruder features. Shell vectors that are also cached are not
+counted, as the core never stores them as shell vectors.
+
+Vectors live in arrays (a slot per cached id), so a lookup is a few array operations; candidate distances use
+a float32 shortlist that is re-ranked in float64, with ties to the lower id, like the core.
 """
 
 from collections import OrderedDict
@@ -16,6 +20,9 @@ from recal.core import MAIN_HIT, MISS_ABSTAIN, MISS_NO_CANDIDATE, MISS_SCORE
 EPS = 1e-12
 LEVELS = 15
 INDEX_BYTES_PER_ENTRY = 164.0
+SHORTLIST = 3
+SHELL_CHUNK = 20_000
+START_SLOTS = 1024
 
 
 class LruCache:
@@ -24,16 +31,35 @@ class LruCache:
         self.lo = np.zeros(dim, np.float32) if lo is None else np.asarray(lo, np.float32)
         span = np.ones(dim, np.float32) if hi is None else np.maximum(np.asarray(hi, np.float32) - self.lo, EPS)
         self.step = (span / LEVELS).astype(np.float32)
-        self.pool: dict = {}       # id -> [vector, refs]
-        self.shell: dict = {}      # id -> [codes, refs]
-        self.entries: dict = {}    # entry id -> dict(resp, shell, radius, row)
+        self.pool: dict = {}       # id -> pool slot
+        self.shell: dict = {}      # id -> shell slot
+        self.entries: dict = {}    # entry id -> dict(resp (pool slots), shell (shell slots), radius, row, K)
         self.order: OrderedDict = OrderedDict()
         self.centers = np.zeros((64, dim), np.float32)
+        self.row_entry = np.full(64, -1, np.int64)
         self.free_rows: list = []
         self.n_rows = 0
         self.next_id = 0
         self.model = None
         self.lists = 0             # list slots held by entries (response and shell)
+        self.holders: dict = {}    # pool slot -> set of entry ids listing it
+        self._all_resp = None
+        self._init_slots()
+
+    def _init_slots(self) -> None:
+        d = self.d
+        self.pvec = np.zeros((START_SLOTS, d), np.float32)
+        self.pid = np.zeros(START_SLOTS, np.int64)
+        self.pref = np.zeros(START_SLOTS, np.int32)
+        self.psq = np.zeros(START_SLOTS, np.float64)
+        self.pfree: list = []
+        self.n_pslots = 0
+        self.scode = np.zeros((START_SLOTS, d), np.uint8)
+        self.sid = np.zeros(START_SLOTS, np.int64)
+        self.sref = np.zeros(START_SLOTS, np.int32)
+        self.s_pooled = np.zeros(START_SLOTS, bool)
+        self.sfree: list = []
+        self.n_sslots = 0
 
     # ---- bookkeeping -----------------------------------------------------------------------------
 
@@ -65,14 +91,44 @@ class LruCache:
     # ---- serving ---------------------------------------------------------------------------------
 
     def _nearest(self, q: np.ndarray, m: int) -> list:
-        rows = np.fromiter((e["row"] for e in self.entries.values()), dtype=np.int64, count=len(self.entries))
-        ids = list(self.entries)
-        c = self.centers[rows]
-        d2 = ((c - q) ** 2).sum(axis=1)
+        """The m entries with the nearest centers, nearest first, with exact (float64) center distances."""
+        rows = np.flatnonzero(self.row_entry[:self.n_rows] >= 0)
+        ids = self.row_entry[rows]
+        d = np.linalg.norm(self.centers[rows].astype(np.float64) - q.astype(np.float64), axis=1)
         take = len(ids) if m <= 0 or m >= len(ids) else m
-        part = np.argpartition(d2, take - 1)[:take] if take < len(ids) else np.arange(len(ids))
-        part = part[np.argsort(d2[part], kind="stable")]
-        return [(ids[i], float(np.sqrt(d2[i]))) for i in part]
+        part = np.argpartition(d, take - 1)[:take] if take < len(ids) else np.arange(len(ids))
+        part = part[np.argsort(d[part], kind="stable")]
+        return [(int(ids[i]), float(d[i])) for i in part]
+
+    def _resp_union(self, read: list, m: int) -> np.ndarray:
+        if m <= 0 or m >= len(self.entries):
+            if self._all_resp is None:
+                self._all_resp = np.unique(np.concatenate([e["resp"] for e in self.entries.values()]))
+            return self._all_resp
+        return np.unique(np.concatenate([self.entries[eid]["resp"] for eid, _ in read]))
+
+    def _nearest_candidates(self, q: np.ndarray, slots: np.ndarray, K: int) -> tuple[np.ndarray, np.ndarray]:
+        """The K nearest of the pool slots: float32 shortlist, float64 re-rank, ties to the lower id."""
+        approx = self.psq[slots] - 2.0 * (self.pvec[slots] @ q.astype(np.float32)) + float(q.astype(np.float64) @ q)
+        s = min(SHORTLIST * K, len(slots))
+        short = slots[np.argpartition(approx, s - 1)[:s]] if s < len(slots) else slots
+        dist = np.linalg.norm(self.pvec[short].astype(np.float64) - q.astype(np.float64), axis=1)
+        order = np.lexsort((self.pid[short], dist))[:K]
+        return short[order], dist[order]
+
+    def _intruders(self, q: np.ndarray, read: list, nr: float) -> int:
+        parts = [self.entries[eid]["shell"] for eid, _ in read if len(self.entries[eid]["shell"])]
+        if not parts:
+            return 0
+        slots = np.unique(np.concatenate(parts))
+        slots = slots[~self.s_pooled[slots]]
+        q64 = q.astype(np.float64)
+        lo, step = self.lo.astype(np.float64), self.step.astype(np.float64)
+        count = 0
+        for i in range(0, len(slots), SHELL_CHUNK):
+            v = lo + self.scode[slots[i:i + SHELL_CHUNK]].astype(np.float64) * step
+            count += int((((q64 - v) ** 2).sum(axis=1) < nr * nr).sum())
+        return count
 
     def lookup(self, q: np.ndarray, K: int, lam: float | None, m: int) -> SimpleNamespace:
         res = SimpleNamespace(path=MISS_NO_CANDIDATE, ids=np.zeros(0, np.int64), dists=np.zeros(0, np.float32),
@@ -82,19 +138,14 @@ class LruCache:
             return res
         read = self._nearest(q, m)
         res.n_read = len(read)
-        cand = {}
-        for eid, _ in read:
-            for i in self.entries[eid]["resp"]:
-                if i not in cand:
-                    cand[i] = float(np.linalg.norm(self.pool[i][0].astype(np.float64) - q))
-        res.n_candidates = len(cand)
-        if len(cand) < K:
+        slots = self._resp_union(read, m)
+        res.n_candidates = len(slots)
+        if len(slots) < K:
             return res
-        order = sorted(cand, key=lambda i: (cand[i], i))[:K]
-        res.ids = np.array(order, np.int64)
-        res.dists = np.array([cand[i] for i in order], np.float32)
-        nr = max(cand[order[-1]], EPS)
-        served = set(order)
+        near, dist = self._nearest_candidates(q, slots, K)
+        res.ids = self.pid[near].copy()
+        res.dists = dist.astype(np.float32)
+        nr = max(float(dist[-1]), EPS)
         best, best_e, best_de, best_rad = np.inf, -1, 0.0, 1.0
         for eid, de in read:
             rad = max(self.entries[eid]["radius"], EPS)
@@ -102,18 +153,11 @@ class LruCache:
             if fit < best:
                 best, best_e, best_de, best_rad = fit, eid, de, rad
         res.best_entry = best_e
-        res.contrib = [eid for eid, _ in read if served & set(self.entries[eid]["resp"])]
+        held = set().union(*(self.holders[int(s)] for s in near))
+        res.contrib = [eid for eid, _ in read if eid in held]
         res.n_contrib = len(res.contrib)
         offset, size = best_de / best_rad, nr / best_rad
-        seen, count = set(), 0
-        for eid, _ in read:
-            for s in self.entries[eid]["shell"]:
-                if s in seen:
-                    continue
-                seen.add(s)
-                v = self.lo + self.shell[s][0].astype(np.float32) * self.step
-                if float(np.sum((q.astype(np.float64) - v) ** 2)) < nr * nr:
-                    count += 1
+        count = self._intruders(q, read, nr)
         rate = np.log((count + 1.0) / K)
         res.features = np.array([offset, size, rate])
         if self.model is not None:
@@ -137,7 +181,7 @@ class LruCache:
         rows = np.array([self.entries[e]["row"] for e in ids])
         holders: dict = {}
         for pos, e in enumerate(ids):
-            for i in self.entries[e]["resp"]:
+            for i in self.pid[self.entries[e]["resp"]].tolist():
                 holders.setdefault(i, []).append(pos)
         for n, q in enumerate(queries):
             slots = [holders[i] for i in truth[n].tolist() if i in holders]
@@ -159,41 +203,84 @@ class LruCache:
     def _quantize(self, v: np.ndarray) -> np.ndarray:
         return np.clip(np.rint((v - self.lo) / self.step), 0, LEVELS).astype(np.uint8)
 
+    def _grow(self, name: str, n: int) -> None:
+        for attr in {"p": ("pvec", "pid", "pref", "psq"), "s": ("scode", "sid", "sref", "s_pooled")}[name]:
+            a = getattr(self, attr)
+            if n >= len(a):
+                setattr(self, attr, np.concatenate([a, np.zeros_like(a)]))
+
+    def _pool_slot(self) -> int:
+        if self.pfree:
+            return self.pfree.pop()
+        self._grow("p", self.n_pslots)
+        self.n_pslots += 1
+        return self.n_pslots - 1
+
+    def _shell_slot(self) -> int:
+        if self.sfree:
+            return self.sfree.pop()
+        self._grow("s", self.n_sslots)
+        self.n_sslots += 1
+        return self.n_sslots - 1
+
     def admit(self, center: np.ndarray, K: int, ids, dists, vectors) -> int:
         """Entry from the first 2K ranks, shell from the next 2K; returns the vectors newly held."""
         n = 2 * K
         ids = np.asarray(ids, np.int64)
         new = 0
-        resp = [int(i) for i in ids[:n]]
-        for i, v in zip(resp, vectors[:n]):
-            if i in self.pool:
-                self.pool[i][1] += 1
-            else:
-                self.pool[i] = [np.asarray(v, np.float32).copy(), 1]
+        resp = []
+        for i, v in zip(ids[:n].tolist(), vectors[:n]):
+            slot = self.pool.get(i)
+            if slot is None:
+                slot = self._pool_slot()
+                v32 = np.asarray(v, np.float32)
+                self.pvec[slot] = v32
+                self.pid[slot] = i
+                self.pref[slot] = 1
+                self.psq[slot] = float(v32.astype(np.float64) @ v32)
+                self.pool[i] = slot
+                if i in self.shell:
+                    self.s_pooled[self.shell[i]] = True
                 new += 1
+            else:
+                self.pref[slot] += 1
+            resp.append(slot)
         shell = []
         for i, v in zip(ids[n:2 * n].tolist(), vectors[n:2 * n]):
             if i in self.pool:
                 continue
-            if i in self.shell:
-                self.shell[i][1] += 1
-            else:
-                self.shell[i] = [self._quantize(np.asarray(v, np.float32)), 1]
+            slot = self.shell.get(i)
+            if slot is None:
+                slot = self._shell_slot()
+                self.scode[slot] = self._quantize(np.asarray(v, np.float32))
+                self.sid[slot] = i
+                self.sref[slot] = 1
+                self.s_pooled[slot] = False
+                self.shell[i] = slot
                 new += 1
-            shell.append(i)
+            else:
+                self.sref[slot] += 1
+            shell.append(slot)
         if self.free_rows:
             row = self.free_rows.pop()
         else:
             if self.n_rows == len(self.centers):
                 self.centers = np.vstack([self.centers, np.zeros_like(self.centers)])
+                self.row_entry = np.concatenate([self.row_entry, np.full(len(self.row_entry), -1, np.int64)])
             row = self.n_rows
             self.n_rows += 1
         self.centers[row] = center
         eid = self.next_id
         self.next_id += 1
-        self.entries[eid] = {"resp": resp, "shell": shell, "radius": float(dists[n - 1]), "row": row, "K": K}
+        self.row_entry[row] = eid
+        resp_slots = np.asarray(resp, np.int64)
+        self.entries[eid] = {"resp": resp_slots, "shell": np.asarray(shell, np.int64),
+                             "radius": float(dists[n - 1]), "row": row, "K": K}
+        for slot in resp_slots.tolist():
+            self.holders.setdefault(slot, set()).add(eid)
         self.order[eid] = None
         self.lists += len(resp) + len(shell)
+        self._all_resp = None
         while self.total_bytes() > self.budget and len(self.entries) > 1:
             self._evict(next(iter(self.order)))
         return new
@@ -201,13 +288,22 @@ class LruCache:
     def _evict(self, eid: int) -> None:
         e = self.entries.pop(eid)
         self.order.pop(eid)
+        self.row_entry[e["row"]] = -1
         self.free_rows.append(e["row"])
         self.lists -= len(e["resp"]) + len(e["shell"])
-        for i in e["resp"]:
-            self.pool[i][1] -= 1
-            if self.pool[i][1] == 0:
+        self._all_resp = None
+        for slot in e["resp"].tolist():
+            self.holders[slot].discard(eid)
+            self.pref[slot] -= 1
+            if self.pref[slot] == 0:
+                del self.holders[slot]
+                i = int(self.pid[slot])
                 del self.pool[i]
-        for i in e["shell"]:
-            self.shell[i][1] -= 1
-            if self.shell[i][1] == 0:
-                del self.shell[i]
+                self.pfree.append(slot)
+                if i in self.shell:
+                    self.s_pooled[self.shell[i]] = False
+        for slot in e["shell"].tolist():
+            self.sref[slot] -= 1
+            if self.sref[slot] == 0:
+                del self.shell[int(self.sid[slot])]
+                self.sfree.append(slot)
