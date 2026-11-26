@@ -454,7 +454,8 @@ drive_variables_set() {
 import sys
 sys.path.insert(0, sys.argv[1])
 from scripts import data_fetch
-names = {'spacev': [], 'triviaqa': ['triviaqa'], 'medrag': ['medrag', 'medrag100k'], 'tripclick': ['tripclick']}
+names = {'spacev': [], 'triviaqa': ['triviaqa'], 'medrag': ['medrag', 'medrag100k'], 'tripclick': ['tripclick'],
+         'laion': ['laion', 'laion_prompts']}
 folders = sorted({f for d in sys.argv[3:] for f in names[d]})
 env = data_fetch.drive_env(__import__('pathlib').Path(sys.argv[1]))
 missing = data_fetch.missing_variables(folders, env)
