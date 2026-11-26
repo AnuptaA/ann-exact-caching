@@ -91,26 +91,109 @@ def test_full_precision_features_and_scores_lie_in_their_intervals(c, bits):
     assert ((score >= low - 1e-9) & (score <= high + 1e-9)).all()
 
 
-def test_worst_case_set_matches_brute_force():
-    rng = np.random.default_rng(3)
-    for trial in range(60):
-        n = int(rng.integers(3, 10))
-        y = rng.uniform(0.3, 1.0, size=n)
-        w = rng.uniform(0.5, 3.0, size=n)
-        kind = rng.integers(0, 3, size=n)         # 0 certain, 1 ambiguous, 2 outside
-        certain, ambiguous = kind == 0, kind == 1
-        got = intervals.worst_case_set(y, w, certain, ambiguous)
-        assert (got[certain]).all() and not got[kind == 2].any()
-        free = np.flatnonzero(ambiguous)
-        best = np.inf
-        for r in range(len(free) + 1):
-            for chosen in itertools.combinations(free, r):
+Z95 = 1.6448536269514722
+
+
+def served_lcb(y, w, mask):
+    return intervals.lower_bound(y[mask], w[mask], Z95)["lcb"]
+
+
+def brute_force_minimum(y, w, certain, ambiguous):
+    """Smallest lower confidence bound over every served set between the certain items and all possible items."""
+    items = np.flatnonzero(ambiguous)
+    best = np.inf
+    for bits in range(1 << len(items)):
+        mask = certain.copy()
+        mask[items[[(bits >> i) & 1 == 1 for i in range(len(items))]]] = True
+        if mask.any():
+            best = min(best, served_lcb(y, w, mask))
+    return best
+
+
+def mean_minimizing_set(y, w, certain, ambiguous):
+    """The previous rule: ambiguous items, lowest recall first, while each is below the running weighted mean."""
+    served, items = certain.copy(), np.flatnonzero(ambiguous)
+    items = items[np.argsort(y[items], kind="stable")]
+    total, weighted = float(w[served].sum()), float((w[served] * y[served]).sum())
+    for i in items:
+        if total > 0 and y[i] >= weighted / total:
+            break
+        served[i] = True
+        total += w[i]
+        weighted += w[i] * y[i]
+    return served
+
+
+def random_worst_case(rng, regime):
+    nc, na = int(rng.integers(6, 40)), int(rng.integers(3, 11))
+    if regime == "below":
+        yc, ya = np.clip(rng.normal(0.93, 0.06, nc), 0, 1), rng.uniform(0.2, 1.0, na)
+    elif regime == "straddle":
+        yc, ya = np.clip(rng.normal(0.8, 0.15, nc), 0, 1), rng.uniform(0.0, 1.0, na)
+    else:
+        yc, ya = rng.beta(2, 1, nc), rng.beta(2, 1, na)
+    wc = np.where(rng.random(nc) < 0.2, 10.0, 1.0)          # misses weigh 1, audited hits 1/a = 10
+    wa = np.where(rng.random(na) < 0.3, 10.0, 1.0)
+    certain = np.r_[np.ones(nc, bool), np.zeros(na, bool)]
+    return np.r_[yc, ya], np.r_[wc, wa], certain, ~certain
+
+
+def test_worst_case_bound_brackets_the_brute_force_minimum():
+    rng = np.random.default_rng(11)
+    mean_set_too_high = prefix_not_optimal = 0
+    for regime in ("below", "straddle", "wide"):
+        for _ in range(120):
+            y, w, certain, ambiguous = random_worst_case(rng, regime)
+            brute = brute_force_minimum(y, w, certain, ambiguous)
+            out = intervals.worst_case_bound(y, w, certain, ambiguous, Z95)
+            assert out["lcb"] <= brute + 1e-12                      # valid: never above the true minimum
+            assert out["lcb_prefix"] >= brute - 1e-12               # the feasible set it brackets from above
+            assert out["bound_gap"] == pytest.approx(out["lcb_prefix"] - out["lcb"]) and out["bound_gap"] >= -1e-12
+            old = served_lcb(y, w, mean_minimizing_set(y, w, certain, ambiguous))
+            assert out["lcb"] <= old + 1e-12                        # never less conservative than the mean rule
+            mean_set_too_high += old > brute + 1e-6
+            order = np.flatnonzero(ambiguous)[np.argsort(y[ambiguous], kind="stable")]
+            prefixes = []
+            for k in range(len(order) + 1):
                 mask = certain.copy()
-                mask[list(chosen)] = True
-                if mask.any():
-                    best = min(best, (w[mask] * y[mask]).sum() / w[mask].sum())
-        if got.any():
-            assert (w[got] * y[got]).sum() / w[got].sum() == pytest.approx(best, abs=1e-12) or not certain.any()
+                mask[order[:k]] = True
+                prefixes.append(served_lcb(y, w, mask))
+            prefix_not_optimal += min(prefixes) > brute + 1e-6
+    assert mean_set_too_high > 100 and prefix_not_optimal > 0       # the cases the change is about
+
+
+def test_the_bound_is_exact_when_the_ambiguous_items_lie_below_the_mean():
+    rng = np.random.default_rng(2)
+    for _ in range(30):
+        nc, na = int(rng.integers(20, 60)), int(rng.integers(3, 10))
+        y = np.r_[np.clip(rng.normal(0.95, 0.03, nc), 0, 1), rng.uniform(0.1, 0.6, na)]
+        w = np.ones(nc + na)
+        certain = np.r_[np.ones(nc, bool), np.zeros(na, bool)]
+        out = intervals.worst_case_bound(y, w, certain, ~certain, Z95)
+        assert out["bound_gap"] == pytest.approx(0.0, abs=1e-12)
+        assert out["lcb"] == pytest.approx(brute_force_minimum(y, w, certain, ~certain), abs=1e-12)
+
+
+def test_the_effective_sample_size_is_the_smallest_over_all_served_sets():
+    # ten certain items (ESS 10); one ambiguous audited hit of weight 10 would drop it to (20)^2 / 110
+    y = np.r_[np.full(10, 0.95), 0.95]
+    w = np.r_[np.ones(10), 10.0]
+    certain = np.r_[np.ones(10, bool), False]
+    out = intervals.worst_case_bound(y, w, certain, ~certain, Z95)
+    assert out["ess"] == pytest.approx(400 / 110)
+    edges = np.array([0.0])
+    cert = intervals.certify_worst_case(edges, np.r_[np.ones(10), 0.0], np.r_[np.ones(10), 1.0], y, 0.5, 0.05, 5.0, w)
+    assert cert["lam"] is None                                      # a feasible set has ESS 3.6 < 5
+    cert = intervals.certify_worst_case(edges, np.ones(11), np.ones(11), y, 0.5, 0.05, 3.0, w)
+    assert cert["lam"] == 0.0 and cert["quantization_slack"] == pytest.approx(
+        cert["mean_possible"] - cert["lcb"] - cert["slack"])
+
+
+def test_more_than_two_ambiguous_weights_are_refused():
+    y, w = np.full(6, 0.9), np.array([1.0, 1.0, 1.0, 2.0, 5.0, 10.0])
+    certain = np.array([True, True, True, False, False, False])
+    with pytest.raises(ValueError, match="at most two"):
+        intervals.worst_case_bound(y, w, certain, ~certain, Z95)
 
 
 def test_degenerate_intervals_certify_like_the_plain_procedure():

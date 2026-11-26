@@ -169,25 +169,6 @@ def score_interval(model: dict, lower: np.ndarray, upper: np.ndarray) -> tuple[n
     return low, high
 
 
-def worst_case_set(y: np.ndarray, w: np.ndarray, certain: np.ndarray, ambiguous: np.ndarray) -> np.ndarray:
-    """Served set that minimizes the weighted mean recall: the certain items plus the ambiguous items, lowest
-    recall first, while each one is below the running mean. Returns a boolean mask over all items."""
-    served = certain.copy()
-    items = np.flatnonzero(ambiguous)
-    if not len(items):
-        return served
-    items = items[np.argsort(y[items], kind="stable")]
-    total0, weighted0 = float(w[served].sum()), float((w[served] * y[served]).sum())
-    cw, cwy = np.cumsum(w[items]), np.cumsum(w[items] * y[items])
-    before_w = total0 + np.r_[0.0, cw[:-1]]
-    before_wy = weighted0 + np.r_[0.0, cwy[:-1]]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        below = (before_w <= 0) | (y[items] < before_wy / before_w)
-    take = len(items) if below.all() else int(np.argmin(below))
-    served[items[:take]] = True
-    return served
-
-
 def lower_bound(y: np.ndarray, w: np.ndarray, z: float) -> dict:
     """v10's lower confidence bound of the weighted mean recall of a served set."""
     W, S1, S2, SW2 = w.sum(), (w * y).sum(), (w * y * y).sum(), (w * w).sum()
@@ -199,25 +180,83 @@ def lower_bound(y: np.ndarray, w: np.ndarray, z: float) -> dict:
     return dict(ess=float(ess), mean=float(mean), lcb=float(mean - slack), slack=float(slack))
 
 
+def worst_case_bound(y: np.ndarray, w: np.ndarray, certain: np.ndarray, ambiguous: np.ndarray, z: float) -> dict | None:
+    """Lower bound on v10's lower confidence bound of the weighted mean recall over every served set between the
+    certain items and the certain plus ambiguous ones (None when no set is non-empty).
+
+    The lower bound of a set is mean - z sqrt(g / (W - SW2/W)) sqrt(SW2) / W with g = sum w (y - mean)^2, so the
+    set that minimizes the mean need not minimize it (an item also changes g and the effective sample size). The
+    bound is the minimum over the numbers (k1, k2) of ambiguous items of each of two weights (misses 1, audited
+    hits 1/a); W and SW2 depend on (k1, k2) only. For a given (k1, k2), with t any constant,
+        mean >= S1_low / W              (S1_low: the k lowest-recall items of each weight)
+        g <= R_t = sum w (y - t)^2      (the mean minimizes the squared deviations)
+        R_t <= R_max                    (the k items of each weight with the largest (y - t)^2)
+    so the bound is S1_low / W - z sqrt(R_max / (W - SW2/W)) sqrt(SW2) / W. It is exact when the k lowest items also
+    have the largest deviations (all of them below t). t is the mean of the best set among the "lowest k" sets,
+    whose own bound U is a feasible set's, so lcb <= true minimum <= lcb_prefix; the gap is reported.
+    The minimum effective sample size over all sets is returned as ess (it depends on (k1, k2) only)."""
+    yc, wc = y[certain], w[certain]
+    items = np.flatnonzero(ambiguous)
+    weights = np.unique(w[items]) if len(items) else np.zeros(0)
+    if len(weights) > 2:
+        raise ValueError(f"the ambiguous items have {len(weights)} distinct weights; at most two are supported "
+                         "(misses 1 and audited hits 1/a)")
+    classes = [(float(c), np.sort(y[items[w[items] == c]])) for c in weights]
+    while len(classes) < 2:
+        classes.append((0.0, np.zeros(0)))
+    (w1, y1), (w2, y2) = classes
+    k1, k2 = np.arange(len(y1) + 1)[:, None], np.arange(len(y2) + 1)[None, :]
+
+    def prefix(values: np.ndarray, power: int) -> np.ndarray:
+        return np.r_[0.0, np.cumsum(values ** power)]
+
+    W0, SW20, S10, S20 = wc.sum(), (wc * wc).sum(), (wc * yc).sum(), (wc * yc * yc).sum()
+    W = W0 + w1 * k1 + w2 * k2
+    SW2 = SW20 + w1 * w1 * k1 + w2 * w2 * k2
+    S1 = S10 + w1 * prefix(y1, 1)[k1] + w2 * prefix(y2, 1)[k2]
+    S2 = S20 + w1 * prefix(y1, 2)[k1] + w2 * prefix(y2, 2)[k2]
+    nonempty = W > 0
+    if not nonempty.any():
+        return None
+    with np.errstate(divide="ignore", invalid="ignore"):
+        mean, ess = S1 / W, W * W / SW2
+        denom = np.maximum(W - SW2 / W, 1e-12)
+        g = np.maximum(S2 - W * mean ** 2, 0.0)
+        slack = z * np.sqrt(g / denom) / np.sqrt(ess)
+        feasible = np.where(nonempty, mean - slack, np.inf)
+        best = np.unravel_index(np.argmin(feasible), feasible.shape)
+        t = float(mean[best])
+        R = (wc * (yc - t) ** 2).sum() + w1 * prefix(np.sort((y1 - t) ** 2)[::-1], 1)[k1] \
+            + w2 * prefix(np.sort((y2 - t) ** 2)[::-1], 1)[k2]
+        bound = np.where(nonempty, S1 / W - z * np.sqrt(R / denom) / np.sqrt(ess), np.inf)
+    W_all = W0 + w1 * len(y1) + w2 * len(y2)
+    lcb, lcb_prefix = float(bound.min()), float(feasible[best])
+    return dict(lcb=lcb, lcb_prefix=lcb_prefix, bound_gap=lcb_prefix - lcb, ess=float(np.where(nonempty, ess, np.inf).min()),
+                mean=float(mean[best]), slack=float(slack[best]),
+                mean_possible=float((S10 + w1 * y1.sum() + w2 * y2.sum()) / W_all), n_ambiguous=int(len(items)),
+                composition=(int(best[0]), int(best[1])))
+
+
 def certify_worst_case(edges: np.ndarray, low: np.ndarray, high: np.ndarray, y: np.ndarray, target: float,
                        delta: float, min_ess: float, weights: np.ndarray | None = None) -> dict:
-    """v10's scan over the threshold grid (strictest first, skip low ESS, stop at the first failure) with the
-    worst-case served set at each threshold. Returns lam (None if uncertified) and the set's statistics."""
+    """v10's scan over the threshold grid (strictest first, skip low ESS, stop at the first failure) where, at each
+    threshold, the lower confidence bound is the worst case over every served set the intervals allow
+    (worst_case_bound) and the effective sample size is the smallest over those sets. Returns lam (None if
+    uncertified), the bound, the slack of the worst feasible set and the quantization slack: the mean recall of all
+    possible items minus the bound minus that sampling slack (it includes the bound's looseness, bound_gap)."""
     w = np.ones(len(y)) if weights is None else np.asarray(weights, dtype=np.float64)
     z = NormalDist().inv_cdf(1.0 - delta)
     best = dict(lam=None, ess=0.0, mean=float("nan"), lcb=float("nan"), slack=float("nan"), mean_possible=float("nan"),
-                n_ambiguous=0)
+                n_ambiguous=0, bound_gap=float("nan"), quantization_slack=float("nan"))
     for lam in np.asarray(edges)[::-1]:
         certain = low >= lam
         ambiguous = (high >= lam) & ~certain
-        served = worst_case_set(y, w, certain, ambiguous)
-        stats = lower_bound(y[served], w[served], z)
-        if not np.isfinite(stats["ess"]) or stats["ess"] < min_ess:
+        stats = worst_case_bound(y, w, certain, ambiguous, z)
+        if stats is None or not np.isfinite(stats["ess"]) or stats["ess"] < min_ess:
             continue
         if stats["lcb"] >= target:
-            possible = certain | ambiguous
-            best = dict(lam=float(lam), **stats, mean_possible=float((w[possible] * y[possible]).sum() / w[possible].sum()),
-                        n_ambiguous=int(ambiguous.sum()))
+            best = dict(lam=float(lam), **stats,
+                        quantization_slack=stats["mean_possible"] - stats["lcb"] - stats["slack"])
         else:
             break
     return best

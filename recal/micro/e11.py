@@ -52,7 +52,8 @@ def stretch_rows(low, high, score, has, y, idx, W: int, policy_lam, edges, p, de
             if use.any() else dict(lam=None)
         row = dict(certified=cert["lam"] is not None, in_sample=n_stretch == 1, labeled=int(use.sum()))
         if cert["lam"] is not None:
-            row.update(sampling_slack=cert["slack"], quantization_slack=cert["mean_possible"] - cert["mean"],
+            row.update(sampling_slack=cert["slack"], quantization_slack=cert["quantization_slack"],
+                       bound_gap=cert["bound_gap"],
                        ambiguous=cert["n_ambiguous"] / max(int(use.sum()), 1))
         nxt = idx[(j + 1) * size:(j + 2) * size] if j + 1 < n_stretch else (sl if n_stretch == 1 else None)
         if nxt is not None:
@@ -111,6 +112,7 @@ def summarize_row(world, bits, share, delta, n_items, W, h0, lam_policy, stretch
         share_below_target=float(np.mean([s["recall_sum"] / s["hits"] < p.T for s in done if s["hits"]]))
         if any(s["hits"] for s in done) else float("nan"),
         sampling_slack=mean("sampling_slack", cert), quantization_slack=mean("quantization_slack", cert),
+        bound_gap_mean=mean("bound_gap", cert),
         ambiguous_share=mean("ambiguous", cert), in_sample=bool(done and done[0]["in_sample"]))
 
 
