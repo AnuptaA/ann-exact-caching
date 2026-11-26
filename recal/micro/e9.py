@@ -42,14 +42,21 @@ def one_run(prep, stream, budget, coord_bytes, lru, mini, extra=None, window=WIN
                 n_scored=r["n"], constructions=result["constructions"])
 
 
+def variants() -> list[tuple[str, bool, bool]]:
+    """(method, lru, mini cache) of the four runs per budget, in row order."""
+    return [(method, lru, mini) for method, lru in VARIANTS for mini in (True, False)]
+
+
+def run_variant(workload: str, prep: str, stream: str, budget: float, coord_bytes: float, method: str, lru: bool,
+                mini: bool, extra: list[str] | None = None, window: int = WINDOW) -> dict:
+    return dict(workload=workload, budget=budget, method=method, mini_cache=mini,
+                **one_run(prep, stream, budget, coord_bytes, lru, mini, extra, window))
+
+
 def run(workload: str, prep: str, stream: str, budget: float, coord_bytes: float, extra: list[str] | None = None,
         window: int = WINDOW) -> list[dict]:
-    rows = []
-    for method, lru in VARIANTS:
-        for mini in (True, False):
-            rows.append(dict(workload=workload, budget=budget, method=method, mini_cache=mini,
-                             **one_run(prep, stream, budget, coord_bytes, lru, mini, extra, window)))
-    return rows
+    return [run_variant(workload, prep, stream, budget, coord_bytes, method, lru, mini, extra, window)
+            for method, lru, mini in variants()]
 
 
 def sim_extra(params: dict) -> list[str]:

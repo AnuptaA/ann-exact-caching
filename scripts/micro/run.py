@@ -83,7 +83,7 @@ def finish(experiment, name, settings, directory, rows, extra, s):
 
 
 def run_workload(cfg: dict, name: str, w: dict, experiments: list[str], out_root: Path, s, params: dict,
-                 max_requests: int, window: int, force: bool) -> None:
+                 max_requests: int, window: int, force: bool, jobs: int = 1) -> None:
     budgets = budgets_for(cfg, name, w)
     settings = {e: settings_of(e, name, w, budgets, params, max_requests, window) for e in experiments}
     dirs = {e: common.out_dir(e, name, out_root) for e in experiments}
@@ -94,39 +94,76 @@ def run_workload(cfg: dict, name: str, w: dict, experiments: list[str], out_root
         else:
             pending.append(e)
     based = [e for e in pending if e in WORLD_BASED]
+    if "E7" in based and jobs > 1:
+        raise SystemExit("E7 times single-thread searches on an idle machine: run it with --jobs 1")
     rows = {e: [] for e in based}
     extra = {e: {} for e in based}
-    for budget in budgets if based else []:
-        print(f"[{name}] building the cache at budget {budget:g}")
-        world = world_mod.build_world(w["prep"], w["stream"], budget, w["coord_bytes"], name=name,
-                                      max_requests=max_requests, params=params)
+    args = [(name, w, budget, based, max_requests, params) for budget in budgets] if based else []
+    for budget_rows, budget_extra in parallel_map(world_budget, args, jobs):
         for e in based:
-            print(f"[{name}] {e} at budget {budget:g}")
-            if e == "E1":
-                rows[e] += e1.run(world)
-            elif e == "E3":
-                rows[e] += e3.run(world)
-            elif e == "E4":
-                r, d = e4.run(world)
-                rows[e] += r
-                extra[e].setdefault("diagnostics", []).append(d)
-            elif e == "E7":
-                r, d = e7.run(world)
-                rows[e] += r
-                extra[e].setdefault("summaries", []).append(d)
-            elif e == "E8":
-                rows[e] += e8.run(world)
-        del world
+            rows[e] += budget_rows[e]
+            for key, value in budget_extra[e].items():
+                extra[e].setdefault(key, []).append(value)
     for e in based:
         if e == "E1":
             extra[e]["summary"] = e1.summarize(rows[e])
         finish(e, name, settings[e], dirs[e], rows[e], extra[e], s)
     if "E9" in pending:
-        out = []
-        for budget in budgets:
-            print(f"[{name}] E9 at budget {budget:g}")
-            out += e9.run(name, w["prep"], w["stream"], budget, w["coord_bytes"], e9.sim_extra(params), window)
+        extra9 = e9.sim_extra(params)
+        tasks = [(name, w["prep"], w["stream"], budget, w["coord_bytes"], method, lru, mini, extra9, window)
+                 for budget in budgets for method, lru, mini in e9.variants()]
+        out = parallel_map(e9_task, tasks, jobs)
         finish("E9", name, settings["E9"], dirs["E9"], out, {}, s)
+
+
+def world_budget(name: str, w: dict, budget: float, based: list[str], max_requests: int,
+                 params: dict) -> tuple[dict, dict]:
+    """Build the cache of one budget and run the world-based experiments on it: rows and extras per experiment."""
+    print(f"[{name}] building the cache at budget {budget:g}", flush=True)
+    world = world_mod.build_world(w["prep"], w["stream"], budget, w["coord_bytes"], name=name,
+                                  max_requests=max_requests, params=params)
+    rows = {}
+    extra = {e: {} for e in based}
+    for e in based:
+        print(f"[{name}] {e} at budget {budget:g}", flush=True)
+        if e == "E1":
+            rows[e] = e1.run(world)
+        elif e == "E3":
+            rows[e] = e3.run(world)
+        elif e == "E4":
+            rows[e], extra[e]["diagnostics"] = e4.run(world)
+        elif e == "E7":
+            rows[e], extra[e]["summaries"] = e7.run(world)
+        elif e == "E8":
+            rows[e] = e8.run(world)
+    print(f"[{name}] budget {budget:g} done", flush=True)
+    return rows, extra
+
+
+def e9_task(name, prep, stream, budget, coord_bytes, method, lru, mini, extra, window) -> dict:
+    print(f"[{name}] E9 at budget {budget:g}: {method}, mini cache {'on' if mini else 'off'}", flush=True)
+    row = e9.run_variant(name, prep, stream, budget, coord_bytes, method, lru, mini, extra, window)
+    print(f"[{name}] E9 at budget {budget:g}: {method}, mini cache {'on' if mini else 'off'} done", flush=True)
+    return row
+
+
+def _limit_blas(threads: int) -> None:
+    from threadpoolctl import threadpool_limits
+    threadpool_limits(limits=threads)
+
+
+def parallel_map(fn, tasks: list[tuple], jobs: int) -> list:
+    """fn(*task) for every task, in task order; with jobs > 1 in forked worker processes."""
+    if jobs <= 1 or len(tasks) <= 1:
+        return [fn(*t) for t in tasks]
+    from concurrent.futures import ProcessPoolExecutor
+    import multiprocessing
+    import os
+    workers = min(jobs, len(tasks))
+    threads = max(1, len(os.sched_getaffinity(0)) // workers)
+    with ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("fork"),
+                             initializer=_limit_blas, initargs=(threads,)) as pool:
+        return list(pool.map(fn, *zip(*tasks)))
 
 
 def main(argv=None) -> int:
@@ -141,12 +178,15 @@ def main(argv=None) -> int:
     ap.add_argument("--max-requests", type=int, default=0, help="shorten the streams (tests)")
     ap.add_argument("--params", default="{}", help="JSON of recal.params.Params overrides (tests)")
     ap.add_argument("--window", type=int, default=DEFAULT_WINDOW, help="E9 window of main-path requests")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="worker processes: budgets of the world-based experiments, E9 runs (not with E7)")
     a = ap.parse_args(argv)
     cfg = json.loads(a.config.read_text())
     experiments = parse_experiments(a.experiments)
     s = None if a.no_upload else store_mod.open_store(a.store)
     for name, w in workloads_for(cfg, a.dataset).items():
-        run_workload(cfg, name, w, experiments, a.out, s, json.loads(a.params), a.max_requests, a.window, a.force)
+        run_workload(cfg, name, w, experiments, a.out, s, json.loads(a.params), a.max_requests, a.window, a.force,
+                     a.jobs)
     return 0
 
 

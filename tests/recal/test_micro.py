@@ -207,3 +207,23 @@ def test_prepare_reports_skipped_stages(capsys):
     out = capsys.readouterr().out
     assert code == 0 and "[spacev] diskann_index: skipped (not in --stages)" in out
     assert "[spacev] prep" in out and "[spacev] fetch" in out and "[spacev] fetch: skipped" not in out
+
+
+def same(a, b) -> bool:
+    """Equality that treats NaN as equal to NaN."""
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def test_jobs_give_the_serial_rows_in_order(tiny):
+    w = json.loads((tiny / "matrix.json").read_text())["workloads"]["tiny-a"]
+    args = [("tiny-a", w, b, ["E1", "E8"], 2000, PARAMS) for b in (BUDGET, 0.4)]
+    assert same(micro_run.parallel_map(micro_run.world_budget, args, 2),
+                micro_run.parallel_map(micro_run.world_budget, args, 1))
+    extra = e9.sim_extra(PARAMS) + ["--max-requests", "1500"]
+    tasks = [("tiny-a", w["prep"], w["stream"], BUDGET, 4, m, lru, mini, extra, 200) for m, lru, mini in e9.variants()]
+    assert same(micro_run.parallel_map(micro_run.e9_task, tasks, 4), micro_run.parallel_map(micro_run.e9_task, tasks, 1))
+
+
+def test_e7_is_refused_with_jobs(tiny):
+    with pytest.raises(SystemExit, match="E7"):
+        run_cli(tiny, "--experiments", "E7", "--jobs", "2", "--no-upload", "--force")
