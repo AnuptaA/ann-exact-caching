@@ -242,7 +242,7 @@
   },
   "medrag": {
    "fetch": "--medrag",
-   "base": "datasets/medrag/medrag-ip-docs.npy",
+   "base": "datasets/aker/medrag-ip-docs.npy",
    "diskann_pq_bytes": 256
   },
   "laion": {
