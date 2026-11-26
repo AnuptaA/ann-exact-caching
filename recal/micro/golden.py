@@ -94,12 +94,13 @@ def check(world: w.World, n_held: int = N_HELD, n_cal: int = N_CAL, seed: int = 
         return dict(skipped="no entries")
     early = truth_checks(world, scan_rows)
     if early["truth_failures"]:
-        failures = {name: 1 for name in early["truth_failures"]}
+        failures = {name: "the stored answers do not describe the corpus vectors"
+                    for name in early["truth_failures"]}
         if strict:
             raise GoldenFailure(f"golden comparison failed at {world.name} budget {world.budget:g}: "
                                 + ", ".join(failures) + ": the stored top-500 answers do not describe the corpus "
                                 "vectors (wrong file or metric); rerun the prep stage")
-        return dict(early, failures=failures, ok=False)
+        return dict(early, failures={}, check_failures=failures, ok=False)
     Q, truth = sample_queries(world, n_held, n_cal, seed)
     m = world.m
     feat, cand_ids, cand_d = core.candidates_batch(Q, K, m)
@@ -113,8 +114,13 @@ def check(world: w.World, n_held: int = N_HELD, n_cal: int = N_CAL, seed: int = 
     bad: dict = {}
     stats = dict(n_queries=len(Q), m=int(m), boundary_queries=0, tie_at_k_queries=0, id_set_mismatch=0)
 
+    checks: dict = {}
+
     def flag(name: str, i: int) -> None:
         bad.setdefault(name, []).append(i)
+
+    def fail_check(name: str, detail: str) -> None:
+        checks[name] = detail
 
     for i, q in enumerate(Q):
         read = reads[i][reads[i] >= 0]
@@ -158,27 +164,29 @@ def check(world: w.World, n_held: int = N_HELD, n_cal: int = N_CAL, seed: int = 
             flag("entries_needed", i)
 
     try:
-        stats.update(all_entries_and_bounds(world, Q[:ne], flag))
+        stats.update(all_entries_and_bounds(world, Q[:ne], flag, fail_check))
     except RuntimeError as error:
-        flag("shell_membership", 0)
+        fail_check("shell_membership", str(error))
         stats["shell_membership_error"] = str(error)
-    stats.update(synthetic_certification(flag))
+    stats.update(synthetic_certification(fail_check))
     stats.update(early)
     stats.update(duplicate_diagnostics(world, Q, truth, cand_ids))
     stats["read_set_recall_vs_exact"] = read_set_recall(world, Q[:ne], reads[:ne], centers, m)
-    failures = {name: len(rows) for name, rows in bad.items()}
-    failures.update({name: 1 for name in stats.get("truth_failures", [])})
-    summary = dict(stats, failures=failures, ok=not failures)
-    if failures and strict:
+    for name in stats.get("truth_failures", []):
+        fail_check(name, "the stored answers do not describe the corpus vectors")
+    failures = {name: len(set(rows)) for name, rows in bad.items()}
+    summary = dict(stats, failures=failures, check_failures=checks, ok=not failures and not checks)
+    if (failures or checks) and strict:
+        parts = [f"{k}: {v} of {len(Q)} queries disagree" for k, v in failures.items()]
+        parts += [f"{k} (whole check): {v}" for k, v in checks.items()]
         raise GoldenFailure("golden comparison failed (core and Python definitions disagree) at "
-                            f"{world.name} budget {world.budget:g}: " +
-                            ", ".join(f"{k}: {v} of {len(Q)} queries" for k, v in failures.items()) +
+                            f"{world.name} budget {world.budget:g}: " + "; ".join(parts) +
                             ". Fix the Python side (or the core) before running experiments; "
                             "see recal/micro/golden.py for the tolerances.")
     return summary
 
 
-def all_entries_and_bounds(world: w.World, Q: np.ndarray, flag) -> dict:
+def all_entries_and_bounds(world: w.World, Q: np.ndarray, flag, fail_check) -> dict:
     """Features over every entry equal the core at m = 0; bounds at e = 0 contain them and collapse."""
     K, core = world.k, world.core
     feats = intervals.Features(world, c=world.built.n_entries)
@@ -195,7 +203,8 @@ def all_entries_and_bounds(world: w.World, Q: np.ndarray, flag) -> dict:
         if abs(rate_core - exact[i, 2]) > 1e-9:
             shell_boundary += 1
     if shell_boundary > max(1, len(Q) // 50):
-        flag("all_rate", 0)
+        fail_check("all_rate", f"{shell_boundary} of {len(Q)} queries differ in rate over all entries "
+                               f"(allowed {max(1, len(Q) // 50)})")
     low, high = feats.bounds(Q, np.zeros(len(Q)))
     ok = np.isfinite(exact).all(axis=1)
     for i in np.flatnonzero(ok):
@@ -206,7 +215,7 @@ def all_entries_and_bounds(world: w.World, Q: np.ndarray, flag) -> dict:
     return dict(all_entries_rate_mismatch=shell_boundary)
 
 
-def synthetic_certification(flag) -> dict:
+def synthetic_certification(fail_check) -> dict:
     """certify_worst_case with zero-width intervals equals the plain procedure (fit.certify)."""
     rng = np.random.default_rng(1)
     score = rng.uniform(size=800)
@@ -216,7 +225,7 @@ def synthetic_certification(flag) -> dict:
     plain = fit.certify(score, score, y, 0.9, 0.05, 30.0, weights)
     wc = intervals.certify_worst_case(edges, score, score, y, 0.9, 0.05, 30.0, weights)
     if plain.lam != wc["lam"]:
-        flag("certify_worst_case", 0)
+        fail_check("certify_worst_case", f"lambda {wc['lam']} against the plain procedure's {plain.lam}")
     return dict(certify_lambda=plain.lam)
 
 

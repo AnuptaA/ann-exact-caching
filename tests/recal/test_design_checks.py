@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 
 from recal import policy, prepare
-from recal.micro import (common, e1, e3, e4, e7, e10, e11, e12, e13, fit, intervals, intruder_check, preflight,
-                         units as units_mod, world as world_mod)
+from recal.micro import (common, e1, e3, e4, e7, e10, e11, e12, e13, fit, golden, intervals, intruder_check,
+                         preflight, quantize, units as units_mod, world as world_mod)
 from scripts.micro import run as micro_run, summarize
 
 PARAMS = {"H": 900, "cold_start": 500, "min_ess": 30.0}
@@ -55,6 +55,43 @@ def test_e4_shells_never_hold_cached_vectors(world):
     assert not any(pool & set(shell.tolist()) for shell in table.shell_ids)
     assert any(set(shell.tolist()) & pool for shell in e4.EntryTable(world, exclude_pool=False).shell_ids)
     assert len(intruder_check.shell_slot_ids(world, table)) == world.core.n_shell_slots()
+
+
+def test_shell_codes_round_ties_like_the_core():
+    from recal.core import Core
+    d = 6
+    core = Core(d, 10)
+    core.set_quantizer(np.zeros(d, np.float32), np.full(d, 30.0, np.float32))   # step 2: odd values are ties
+    X = np.array([[1, 3, 5, 7, 9, 29], [11, 13, 15, 17, 19, 21], [0, 2, 4, 30, 31, -1]], np.float32)
+    entry = core.add_entry(np.zeros(d, np.float32), 1, 1, np.array([100]), np.zeros((1, d), np.float32), 1.0)
+    core.add_shell(entry, np.arange(len(X)), X)
+    codes = core.shell_codes()
+    got = np.zeros((len(X), d), np.int64)
+    got[:, 0::2], got[:, 1::2] = codes & 15, codes >> 4
+    assert (quantize.shell_codes(X, *core.quantizer()) == got).all()
+    assert (np.clip(np.rint(X / 2), 0, 15) != got).any()   # round half to even disagrees on these ties
+
+
+def test_golden_fails_loudly_on_a_wrong_quantizer_range(world, monkeypatch):
+    real = quantize.shell_codes
+    monkeypatch.setattr(intruder_check.quantize, "shell_codes", lambda X, lo, step: real(X, lo + 0.5 * step, step))
+    with pytest.raises(golden.GoldenFailure, match=r"shell_membership \(whole check\): \d+ of \d+ shell slots"):
+        golden.check(world)
+
+
+def test_golden_fails_loudly_on_a_corrupted_slot_mapping(world, monkeypatch):
+    real = world.entries
+
+    def swapped():
+        entries = real()
+        multi = [e for e in entries if len(e["shell_slots"]) > 1]
+        for e in multi:
+            e["shell_slots"] = list(e["shell_slots"])[::-1]
+        return entries
+
+    monkeypatch.setattr(world, "entries", swapped)
+    with pytest.raises(golden.GoldenFailure, match="shell_membership"):
+        golden.check(world)
 
 
 # ---- part 2: intervals ---------------------------------------------------------------------------------------------

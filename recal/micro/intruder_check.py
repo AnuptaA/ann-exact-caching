@@ -11,7 +11,7 @@ definitions. nr is the core's for a, b, c and E4's own for d.
 
 import numpy as np
 
-from recal.micro import e1, e4, fit, world as w
+from recal.micro import e1, e4, fit, quantize, world as w
 
 NAME = "intruder_check"
 MAX_QUERIES = 4000
@@ -49,7 +49,7 @@ def shell_slot_ids(world: w.World, table: e4.EntryTable) -> np.ndarray:
     if (ids < 0).any():
         raise RuntimeError("some shell slots of the core belong to no entry")
     lo, step = core.quantizer()
-    want = np.clip(np.rint((np.asarray(world.db[ids], dtype=np.float32) - lo) / step), 0, 15).astype(np.uint8)
+    want = quantize.shell_codes(world.db[ids], lo, step)
     codes = core.shell_codes()
     got = np.zeros_like(want)
     got[:, 0::2] = (codes & 15)[:, :want[:, 0::2].shape[1]]
