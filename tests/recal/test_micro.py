@@ -222,8 +222,9 @@ def test_jobs_give_the_serial_units(tiny):
     w = json.loads((tiny / "matrix.json").read_text())["workloads"]["tiny-a"]
     out = {}
     for jobs in (1, 2):
-        ctx = micro_run.Context({e: tiny / f"jobs{jobs}" / e for e in ("E1", "E8")},
-                                {e: {"experiment": e} for e in ("E1", "E8")}, None, False, "tiny-a")
+        names = ("E1", "E8", "golden")
+        ctx = micro_run.Context({e: tiny / f"jobs{jobs}" / e for e in names}, {e: {"experiment": e} for e in names},
+                                None, False, "tiny-a")
         args = [("tiny-a", w, b, ["E1", "E8"], 2000, PARAMS, 1, ctx) for b in (BUDGET, 0.4)]
         micro_run.parallel_map(micro_run.world_budget, args, jobs)
         out[jobs] = {e: unit_payloads(ctx.dirs[e]) for e in ctx.dirs}

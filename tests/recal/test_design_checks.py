@@ -62,6 +62,7 @@ def test_e4_shells_never_hold_cached_vectors(world):
 def synthetic_features(rng, c):
     d, n_entries, n_pool, n_slots = 8, 40, 200, 150
     feats = object.__new__(intervals.Features)
+    feats.world = None
     feats.k, feats.c = 5, c
     feats.centers = rng.normal(size=(n_entries, d)).astype(np.float32)
     feats.radius = rng.uniform(1.0, 3.0, size=n_entries)
@@ -168,11 +169,13 @@ def test_e12_stale_features_give_a_correlated_model(world):
 def test_e13_exact_search_over_few_centers_is_reproduced(world):
     pytest.importorskip("hnswlib")
     rows, summary = e13.run(world)
-    assert len(rows) == len(e13.CS) * len(e13.DEGREES) * len(e13.EFS)
-    top = [r for r in rows if r["ef"] == max(e13.EFS)]
+    index_rows = [r for r in rows if r["c"] != "m"]
+    assert len(index_rows) == len(e13.CS) * len(e13.DEGREES) * len(e13.EFS)
+    assert [r["c"] for r in rows].count("m") == 1
+    top = [r for r in index_rows if r["ef"] == max(e13.EFS)]
     assert all(r["set_recall"] == 1.0 and r["best_fit_in_set_share"] == 1.0 and r["features_identical_share"] == 1.0
                for r in top)
-    assert set(summary["smallest_for_99"]) == {"c8", "c16", "c32"}
+    assert set(summary["smallest_for_99"]) == {"c8", "c16", "c32"} and summary["core_m_path"]["m"] == world.m
 
 
 def test_e7_extended_columns(world):
