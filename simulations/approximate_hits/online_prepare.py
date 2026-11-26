@@ -256,7 +256,8 @@ def main():
             from simulations.approximate_hits.run_e2e_oracle import exact_topk_blocked
             db = load_base(args.trace)
             logger.info(f"exact top-{args.R} for {len(q)} queries over {len(db)} vectors...")
-            ids = exact_topk_blocked(uniq, db, args.R)
+            from workloads.q1.device import default_threads
+            ids = exact_topk_blocked(uniq, db, args.R, workers=default_threads())
         np.save(out / f"top{args.R}.npy", ids.astype(np.int32))
     logger.info(f"wrote {out}")
 

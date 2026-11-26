@@ -70,7 +70,7 @@ def exact_topk(queries: np.ndarray, db: np.ndarray, k: int, chunk: int = 1000) -
 
 
 def exact_topk_blocked(queries: np.ndarray, db: np.ndarray, k: int,
-                       q_chunk: int = 4096, db_block: int = 500_000) -> np.ndarray:
+                       q_chunk: int = 4096, db_block: int = 500_000, workers: int = 1) -> np.ndarray:
     """Exact top-k ids for large databases, blocked over queries and database.
 
     Two stages per database block. Screen: one float32 matmul of [q, 1] with
@@ -80,6 +80,9 @@ def exact_topk_blocked(queries: np.ndarray, db: np.ndarray, k: int,
     survivors, merged into the running top-k. Every true top-k vector passes
     the screen, so the result is exact. Ties are broken by lower id. Output
     rows are sorted by (distance, id).
+
+    With workers > 1, query chunks run on a thread pool with BLAS capped at one
+    thread each (the merge is single-threaded, so this uses every core).
     """
     n, dim = db.shape
     xa = np.empty((n, dim + 1), dtype=np.float32)
@@ -91,42 +94,62 @@ def exact_topk_blocked(queries: np.ndarray, db: np.ndarray, k: int,
         xa[b:b + len(xb), dim] = -0.5 * db_sq[b:b + len(xb)]
     max_db_sq = float(db_sq.max())
     out = np.empty((len(queries), k), dtype=np.int64)
-    buf = np.empty((min(q_chunk, len(queries)), min(db_block, n)), dtype=np.float32)
-    for s0 in range(0, len(queries), q_chunk):
-        q64 = np.asarray(queries[s0:s0 + q_chunk], dtype=np.float64)
-        c = len(q64)
-        qa = np.ones((c, dim + 1), dtype=np.float32)
-        qa[:, :dim] = q64
-        q_sq = np.einsum("ij,ij->i", q64, q64)
-        # float32 screening error is far below this slack
-        slack = 1e-4 * (float(q_sq.max()) + max_db_sq + 1.0)
-        best_d = np.full((c, k), np.inf)
-        best_i = np.full((c, k), -1, dtype=np.int64)
-        for b in range(0, n, db_block):
-            nb = min(db_block, n - b)
-            s = np.matmul(qa, xa[b:b + nb].T, out=buf[:c, :nb])
-            if np.isinf(best_d[:, -1]).any():
-                thr = np.partition(s, nb - k, axis=1)[:, nb - k].astype(np.float64)
-                known = ~np.isinf(best_d[:, -1])
-                thr[known] = np.maximum(thr[known], 0.5 * (q_sq[known] - best_d[known, -1]))
-            else:
-                thr = 0.5 * (q_sq - best_d[:, -1])
-            rows, cols = np.nonzero(s >= (thr - slack)[:, None].astype(np.float32))
-            ids = cols.astype(np.int64) + b
-            diff = q64[rows] - np.asarray(db[ids], dtype=np.float64)
-            d_new = np.einsum("ij,ij->i", diff, diff)
-            # merge: k smallest by (distance, id) per row
-            all_r = np.concatenate([np.repeat(np.arange(c), k), rows])
-            all_d = np.concatenate([best_d.ravel(), d_new])
-            all_i = np.concatenate([best_i.ravel(), ids])
-            order = np.lexsort((all_i, all_d, all_r))
-            all_r, all_d, all_i = all_r[order], all_d[order], all_i[order]
-            starts = np.searchsorted(all_r, np.arange(c))
-            keep = (np.arange(len(all_r)) - starts[all_r]) < k
-            best_d = all_d[keep].reshape(c, k)
-            best_i = all_i[keep].reshape(c, k)
-        out[s0:s0 + c] = best_i
+    if workers > 1:
+        q_chunk = min(q_chunk, max(1, -(-len(queries) // (4 * workers))), 256)
+    starts = range(0, len(queries), q_chunk)
+
+    def run(s0: int) -> None:
+        out[s0:s0 + q_chunk] = _blocked_chunk(queries[s0:s0 + q_chunk], db, xa, max_db_sq, k, db_block)
+
+    if workers <= 1:
+        for s0 in starts:
+            run(s0)
+        return out
+    from concurrent.futures import ThreadPoolExecutor
+    from threadpoolctl import threadpool_limits
+    with threadpool_limits(limits=1), ThreadPoolExecutor(workers) as pool:
+        list(pool.map(run, starts))
     return out
+
+
+def _blocked_chunk(queries: np.ndarray, db: np.ndarray, xa: np.ndarray, max_db_sq: float, k: int,
+                   db_block: int) -> np.ndarray:
+    """Exact top-k ids for one query chunk (see exact_topk_blocked)."""
+    n, dim = db.shape
+    q64 = np.asarray(queries, dtype=np.float64)
+    c = len(q64)
+    buf = np.empty((c, min(db_block, n)), dtype=np.float32)
+    qa = np.ones((c, dim + 1), dtype=np.float32)
+    qa[:, :dim] = q64
+    q_sq = np.einsum("ij,ij->i", q64, q64)
+    # float32 screening error is far below this slack
+    slack = 1e-4 * (float(q_sq.max()) + max_db_sq + 1.0)
+    best_d = np.full((c, k), np.inf)
+    best_i = np.full((c, k), -1, dtype=np.int64)
+    for b in range(0, n, db_block):
+        nb = min(db_block, n - b)
+        s = np.matmul(qa, xa[b:b + nb].T, out=buf[:, :nb])
+        if np.isinf(best_d[:, -1]).any():
+            thr = np.partition(s, nb - k, axis=1)[:, nb - k].astype(np.float64)
+            known = ~np.isinf(best_d[:, -1])
+            thr[known] = np.maximum(thr[known], 0.5 * (q_sq[known] - best_d[known, -1]))
+        else:
+            thr = 0.5 * (q_sq - best_d[:, -1])
+        rows, cols = np.nonzero(s >= (thr - slack)[:, None].astype(np.float32))
+        ids = cols.astype(np.int64) + b
+        diff = q64[rows] - np.asarray(db[ids], dtype=np.float64)
+        d_new = np.einsum("ij,ij->i", diff, diff)
+        # merge: k smallest by (distance, id) per row
+        all_r = np.concatenate([np.repeat(np.arange(c), k), rows])
+        all_d = np.concatenate([best_d.ravel(), d_new])
+        all_i = np.concatenate([best_i.ravel(), ids])
+        order = np.lexsort((all_i, all_d, all_r))
+        all_r, all_d, all_i = all_r[order], all_d[order], all_i[order]
+        starts = np.searchsorted(all_r, np.arange(c))
+        keep = (np.arange(len(all_r)) - starts[all_r]) < k
+        best_d = all_d[keep].reshape(c, k)
+        best_i = all_i[keep].reshape(c, k)
+    return best_i
 
 
 def run_target(target, cand_vectors, score_topk, test_topk, n_db, k,

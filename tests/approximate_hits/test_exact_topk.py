@@ -41,3 +41,14 @@ def test_float_matches_brute_force_distances():
     want_d = np.take_along_axis(d, want, axis=1)
     assert np.allclose(got_d, want_d, rtol=1e-5, atol=1e-6)
     assert np.mean(np.sort(got, axis=1) == np.sort(want, axis=1)) > 0.99
+
+
+def test_workers_match_serial():
+    rng = np.random.default_rng(2)
+    db = rng.integers(-3, 4, size=(3000, 8)).astype(np.int8)
+    q = rng.integers(-3, 4, size=(90, 8)).astype(np.int8)
+    serial = exact_topk_blocked(q, db, 20, q_chunk=16, db_block=700)
+    parallel = exact_topk_blocked(q, db, 20, q_chunk=16, db_block=700, workers=4)
+    want, _ = _brute(q, db, 20, tie_by_id=True)
+    assert np.array_equal(parallel, serial)
+    assert np.array_equal(parallel, want)
