@@ -25,7 +25,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--prep", required=True)
     ap.add_argument("--stream", default="trace")
-    ap.add_argument("--backend", choices=["exact", "file"], default="file")
+    ap.add_argument("--backend", choices=["exact", "stored", "file"], default="file")
     ap.add_argument("--backend-file", default=None)
     ap.add_argument("--backend-target", default="0.95")
     ap.add_argument("--coord-bytes", type=float, default=4.0)

@@ -88,8 +88,9 @@ def push_stage(s, cfg: dict, dataset: str, stage, root: Path, upload: bool) -> d
 
 
 def prepare_dataset(cfg: dict, dataset: str, s=None, dry_run: bool = False, upload_restricted: bool = False,
-                    root: Path = Path("."), force: bool = False) -> dict:
-    """Run every stage of the dataset; returns its manifest (also pushed when a store is given)."""
+                    root: Path = Path("."), force: bool = False, selected: list[str] | None = None) -> dict:
+    """Run the stages of the dataset (all, or the selected ones); returns its manifest (also pushed when a store is
+    given). Stages that are not selected are reported as skipped."""
     upload = dataset not in prepare.RESTRICTED or upload_restricted
     manifest = {"dataset": dataset, "artifacts": {}, "uploaded": bool(s is not None and upload)}
     if dataset == "tiny":
@@ -100,7 +101,12 @@ def prepare_dataset(cfg: dict, dataset: str, s=None, dry_run: bool = False, uplo
             stage = prepare.Stage(name, name, ["make_tiny"], artifacts.local_paths(cfg, "tiny")[name])
             manifest["artifacts"][name] = push_stage(s, cfg, dataset, stage, root, upload)
         return manifest
-    for stage in prepare.stages(cfg, dataset):
+    if selected is not None:
+        every = {st.name for st in prepare.stages(cfg, dataset)}
+        for name in prepare.STAGE_NAMES:
+            if name in every and name not in selected:
+                print(f"[{dataset}] {name}: skipped (not in --stages)")
+    for stage in prepare.stages(cfg, dataset) if selected is None else prepare.stages(cfg, dataset, selected):
         if dry_run:
             print(f"[{dataset}] {stage.name}" + (f" -> {stage.artifact}" if stage.artifact else ""))
             for cmd in stage.commands:
@@ -158,10 +164,16 @@ def main(argv=None) -> int:
     ap.add_argument("--upload-restricted", action="store_true", help="also upload TripClick-derived artifacts")
     ap.add_argument("--dry-run", action="store_true", help="print the stage commands only")
     ap.add_argument("--force", action="store_true", help="redo stages that are marked done")
+    ap.add_argument("--stages", default=None,
+                    help="comma-separated stages to run, others are skipped (for example fetch,prep,working_set)")
     ap.add_argument("--check", action="store_true",
                     help="verify a finished prepare (every artifact of the manifest exists with its checksum)")
     ap.add_argument("--out", type=Path, default=Path("results/manifests"))
     a = ap.parse_args(argv)
+    try:
+        selected = None if a.stages is None else prepare.parse_stage_names(a.stages)
+    except ValueError as e:
+        ap.error(str(e))
     cfg = json.loads(a.config.read_text())
     names = artifacts.datasets(cfg) if a.dataset == "all" else [a.dataset]
     if a.check:
@@ -173,7 +185,8 @@ def main(argv=None) -> int:
         return 1 if failed else 0
     s = None if a.no_upload or a.dry_run else store_mod.open_store(a.store)
     for dataset in names:
-        manifest = prepare_dataset(cfg, dataset, s, a.dry_run, a.upload_restricted, force=a.force)
+        manifest = prepare_dataset(cfg, dataset, s, a.dry_run, a.upload_restricted, force=a.force,
+                                   selected=selected)
         if not a.dry_run:
             a.out.mkdir(parents=True, exist_ok=True)
             (a.out / f"{dataset}.json").write_text(json.dumps(manifest, indent=1))

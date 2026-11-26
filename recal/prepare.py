@@ -162,10 +162,12 @@ def update_stage(cfg: dict, dataset: str) -> Stage | None:
     return Stage("update_preps", "update_preps", cmds, artifacts.local_paths(cfg, dataset)["update_preps"])
 
 
-def medrag_stages(cfg: dict) -> list[Stage]:
+def medrag_stages(cfg: dict, exact_labels: bool = False) -> list[Stage]:
+    """The working-set sweep; with exact_labels it reads the stored exact answers instead of the DiskANN ones."""
     w = artifacts.workloads_of(cfg, "medrag")["medrag"]
+    source = "--backend stored" if exact_labels else f"--backend-file {w['diskann_file']}"
     cmd = (f"PYTHONPATH=. {PY} -m scripts.medrag_working_set --prep {w['prep']} --stream {w['stream']} "
-           f"--backend-file {w['diskann_file']} --coord-bytes {w['coord_bytes']:g} --out {cfg['medrag_budgets_file']}")
+           f"{source} --coord-bytes {w['coord_bytes']:g} --out {cfg['medrag_budgets_file']}")
     return [Stage("medrag_budgets", "medrag_budgets", [cmd], artifacts.local_paths(cfg, "medrag")["medrag_budgets"])]
 
 
@@ -179,17 +181,35 @@ def qvcache_stage(cfg: dict, dataset: str) -> Stage | None:
     return Stage("qvcache_memory", None, [cmd])
 
 
-def stages(cfg: dict, dataset: str) -> list[Stage]:
-    """All stages of a dataset in dependency order."""
+STAGE_ALIASES = {"working_set": "medrag_budgets"}
+STAGE_NAMES = ("fetch", "base", "prep", "diskann_index", "diskann_answers", "medrag_budgets", "pgvector_db",
+               "shift_preps", "update_preps", "qvcache_memory")
+
+
+def parse_stage_names(text: str) -> list[str]:
+    """Comma-separated stage names (aliases allowed) as canonical names; unknown names raise ValueError."""
+    names = [STAGE_ALIASES.get(n.strip(), n.strip()) for n in text.split(",") if n.strip()]
+    unknown = [n for n in names if n not in STAGE_NAMES]
+    if unknown:
+        raise ValueError(f"unknown stage(s) {', '.join(unknown)}; stages are {', '.join(STAGE_NAMES)} "
+                         f"(alias: working_set = medrag_budgets)")
+    return names
+
+
+def stages(cfg: dict, dataset: str, selected: list[str] | None = None) -> list[Stage]:
+    """All stages of a dataset in dependency order, or the selected ones.
+
+    A selection without the DiskANN answers makes the MedRAG working-set sweep read the exact answers.
+    """
     out = [fetch_stage(cfg, dataset)]
     if dataset == "laion":
         out.append(laion_base_stage(cfg, dataset))
     out += [prep_stage(cfg, dataset), *diskann_stages(cfg, dataset)]
     if dataset == "medrag":
-        out += medrag_stages(cfg)
+        out += medrag_stages(cfg, exact_labels=selected is not None and "diskann_answers" not in selected)
     out += [s for s in (pgvector_stage(cfg, dataset), shift_stage(cfg, dataset), update_stage(cfg, dataset),
                         qvcache_stage(cfg, dataset)) if s is not None]
-    return out
+    return out if selected is None else [s for s in out if s.name in selected]
 
 
 # ---- tiny dataset: every stage in process, for tests ------------------------------------------------------------

@@ -356,12 +356,18 @@ SHARD_BY ?= workload
 RECAL_PY ?= .venv-core/bin/python
 MATRIX_FILTERS = $(if $(SYSTEM),--system $(SYSTEM),) $(if $(WORKLOAD),--workload $(WORKLOAD),)
 
-.PHONY: prepare shards run q1 q2 q3 q4 reduce status
+.PHONY: prepare micro shards run q1 q2 q3 q4 reduce status
 
-# make prepare DATASET=<spacev|triviaqa|medrag|tripclick|all>: build the shared artifacts and push them to the store
+# make prepare DATASET=<spacev|triviaqa|medrag|tripclick|all> [STAGES=fetch,prep,working_set]: build the shared
+# artifacts and push them to the store (STAGES runs only those stages)
 prepare:
 	@test -n "$(DATASET)" || { echo "set DATASET=<spacev|triviaqa|medrag|tripclick|all>"; exit 1; }
-	$(RECAL_PY) -m scripts.prepare --config $(MATRIX) --dataset $(DATASET)
+	$(RECAL_PY) -m scripts.prepare --config $(MATRIX) --dataset $(DATASET) $(if $(STAGES),--stages $(STAGES),)
+
+# make micro DATASET=<spacev|triviaqa|medrag|laion>: the six micro-experiments (E1 E3 E4 E7 E8 E9), pushed to micro/
+micro:
+	@test -n "$(DATASET)" || { echo "set DATASET=<spacev|triviaqa|medrag|laion>"; exit 1; }
+	PYTHONPATH=. $(RECAL_PY) -m scripts.micro.run --dataset $(DATASET) --experiments E1,E3,E4,E7,E8,E9
 
 # Shard job files in $(JOBS)/shards, one per workload (SHARD_BY=question|system)
 shards:
