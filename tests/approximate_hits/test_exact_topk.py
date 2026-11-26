@@ -52,3 +52,14 @@ def test_workers_match_serial():
     want, _ = _brute(q, db, 20, tie_by_id=True)
     assert np.array_equal(parallel, serial)
     assert np.array_equal(parallel, want)
+
+
+def test_workers_shrink_chunks_when_memory_is_short(monkeypatch):
+    import simulations.approximate_hits.run_e2e_oracle as mod
+    monkeypatch.setattr(mod, "_available_bytes", lambda: 1)
+    assert mod._chunk_for_memory(32, 500_000, 500, 769) == 1
+    rng = np.random.default_rng(3)
+    db = rng.integers(-3, 4, size=(3000, 8)).astype(np.int8)
+    q = rng.integers(-3, 4, size=(40, 8)).astype(np.int8)
+    want, _ = _brute(q, db, 20, tie_by_id=True)
+    assert np.array_equal(exact_topk_blocked(q, db, 20, db_block=700, workers=4), want)

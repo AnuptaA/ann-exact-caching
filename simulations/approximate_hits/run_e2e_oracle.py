@@ -18,6 +18,7 @@ Output: hit rate (fraction of test queries served from cache) vs cache size
 (fraction of database vectors), one line per retention target.
 """
 
+import os
 import sys
 import json
 import argparse
@@ -95,7 +96,8 @@ def exact_topk_blocked(queries: np.ndarray, db: np.ndarray, k: int,
     max_db_sq = float(db_sq.max())
     out = np.empty((len(queries), k), dtype=np.int64)
     if workers > 1:
-        q_chunk = min(q_chunk, max(1, -(-len(queries) // (4 * workers))), 256)
+        q_chunk = min(q_chunk, max(1, -(-len(queries) // (4 * workers))), 256,
+                      _chunk_for_memory(workers, min(db_block, n), k, dim))
     starts = range(0, len(queries), q_chunk)
 
     def run(s0: int) -> None:
@@ -110,6 +112,25 @@ def exact_topk_blocked(queries: np.ndarray, db: np.ndarray, k: int,
     with threadpool_limits(limits=1), ThreadPoolExecutor(workers) as pool:
         list(pool.map(run, starts))
     return out
+
+
+def _chunk_for_memory(workers: int, db_block: int, k: int, dim: int, share: float = 0.6) -> int:
+    """Largest query chunk whose working arrays, over all workers, fit in a share of the available memory.
+
+    Per query: the float32 scores, their partitioned copy and the screen mask over a database block, and three
+    float64 arrays over at least k refined survivors (query rows, database rows, differences)."""
+    per_query = db_block * 9 + k * dim * 24
+    return max(1, int(share * _available_bytes()) // (workers * per_query))
+
+
+def _available_bytes() -> int:
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_AVPHYS_PAGES")
 
 
 def _blocked_chunk(queries: np.ndarray, db: np.ndarray, xa: np.ndarray, max_db_sq: float, k: int,
