@@ -15,7 +15,7 @@ from statistics import NormalDist
 
 import numpy as np
 
-from recal.micro import e4, intruder_check
+from recal.micro import e4, intruder_check, topk, world as world_mod
 from recal.micro.quantize import quantize
 
 BLOCK_ELEMENTS = 20_000_000
@@ -41,6 +41,7 @@ class Features:
     """v11 features of queries against a built cache, exactly and as intervals."""
 
     def __init__(self, world, c: int = 32):
+        self.world = world
         self.k, self.c = world.k, c
         self.table = e4.EntryTable(world, exclude_pool=True)
         t = self.table
@@ -51,6 +52,10 @@ class Features:
         self.slots = [np.asarray(e["shell_slots"], dtype=np.int64) for e in entries]
         self.pool_ids = t.pool_ids
         self.slot_ids = slot_ids
+
+    @property
+    def workers(self) -> int:
+        return getattr(getattr(self, "world", None), "workers", 1)
 
     def _shell_union(self, entries: np.ndarray) -> np.ndarray:
         if not len(entries):
@@ -64,27 +69,37 @@ class Features:
             yield lo, min(n, lo + step)
 
     def candidate_recall(self, Q: np.ndarray, truth: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """has and the recall of the exact in-pool top-K answer."""
+        """has and the recall (by id) of the exact in-pool top-K answer, ties to the lower id like the core."""
         n = len(Q)
         has = np.full(n, len(self.pool) >= self.k)
-        recall = np.zeros(n)
         if not has.any():
-            return has, recall
-        for lo, hi in self._blocks(n):
+            return has, np.zeros(n)
+        return has, np.concatenate(world_mod.fork_map(lambda lo, hi: self._recall_range(Q[lo:hi], truth[lo:hi]),
+                                                      n, self.workers))
+
+    def _recall_range(self, Q: np.ndarray, truth: np.ndarray) -> np.ndarray:
+        recall = np.zeros(len(Q))
+        for lo, hi in self._blocks(len(Q)):
             Dp = _dist(Q[lo:hi], self.pool)
-            near = np.argpartition(Dp, self.k - 1, axis=1)[:, :self.k]
             for i in range(hi - lo):
-                recall[lo + i] = np.isin(truth[lo + i][:self.k], self.pool_ids[near[i]]).mean()
-        return has, recall
+                near, _ = topk.exact_topk(self.pool, Q[lo + i], Dp[i], self.k)
+                recall[lo + i] = np.isin(truth[lo + i][:self.k], self.pool_ids[near]).mean()
+        return recall
 
     def exact(self, Q: np.ndarray, nr: np.ndarray | None = None, sets: list | None = None) -> np.ndarray:
         """Features (offset, size, rate) of full-precision queries, one row each (NaN without a candidate).
 
         nr overrides the distance to the K-th cached vector (a fast-path answer's), sets the entries read."""
+        n = len(Q)
+        if len(self.pool) < self.k:
+            return np.full((n, 3), np.nan)
+        return np.concatenate(world_mod.fork_map(
+            lambda lo, hi: self._exact_range(Q[lo:hi], None if nr is None else nr[lo:hi],
+                                             None if sets is None else sets[lo:hi]), n, self.workers))
+
+    def _exact_range(self, Q: np.ndarray, nr, sets) -> np.ndarray:
         n, K = len(Q), self.k
         out = np.full((n, 3), np.nan)
-        if len(self.pool) < K:
-            return out
         c = min(self.c, len(self.centers))
         for lo, hi in self._blocks(n):
             Dc = _dist(Q[lo:hi], self.centers)
@@ -92,7 +107,10 @@ class Features:
             Ds = _dist(Q[lo:hi], self.shell_vec) if len(self.shell_vec) else np.zeros((hi - lo, 0))
             for i in range(hi - lo):
                 g = lo + i
-                r = max(float(np.partition(Dp[i], K - 1)[K - 1]), 1e-12) if nr is None else max(float(nr[g]), 1e-12)
+                if nr is None:
+                    r = max(float(topk.exact_topk(self.pool, Q[g], Dp[i], K)[1][-1]), 1e-12)
+                else:
+                    r = max(float(nr[g]), 1e-12)
                 S = np.argpartition(Dc[i], c - 1)[:c] if sets is None else np.asarray(sets[g], dtype=np.int64)
                 fit = (Dc[i][S] + r) / self.radius[S]
                 b = int(S[np.argmin(fit)])
@@ -103,17 +121,22 @@ class Features:
 
     def bounds(self, Qhat: np.ndarray, e: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Lower and upper ends of (offset, size, rate) of the true queries, from their copies and errors."""
+        n = len(Qhat)
+        if len(self.pool) < self.k:
+            return np.full((n, 3), np.nan), np.full((n, 3), np.nan)
+        parts = world_mod.fork_map(lambda lo, hi: self._bounds_range(Qhat[lo:hi], e[lo:hi]), n, self.workers)
+        return np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
+
+    def _bounds_range(self, Qhat: np.ndarray, e: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         n, K = len(Qhat), self.k
         lower, upper = np.full((n, 3), np.nan), np.full((n, 3), np.nan)
-        if len(self.pool) < K:
-            return lower, upper
         c = min(self.c, len(self.centers))
         for lo, hi in self._blocks(n):
             Dc, Dp = _dist(Qhat[lo:hi], self.centers), _dist(Qhat[lo:hi], self.pool)
             Ds = _dist(Qhat[lo:hi], self.shell_vec) if len(self.shell_vec) else np.zeros((hi - lo, 0))
             for i in range(hi - lo):
                 err = float(e[lo + i])
-                nr = max(float(np.partition(Dp[i], K - 1)[K - 1]), 1e-12)
+                nr = max(float(topk.exact_topk(self.pool, Qhat[lo + i], Dp[i], K)[1][-1]), 1e-12)
                 nr_lo, nr_hi = max(nr - err, 1e-12), nr + err
                 dc = float(np.partition(Dc[i], c - 1)[c - 1])
                 if c >= len(self.centers):

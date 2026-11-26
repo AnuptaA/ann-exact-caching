@@ -1,7 +1,8 @@
 """E3: window vectors kept at 8 or 4 bits, against full precision.
 
 Held-out queries (and the calibration role's) are quantized with a per-vector minimum and scale; features and
-scores are computed against the same cache with E1's linear model. Candidate recall stays the true one.
+scores are computed against the same cache with E1's linear model. Candidate recall stays the true one: the label of
+a calibration item is the recall of the answer for the true query, whatever copy the features come from.
 """
 
 import numpy as np
@@ -30,7 +31,7 @@ def run(world: w.World) -> list[dict]:
         both = f.has & qf.has
         diff = np.abs(q_scores[both] - full_scores[both])
         qc = world.features(quantize(cal_vec, bits), cal_truth)
-        q_cert = e1.lambda_for(world, model, qc.F, qc.recall, qc.has)
+        q_cert = e1.lambda_for(world, model, qc.F, cal.recall, qc.has & cal.has)
         q_hit = fit.decide(q_scores, qf.has, full_cert.lam)[inverse]
         mixed_hit = fit.decide(full_scores, f.has, q_cert.lam)[inverse]
         rows.append(dict(

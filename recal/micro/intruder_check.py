@@ -119,7 +119,7 @@ def run(world: w.World) -> tuple[list[dict], dict]:
                 for b in RELATIVE_BANDS:
                     band[b][g] = float((rel < b).sum())
             for name, (Dc, Dp, Ds, t) in dists.items():
-                res = e4._features(t, S, Dc[i], Dp[i], Ds[i], K)
+                res = e4._features(t, S, Dc[i], Dp[i], Ds[i], K, Q[g])
                 counts[name][g] = int(round(np.exp(res["F"][2]) * K - 1.0)) if res["has"] else 0
     rows = pair_rows(world, counts, feat, has, K)
     spread = {f"vectors_within_{int(b * 100)}pct_of_nr_mean": float(band[b][has].mean()) for b in RELATIVE_BANDS}

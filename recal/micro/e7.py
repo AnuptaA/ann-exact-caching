@@ -12,7 +12,7 @@ import time
 
 import numpy as np
 
-from recal.micro import e10, fit, world as w
+from recal.micro import e10, fit, topk, world as w
 from recal.micro.e4 import sq_dist
 
 NAME = "E7"
@@ -33,7 +33,8 @@ def exact_top(pool: np.ndarray, Q: np.ndarray, k: int) -> np.ndarray:
     out = np.empty((len(Q), k), np.int64)
     for lo in range(0, len(Q), block):
         D = sq_dist(Q[lo:lo + block], pool)
-        out[lo:lo + block] = np.argpartition(D, k - 1, axis=1)[:, :k]
+        for i in range(len(D)):
+            out[lo + i] = topk.exact_topk(pool, Q[lo + i], D[i], k)[0]
     return out
 
 
@@ -128,9 +129,9 @@ def degree_rows(world: w.World, pool: np.ndarray, Q: np.ndarray, exact: np.ndarr
     index = hnswlib.Index(space="l2", dim=pool.shape[1])
     t0 = time.perf_counter()
     index.init_index(max_elements=len(pool), ef_construction=EF_CONSTRUCTION, M=degree)
+    index.set_num_threads(1)     # a threaded build gives a different graph on every run
     index.add_items(pool, np.arange(len(pool)))
     build_s = time.perf_counter() - t0
-    index.set_num_threads(1)
     ib = id_bytes_for(len(pool))
     k_rerank = min(RERANK_FACTOR * k, len(pool))
     rows = []

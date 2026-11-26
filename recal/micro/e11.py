@@ -34,15 +34,6 @@ def items_per_half(share: float, M: float, dim: int, k: int, bits: int) -> int:
     return int(share * M // (train + cal))
 
 
-def request_arrays(world: w.World, held: dict) -> np.ndarray:
-    """Position (in the kept unique queries) of every held-out request whose query was kept, in stream order."""
-    inverse = world.heldout()["inverse"]
-    position = np.full(len(world.heldout()["vec"]), -1, np.int64)
-    position[held["keep"]] = np.arange(len(held["keep"]))
-    mapped = position[inverse]
-    return mapped[mapped >= 0]
-
-
 def stretch_rows(low, high, score, has, y, idx, W: int, policy_lam, edges, p, delta: float, rng) -> list[dict]:
     n = len(idx)
     size = min(W, n)
@@ -71,27 +62,37 @@ def stretch_rows(low, high, score, has, y, idx, W: int, policy_lam, edges, p, de
     return out
 
 
-def run(world: w.World) -> list[dict]:
+def run(world: w.World, request_limit: int = 0, shares=SHARES, precisions=PRECISIONS, deltas=DELTAS) -> list[dict]:
+    """Every request of the held-out stream (or its first request_limit) is scored once, with the exact features of
+    its query and the interval of its copy; a stretch is W consecutive requests, so no request is dropped."""
     ctx = e10.context(world)
     if ctx["model"] is None or not ctx["cal"]["has"].any():
         return []
-    p, cal, held = world.p, ctx["cal"], ctx["held"]
+    p, cal = world.p, ctx["cal"]
     dim, k, M = world.db.shape[1], world.k, world.M
     ok = cal["has"]
     full = fit.certify(ctx["train_scores"], cal["score"][ok], cal["y"][ok], p.T, p.delta, p.min_ess)
-    idx = request_arrays(world, held)
-    h0 = float(fit.decide(held["score"], held["has"], full.lam)[idx].mean()) if len(idx) else 0.0
+    stream = world.full_heldout_stream()
+    if request_limit:
+        stream = stream[:request_limit]
+    uniq, pos = np.unique(stream, return_inverse=True)
+    vec = np.asarray(world.q[uniq], dtype=np.float32)
+    data = e10.labeled_set(world, ctx["feats"], ctx["model"], vec, np.asarray(world.top[uniq][:, :k], np.int64),
+                           np.ones(len(uniq)))
+    score, has, y = data["score"][pos], data["has"][pos], data["y"][pos]
+    idx = np.arange(len(stream))
+    h0 = float(fit.decide(score, has, full.lam).mean())
     share_labeled = (1.0 - h0) + p.a * h0
     rows = []
-    for bits in PRECISIONS:
-        low, high, _ = e10.intervals_of(ctx, held, bits)
-        for share in SHARES:
+    for bits in precisions:
+        low_u, high_u, _ = e10.intervals_of(ctx, data, bits)
+        low, high = low_u[pos], high_u[pos]
+        for share in shares:
             n_items = items_per_half(share, M, dim, k, bits)
             W = int(2 * n_items / share_labeled) if share_labeled > 0 else 0
-            for delta in DELTAS:
+            for delta in deltas:
                 rng = np.random.default_rng(p.seed + 29)
-                stretches = stretch_rows(low, high, held["score"], held["has"], held["y"], idx, W, full.lam,
-                                         ctx["edges"], p, delta, rng)
+                stretches = stretch_rows(low, high, score, has, y, idx, W, full.lam, ctx["edges"], p, delta, rng)
                 rows.append(summarize_row(world, bits, share, delta, n_items, W, h0, full.lam, stretches, p))
     return rows
 

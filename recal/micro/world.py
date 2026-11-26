@@ -81,6 +81,8 @@ class World:
     k: int
     cache: dict = field(default_factory=dict)
     workers: int = 1
+    sample_requests: int = 0      # quick tier: score a seeded random sample of the held-out requests, in stream order
+    sample_seed: int = 0
 
     @property
     def core(self):
@@ -128,10 +130,23 @@ class World:
         f = h["features"]
         return Features(f.has[mask], f.F[mask], f.cand_ids[mask], f.recall[mask], f.nr[mask]), h["vec"][mask]
 
+    def full_heldout_stream(self) -> np.ndarray:
+        """Query index of every held-out request, in stream order."""
+        return self.stream[self.history_len:]
+
+    def heldout_stream(self) -> np.ndarray:
+        """The requests that are scored: all of them, or a seeded sample of sample_requests (quick tier)."""
+        qi = self.full_heldout_stream()
+        if self.sample_requests and self.sample_requests < len(qi):
+            keep = np.sort(np.random.default_rng(self.sample_seed).choice(len(qi), self.sample_requests,
+                                                                           replace=False))
+            qi = qi[keep]
+        return qi
+
     def heldout(self) -> dict:
         """The scored requests: unique queries with their features and an index from request to unique query."""
         if "heldout" not in self.cache:
-            qi = self.stream[self.history_len:]
+            qi = self.heldout_stream()
             unique, inverse = np.unique(qi, return_inverse=True)
             vec = np.asarray(self.q[unique], dtype=np.float32)
             truth = np.asarray(self.top[unique][:, :self.k], dtype=np.int64)

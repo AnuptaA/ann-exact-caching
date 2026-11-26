@@ -13,7 +13,7 @@ entries for a query; the candidate answer is the K nearest of the union of their
 
 import numpy as np
 
-from recal.micro import fit, world as w
+from recal.micro import fit, topk, world as w
 
 NAME = "E4"
 NEAREST = (4, 8, 16, 32)
@@ -106,8 +106,8 @@ def _compute(table: EntryTable, Q: np.ndarray, truth: np.ndarray, m: int) -> dic
             g = lo + i
             if len(table.pool_ids) < K:
                 continue
-            knn = np.argpartition(Dp[i], K - 1)[:K]
-            nr_ref = float(Dp[i][knn].max())
+            knn, knn_dist = topk.exact_topk(table.pool, Q[g], Dp[i], K)
+            nr_ref = float(knn_dist[-1])
             fit_all = (Dc[i] + nr_ref) / table.radius
             b = int(np.argmin(fit_all))
             ref["offset"][g], ref["size"][g], ref["nr"][g], ref["has"][g] = Dc[i, b] / table.radius[b], \
@@ -115,7 +115,7 @@ def _compute(table: EntryTable, Q: np.ndarray, truth: np.ndarray, m: int) -> dic
             sets = {"pool_knn": table.entries_of(knn), "m_nearest": order[i, :m if m > 0 else table.n]}
             sets.update({f"c{c}": order[i, :c] for c in NEAREST})
             for name, S in sets.items():
-                res = _features(table, S, Dc[i], Dp[i], Ds[i], K)
+                res = _features(table, S, Dc[i], Dp[i], Ds[i], K, Q[g])
                 o = out[name]
                 o["has"][g], o["size"][g], o["contains"][g] = res["has"], len(S), bool((S == b).any())
                 if res["has"]:
@@ -126,12 +126,13 @@ def _compute(table: EntryTable, Q: np.ndarray, truth: np.ndarray, m: int) -> dic
     return dict(methods=out, ref=ref, examined=examined)
 
 
-def _features(table: EntryTable, S: np.ndarray, Dc: np.ndarray, Dp: np.ndarray, Ds: np.ndarray, K: int) -> dict:
+def _features(table: EntryTable, S: np.ndarray, Dc: np.ndarray, Dp: np.ndarray, Ds: np.ndarray, K: int,
+              q: np.ndarray) -> dict:
     slots = np.unique(np.concatenate([table.lists[e] for e in S]))
     if len(slots) < K:
         return dict(has=False)
-    near = slots[np.argpartition(Dp[slots], K - 1)[:K]]
-    nr = max(float(Dp[near].max()), 1e-12)
+    near, near_dist = topk.exact_topk(table.pool, q, Dp[slots], K, slots)
+    nr = max(float(near_dist[-1]), 1e-12)
     fit_set = (Dc[S] + nr) / table.radius[S]
     best = int(S[np.argmin(fit_set)])
     zone = np.unique(np.concatenate([table.shells[e] for e in S])) if len(Ds) else np.zeros(0, np.int64)
