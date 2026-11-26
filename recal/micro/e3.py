@@ -38,7 +38,8 @@ def run(world: w.World) -> list[dict]:
             score_diff_median=percentile(diff, 50), score_diff_p95=percentile(diff, 95),
             score_diff_p99=percentile(diff, 99), share_with_candidate_in_both=float(both.mean()),
             flip_share=float((full_hit != q_hit).mean()), lam_full=full_cert.lam, lam_quantized=q_cert.lam,
-            hit_rate_full=float(full_hit.mean()), hit_rate_quantized_lambda=float(mixed_hit.mean()),
+            hit_rate_full=float(full_hit.mean()) if full_cert.lam is not None else float("nan"),
+            hit_rate_quantized_lambda=float(mixed_hit.mean()) if q_cert.lam is not None else float("nan"),
             recall_of_hits_full=mean(y[full_hit]), recall_of_hits_quantized_lambda=mean(y[mixed_hit])))
     return rows
 

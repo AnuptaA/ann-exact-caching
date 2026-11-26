@@ -165,7 +165,10 @@ def build_world(prep: str | Path, stream: str, budget: float, coord_bytes: float
     finally:
         shutil.rmtree(work, ignore_errors=True)
     role = roles_of(snap, p, built)
-    return World(name or prep.name, budget, p, M, db, q, top, idx, history_len, built, snap, role, k)
+    world = World(name or prep.name, budget, p, M, db, q, top, idx, history_len, built, snap, role, k)
+    world.cache["build_args"] = dict(prep=prep, stream=stream, budget=budget, coord_bytes=coord_bytes, name=world.name,
+                                     k=k, seed=seed, max_requests=max_requests, params=params, idealized=idealized)
+    return world
 
 
 def roles_of(snap: dict, p: Params, built: builder.Built) -> np.ndarray:

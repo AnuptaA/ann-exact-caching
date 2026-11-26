@@ -90,7 +90,8 @@ def run(world: w.World) -> list[dict]:
             window_items=win["items"], calibration_labeled=win["calibration_labeled"],
             n_stretches=len(stretches), certified_share=float(np.mean([s["certified"] for s in stretches]))
             if stretches else 0.0,
-            hit_rate=float(np.mean([s["hit_rate"] for s in done])) if done else 0.0,
+            hit_rate=float(np.mean([s["hit_rate"] for s in done])) if done and any(s["certified"] for s in stretches)
+            else float("nan"),
             recall_of_hits=float(sum(s["recall_sum"] for s in done) / hits) if hits else float("nan"),
             share_below_target=float(np.mean([s["recall_sum"] / s["hits"] < p.T for s in done if s["hits"]]))
             if any(s["hits"] for s in done) else float("nan"),

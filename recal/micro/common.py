@@ -3,6 +3,7 @@
 import csv
 import hashlib
 import json
+import time
 from pathlib import Path
 
 from recal.measure import environment, jobs_util
@@ -64,3 +65,42 @@ def _plain(value):
     if hasattr(value, "item"):
         return value.item()
     return str(value)
+
+
+UNITS_DIR = "units"
+DONE_LOG = "done.jsonl"
+PROGRESS_FILE = "progress.json"
+
+
+def unit_name(unit: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_.=" else "_" for c in unit)
+
+
+def unit_path(directory: Path, unit: str) -> Path:
+    return Path(directory) / UNITS_DIR / f"{unit_name(unit)}.json"
+
+
+def unit_hash(settings: dict, unit: str) -> str:
+    return config_hash(dict(settings, unit=unit))
+
+
+def read_unit(directory: Path, unit: str, settings: dict):
+    """The payload of a finished unit with this config hash, else None."""
+    path = unit_path(directory, unit)
+    try:
+        body = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return body["payload"] if body.get("config_hash") == unit_hash(settings, unit) else None
+
+
+def write_unit(directory: Path, unit: str, settings: dict, payload, queries: int = 0) -> Path:
+    path = unit_path(directory, unit)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = {"unit": unit, "config_hash": unit_hash(settings, unit), "payload": payload, "queries": queries}
+    tmp = path.with_name("." + path.name + ".tmp")
+    tmp.write_text(json.dumps(body, default=_plain))
+    tmp.replace(path)
+    with open(path.parent / DONE_LOG, "a") as log:
+        log.write(json.dumps({"unit": unit, "t": time.time(), "queries": queries}) + "\n")
+    return path

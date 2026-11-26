@@ -364,10 +364,12 @@ prepare:
 	@test -n "$(DATASET)" || { echo "set DATASET=<spacev|triviaqa|medrag|tripclick|all>"; exit 1; }
 	$(RECAL_PY) -m scripts.prepare --config $(MATRIX) --dataset $(DATASET) $(if $(STAGES),--stages $(STAGES),)
 
-# make micro DATASET=<spacev|triviaqa|medrag|laion>: the six micro-experiments (E1 E3 E4 E7 E8 E9), pushed to micro/
+# make micro DATASET=<spacev|triviaqa|medrag|laion> [EXPERIMENTS=E1,E3,...] [MICRO_FLAGS="--jobs 4"]: micro-experiments
+# (default E1 E3 E4 E7 E8 E9; also intruder_check E10 E11 E12 E13), units pushed to micro/ as they finish
+MICRO_EXPERIMENTS = E1,E3,E4,E7,E8,E9
 micro:
 	@test -n "$(DATASET)" || { echo "set DATASET=<spacev|triviaqa|medrag|laion>"; exit 1; }
-	PYTHONPATH=. $(RECAL_PY) -m scripts.micro.run --dataset $(DATASET) --experiments E1,E3,E4,E7,E8,E9
+	PYTHONPATH=. $(RECAL_PY) -m scripts.micro.run --dataset $(DATASET) --experiments $(or $(EXPERIMENTS),$(MICRO_EXPERIMENTS)) $(MICRO_FLAGS)
 
 # Shard job files in $(JOBS)/shards, one per workload (SHARD_BY=question|system)
 shards:

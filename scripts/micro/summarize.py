@@ -15,12 +15,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from recal import store as store_mod  # noqa: E402
 
 
-def read_rows(directory: Path, experiment: str) -> list[dict]:
-    """Rows of every workload's result file of one experiment, workload first."""
+def unit_rows(workload_dir: Path) -> list[dict]:
+    """Rows of the finished units of a workload whose experiment has no final result yet."""
     rows = []
-    for path in sorted(Path(directory, experiment).glob(f"*/{experiment.lower()}.json")):
-        body = json.loads(path.read_text())
-        rows += body["results"]["rows"]
+    for path in sorted((workload_dir / "units").glob("*.json")):
+        payload = json.loads(path.read_text()).get("payload")
+        if isinstance(payload, dict) and "rows" in payload:
+            rows += payload["rows"]
+        elif isinstance(payload, list):
+            rows += payload
+        elif isinstance(payload, dict):
+            rows.append(payload)
+    return rows
+
+
+def read_rows(directory: Path, experiment: str) -> list[dict]:
+    """Rows of every workload of one experiment: its result file, else the units finished so far."""
+    rows = []
+    for workload_dir in sorted(p for p in Path(directory, experiment).iterdir() if p.is_dir()):
+        final = workload_dir / f"{experiment.lower()}.json"
+        if final.exists():
+            rows += json.loads(final.read_text())["results"]["rows"]
+        else:
+            rows += unit_rows(workload_dir)
     return rows
 
 

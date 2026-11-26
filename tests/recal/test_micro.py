@@ -118,7 +118,7 @@ def test_e8_window_grows_with_the_cap_and_small_caps_abstain(world):
     labeled = (1 - caps[0.03]["reference_hit_rate"]) + 0.1 * caps[0.03]["reference_hit_rate"]
     assert caps[0.03]["calibration_labeled"] == pytest.approx(caps[0.03]["W_requests"] * labeled / 2)
     assert caps["uncapped"]["certified_share"] == 1.0 and caps[0.01]["certified_share"] == 0.0
-    assert caps[0.01]["hit_rate"] == 0.0
+    assert np.isnan(caps[0.01]["hit_rate"])
     assert e8.item_bytes(512, 10) == 512 + 40 + 31
 
 
@@ -214,14 +214,29 @@ def same(a, b) -> bool:
     return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 
 
-def test_jobs_give_the_serial_rows_in_order(tiny):
+def unit_payloads(directory: Path) -> dict:
+    return {path.name: json.loads(path.read_text())["payload"] for path in sorted((directory / "units").glob("*.json"))}
+
+
+def test_jobs_give_the_serial_units(tiny):
     w = json.loads((tiny / "matrix.json").read_text())["workloads"]["tiny-a"]
-    args = [("tiny-a", w, b, ["E1", "E8"], 2000, PARAMS) for b in (BUDGET, 0.4)]
-    assert same(micro_run.parallel_map(micro_run.world_budget, args, 2),
-                micro_run.parallel_map(micro_run.world_budget, args, 1))
+    out = {}
+    for jobs in (1, 2):
+        ctx = micro_run.Context({e: tiny / f"jobs{jobs}" / e for e in ("E1", "E8")},
+                                {e: {"experiment": e} for e in ("E1", "E8")}, None, False, "tiny-a")
+        args = [("tiny-a", w, b, ["E1", "E8"], 2000, PARAMS, 1, ctx) for b in (BUDGET, 0.4)]
+        micro_run.parallel_map(micro_run.world_budget, args, jobs)
+        out[jobs] = {e: unit_payloads(ctx.dirs[e]) for e in ctx.dirs}
+    assert same(out[1], out[2]) and len(out[1]["E1"]) == 2
     extra = e9.sim_extra(PARAMS) + ["--max-requests", "1500"]
-    tasks = [("tiny-a", w["prep"], w["stream"], BUDGET, 4, m, lru, mini, extra, 200) for m, lru, mini in e9.variants()]
-    assert same(micro_run.parallel_map(micro_run.e9_task, tasks, 4), micro_run.parallel_map(micro_run.e9_task, tasks, 1))
+    rows = {}
+    for jobs in (1, 4):
+        ctx = micro_run.Context({"E9": tiny / f"jobs9_{jobs}" / "E9"}, {"E9": {"experiment": "E9"}}, None, False,
+                                "tiny-a")
+        tasks = [("tiny-a", w["prep"], w["stream"], BUDGET, 4, m, lru, mini, extra, 200, ctx)
+                 for m, lru, mini in e9.variants()]
+        rows[jobs] = micro_run.parallel_map(micro_run.e9_task, tasks, jobs)
+    assert same(rows[1], rows[4])
 
 
 def test_e7_is_refused_with_jobs(tiny):
@@ -246,7 +261,7 @@ def test_world_workers_do_not_change_features_or_e4(tiny, monkeypatch):
             assert a[key] == b[key]
 
 
-def test_e9_writes_and_pushes_each_finished_run_under_partial(tiny, capfd, monkeypatch):
+def test_e9_writes_and_pushes_each_finished_run_as_a_unit(tiny, capfd, monkeypatch):
     monkeypatch.setattr(e9, "PROGRESS", 500)
     store = tiny / "store_partial"
     assert run_cli(tiny, "--experiments", "E9", "--jobs", "4", "--store", str(store), "--max-requests", "1500",
@@ -254,9 +269,10 @@ def test_e9_writes_and_pushes_each_finished_run_under_partial(tiny, capfd, monke
     out = capfd.readouterr().out
     # E9 runs the whole 3,000-request stream: 2,100 scored, a progress line every 500
     assert out.count("E9 partial:") == 4 and out.count("[sim] budget 0.6") == 16
-    pushed = sorted(p.name for p in (store / "micro" / "E9" / "tiny-a" / "partial").glob("*.json"))
-    assert pushed == ["0.6_lru_mini-off.json", "0.6_lru_mini-on.json", "0.6_recal_mini-off.json",
-                      "0.6_recal_mini-on.json"]
+    units_dir = store / "micro" / "E9" / "tiny-a" / "units"
+    pushed = sorted(p.name for p in units_dir.glob("run_*.json"))
+    assert pushed == ["run_0.6_lru_mini-off.json", "run_0.6_lru_mini-on.json", "run_0.6_recal_mini-off.json",
+                      "run_0.6_recal_mini-on.json"]
     rows = json.loads((tiny / "out" / "E9" / "tiny-a" / "e9.json").read_text())["results"]["rows"]
-    partial = json.loads((store / "micro" / "E9" / "tiny-a" / "partial" / "0.6_lru_mini-on.json").read_text())
-    assert partial == rows[2]
+    unit = json.loads((units_dir / "run_0.6_lru_mini-on.json").read_text())["payload"]
+    assert unit == rows[2]

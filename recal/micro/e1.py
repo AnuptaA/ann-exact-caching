@@ -39,15 +39,15 @@ def evaluate(world: w.World, kind: str) -> dict:
     f, inverse = held["features"], held["inverse"]
     n = len(inverse)
     if model is None:
-        return dict(model=kind, lam=None, certified=False, hit_rate=0.0, recall_of_hits=float("nan"),
-                    oracle_hit_rate=0.0, gap=0.0, scores=None)
+        return dict(model=kind, lam=None, certified=False, hit_rate=float("nan"), recall_of_hits=float("nan"),
+                    oracle_hit_rate=float("nan"), gap=float("nan"), scores=None)
     cal, _ = world.role_rows("cal")
     cert = lambda_for(world, model, cal.F, cal.recall, cal.has)
     scores = np.where(f.has, fit.score(model, f.F), -np.inf)
     hit = fit.decide(scores, f.has, cert.lam)[inverse]
     y = f.recall[inverse]
     oracle = fit.oracle_count(y[f.has[inverse]], world.p.T) / n
-    hit_rate = float(hit.mean())
+    hit_rate = float(hit.mean()) if cert.lam is not None else float("nan")
     return dict(model=kind, lam=cert.lam, certified=cert.lam is not None, hit_rate=hit_rate,
                 recall_of_hits=float(y[hit].mean()) if hit.any() else float("nan"), oracle_hit_rate=float(oracle),
                 gap=float(oracle - hit_rate), scores=scores)
@@ -79,4 +79,5 @@ def summarize(rows: list[dict]) -> dict:
     for r in rows:
         by_budget.setdefault(r["budget"], {})[r["model"]] = r["hit_rate"]
     diffs = [abs(v[fit.LOGIT] - v[fit.LINEAR]) for v in by_budget.values() if len(v) == 2]
+    diffs = [d for d in diffs if d == d]
     return {"max_hit_rate_difference": max(diffs) if diffs else float("nan")}
