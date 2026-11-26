@@ -196,6 +196,32 @@ make prepare MATRIX=experiments/matrix.tripclick-legacy.json DATASET=tripclick  
 - Q4: `recal/robustness.py` (burst mask; bursts are derived from existing records by `recal/analysis/bursts.py`), `scripts/make_shift_streams.py` (abrupt, gradual and correlated shifts over 64 k-means clusters), `scripts/convert_streams.py` (turns a shift stream or an update schedule into the prep folder every driver reads, with the update files in the formats of ReCal and the real Aker driver; request vectors come from the existing official vectors, no encoder runs; cluster runs need FAISS and refuse without it), `scripts/make_update_schedule.py` and `--updates` (inserts and deletes with live ground truth).
 
 
+## Micro-experiments for the ReCal redesign
+
+Six small experiments on the current implementation (v10) with exact labels (the top-500 of the prepare), no DiskANN
+or pgvector: the first 30% of a stream is history, the cache is v10's construction on it, the rest is held out;
+T 0.9, delta 0.05, a 0.1, K 10, one seed; budgets are the workload's (1, 5, 10%; MedRAG: its working-set budgets).
+
+| Experiment | Question | Output (`results/micro/<exp>/<workload>/`) |
+| --- | --- | --- |
+| E1 | linear against fractional logit: hit rate at T, gap to the oracle prefix, Spearman of the scores | `e1.json`, `e1.csv` (workload, budget, model, lam, hit_rate, recall_of_hits, oracle_hit_rate, gap, spearman, coef) |
+| E3 | 8-bit and 4-bit window vectors: score differences, decision flips, lambda from quantized scores | `e3.csv` (bits, score_diff_median/p95/p99, flip_share, lam_full, lam_quantized, hit rates) |
+| E4 | how often the best-fit sphere is among the entries holding the answer's vectors, against v10's m nearest centers and the c nearest; intruder-check size | `e4.csv` (method, contains_reference_share, offset/size error, hit_rate); `e4.json` diagnostics (shell vectors examined, agreement with the core) |
+| E7 | HNSW over the cached vectors: exact-answer share, recall, time and edge memory per degree and ef | `e7.csv` (degree, ef, exact_share, mean_recall, us_per_query, edge bytes); `e7.json` summaries (smallest degree and ef) |
+| E8 | window capped at 1, 3, 5% of M: labeled queries, certification rate, hit rate, recall of hits | `e8.csv` (cap_share_of_M, W_requests, calibration_labeled, certified_share, hit_rate, recall_of_hits) |
+| E9 | v10's greedy construction against `--lru`, with and without the mini cache, whole stream | `e9.csv` (method, mini_cache, hit_rate, recall_of_hits, share_windows_below_target, mini_share_of_hits) |
+
+```bash
+make prepare DATASET=spacev STAGES=fetch,prep               # triviaqa the same; laion: STAGES=fetch,base,prep
+make prepare DATASET=medrag STAGES=fetch,prep,working_set   # the working set reads the exact answers
+make micro DATASET=spacev                                   # all six, results pushed to the store under micro/
+.venv-core/bin/python -m scripts.micro.summarize            # pull micro/, one CSV and Markdown table per experiment
+```
+
+`--stages` on `scripts.prepare` (alias `working_set` = `medrag_budgets`) skips the other stages and reports them as skipped.
+`scripts/micro/run.py --experiments E1,E3,...` runs a subset; an experiment whose result has the same config hash
+(settings and code commit) is skipped, `--force` reruns it. Keep the machine otherwise idle during E7 (it times single-thread searches).
+
 ## Running on many instances
 
 One instance prepares each dataset, the run instances map shards of the job list, one instance reduces.

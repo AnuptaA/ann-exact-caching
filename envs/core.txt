@@ -12,3 +12,4 @@ pytest
 gdown
 boto3
 psycopg[binary]
+hnswlib
