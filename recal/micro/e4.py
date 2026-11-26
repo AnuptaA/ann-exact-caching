@@ -1,7 +1,8 @@
 """E4: finding the best-fit sphere.
 
 Entries are read back from the cache (center, radius, list) and their shells are rebuilt exactly from the stored
-top-500 answers of the centers (full precision, where the core keeps 4-bit codes). Every method picks a set of
+top-500 answers of the centers (full precision, where the core keeps 4-bit codes), without the cached vectors,
+which the core never stores as shell vectors. Every method picks a set of
 entries for a query; the candidate answer is the K nearest of the union of their lists, the features follow v10
 (nr, best fit, offset, size, intruder rate), and a model is fit and certified per method as in E1.
 
@@ -23,7 +24,8 @@ ELEMENTS = 100_000_000      # largest distance block (queries x vectors) held at
 class EntryTable:
     """Entries of a built cache as arrays: centers, radii, lists (pool slots), shells (zone slots)."""
 
-    def __init__(self, world: w.World):
+    def __init__(self, world: w.World, exclude_pool: bool = True):
+        """exclude_pool drops cached vectors from the shells, as the core does when it stores them."""
         built = world.built
         self.k = world.k
         self.pool_ids = np.asarray(built.pool_ids, dtype=np.int64)
@@ -33,6 +35,9 @@ class EntryTable:
         self.radius = np.maximum(np.asarray([e["radius"] for e in entries], dtype=np.float64), 1e-12)
         self.lists = [np.searchsorted(self.pool_ids, np.asarray(e["response_ids"], dtype=np.int64)) for e in entries]
         shells = self._shells(world, entries)
+        if exclude_pool:
+            shells = [s[~np.isin(s, self.pool_ids)] for s in shells]
+        self.shell_ids = shells
         self.zone_ids = np.unique(np.concatenate(shells)) if shells else np.zeros(0, np.int64)
         self.shells = [np.searchsorted(self.zone_ids, s) for s in shells]
         self.pool = np.asarray(world.db[self.pool_ids], dtype=np.float32)
@@ -175,10 +180,11 @@ def run(world: w.World) -> tuple[list[dict], dict]:
             scores = np.where(h["has"], fit.score(model, h["F"]), -np.inf)
             hit = fit.decide(scores, h["has"], cert.lam)[inverse]
             y = h["recall"][inverse]
-            row.update(lam=cert.lam, certified=cert.lam is not None, hit_rate=float(hit.mean()),
+            row.update(lam=cert.lam, certified=cert.lam is not None,
+                       hit_rate=float(hit.mean()) if cert.lam is not None else float("nan"),
                        recall_of_hits=float(y[hit].mean()) if hit.any() else float("nan"))
         else:
-            row.update(lam=None, certified=False, hit_rate=0.0, recall_of_hits=float("nan"))
+            row.update(lam=None, certified=False, hit_rate=float("nan"), recall_of_hits=float("nan"))
         rows.append(row)
     ex = he["examined"][inverse]
     diagnostics = dict(workload=world.name, budget=world.budget, n_requests=n_req, n_entries=table.n,

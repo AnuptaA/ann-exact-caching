@@ -222,6 +222,30 @@ make micro DATASET=spacev                                   # all six, results p
 `scripts/micro/run.py --experiments E1,E3,...` runs a subset; an experiment whose result has the same config hash
 (settings and code commit) is skipped, `--force` reruns it. Keep the machine otherwise idle during E7 (it times single-thread searches).
 
+### Design checks (intruder feature, window guarantee, index accuracy)
+
+Built on the same worlds and results layout as the micro-experiments; every experiment checkpoints per unit (a budget,
+an index degree, an E9 run) to `<exp>/<workload>/units/`, pushes each unit when it finishes, skips finished units on a
+rerun, refreshes `progress.json` (units done and total, queries per second, time left, peak memory, last error) every
+30 seconds, and checks its inputs first (names the file, the expected and the actual value). Uncertified hit rates are NaN.
+`summarize` also reads the units of an experiment that has no final result yet.
+
+| Experiment | Question | Output |
+| --- | --- | --- |
+| `intruder_check` | why the core's intruder count differs from E4's: core (a), Python with full-precision shells (b), with the core's decoded 4-bit codes (c), E4 as first written (`d_asis`) and without cached vectors in the shells (`d_fixed`) | `intruder_check.csv` (pair, count_agree_share, count_diff_mean, count_abs_diff_p95/p99/max, rate_abs_diff_p95, decision_flip_share, hit_rate_x/y); json diagnostics (mean counts, shell vectors within 1, 2, 5% of nr) |
+| E10 | exact score intervals for window queries at 4, 8, 16 bits: ambiguous share, worst-case certified lambda, hit-rate cost, recall of hits, interval violations (must be 0) | `e10.csv` (bits, ambiguous_share, ambiguous_share_curve, lam_full, lam_wc, hit_rate_full, hit_rate_wc, hit_cost, recall_of_hits_wc, violations) |
+| E11 | window memory against certification at the smallest and middle budget: shares 0.5-5% of M, 8 or 16 bits, delta 0.05 or 0.10 | `e11.csv` (bits, window_share_of_M, delta, items_per_half, W_requests, certified_share, hit_rate, recall_of_hits, sampling_slack, quantization_slack, in_sample); json summary (smallest share that certifies, better precision) |
+| E12 | training the linear model on features computed once against the cache of the first half of the history | `e12.csv` (spearman, lam_fresh/stale, hit_rate_fresh/stale, recall_of_hits_fresh/stale, coefficients) |
+| E13 | the exact c nearest centers (8, 16, 32) against an HNSW over the centers (degree 8, 16; ef 32-256) | `e13.csv` (c, degree, ef, set_recall, best_fit_in_set_share, features_identical_share, feature diffs, us_per_query); json summary (smallest degree and ef for 99%) |
+| E7 (extended) | adds ef 512 and 1024, an exact rerank of the top 4K candidates, and the fast path's effect on the features and the hit or miss decision | `e7.csv` (+ rerank_exact_share, rerank_us_per_query, fast_unchanged_decision_share, fast_*_diff_p95) |
+
+```bash
+sh recal/core/build.sh      # the core gained entries_read_batch, shell_codes and quantizer: rebuild it
+make micro DATASET=spacev EXPERIMENTS=intruder_check,E10,E11,E12,E13,E7
+```
+
+The intruder check goes first: its outcome (a fix in E4, or the quantization report) decides what the others compare against.
+
 ## Running on many instances
 
 One instance prepares each dataset, the run instances map shards of the job list, one instance reduces.
