@@ -30,7 +30,7 @@ for arg in "$@"; do
     --tripclick|--all) "$PY" scripts/verify_data.py tripclick --dir "$DIR" ;;
   esac
   case "$arg" in
-    --laion) "$PY" scripts/verify_data.py laion ;;
+    --laion) "$PY" -m scripts.verify_data laion ;;
   esac
   case "$arg" in
     --medrag|--all) "$PY" scripts/verify_data.py medrag --aker-dir "$DIR" ;;
