@@ -8,11 +8,14 @@ item's block (the history's calibration role while fewer than W/2 requests have 
   class P: audited hits and items scoring at least lambda_floor at arrival, kept with a precise copy (16 bits, native)
   class C: the rest of half B, each kept with probability p (weight times 1/p) with a coarse copy (4 or 8 bits)
 The reference keeps every half-B item at 16 bits. Each certified lambda is applied to the next W/2 requests.
-Cache change is emulated by caches built on histories shifted forward by 10% and 25% of the history length; items
-are rescored against them (same model, thresholds and labels; features, recall and intervals recomputed) only when
-they arrive after the end of the shifted history.
+Cache change is emulated two ways. "shift": caches built on histories shifted forward by 10% and 25% of the history
+length; items are rescored against them (same model, thresholds and labels; features, recall and intervals
+recomputed) only when they arrive after the end of the shifted history. A rebuild keeps only about a quarter of the
+cached vectors, so this is close to a new cache. "drop": the same cache with a random 10% or 25% of its entries
+removed (their lists leave the pool; shells stay as built), closer to gradual swaps; every item is rescored.
 """
 
+import copy
 import shutil
 import tempfile
 from statistics import NormalDist
@@ -190,6 +193,24 @@ def shifted_world(world: w.World, offset: int) -> w.World:
     return out
 
 
+def dropped_features(feats: iv.Features, share: float) -> iv.Features:
+    """The cache with a random `share` of its entries removed: their centers and shells go, and the pool keeps only
+    the vectors some remaining entry lists."""
+    t = feats.table
+    keep = np.random.default_rng([14, int(round(share * 1000))]).random(t.n) >= share
+    kept = np.flatnonzero(keep)
+    slots = np.unique(np.concatenate([t.lists[e] for e in kept])) if len(kept) else np.zeros(0, np.int64)
+    out = copy.copy(feats)
+    out.centers, out.radius = feats.centers[keep], feats.radius[keep]
+    out.slots = [feats.slots[e] for e in kept]
+    out.pool, out.pool_ids = feats.pool[slots], feats.pool_ids[slots]
+    return out
+
+
+def pool_overlap(a: np.ndarray, b: np.ndarray) -> float:
+    return float(len(np.intersect1d(a, b)) / max(len(a), 1))
+
+
 def snapshot_scores(world: w.World, model: dict, vec: np.ndarray, truth: np.ndarray, feats=None) -> dict:
     """Exact score, candidate, recall and the score interval of each copy (4, 8, 16 bits, native) per unique query."""
     feats = feats if feats is not None else iv.Features(world, c=e10.NEAREST)
@@ -209,8 +230,8 @@ def eligible_rows(n_held: int, history_len: int, offset: int) -> np.ndarray:
 
 # ---- the run -----------------------------------------------------------------------------------------------------
 
-def run(world: w.World, request_limit: int = 0, seeds: int = SEEDS, shifts=SHIFTS, ess_target: float = ESS_TARGET,
-        log=print) -> tuple[list[dict], dict]:
+def run(world: w.World, request_limit: int = 0, seeds: int = SEEDS, shifts=SHIFTS, drops=SHIFTS,
+        ess_target: float = ESS_TARGET, log=print) -> tuple[list[dict], dict]:
     ctx = e10.context(world)
     if ctx["model"] is None or not ctx["cal"]["has"].any():
         return [], {}
@@ -227,13 +248,22 @@ def run(world: w.World, request_limit: int = 0, seeds: int = SEEDS, shifts=SHIFT
     uniq, pos = np.unique(stream, return_inverse=True)
     vec = np.asarray(world.q[uniq], dtype=np.float32)
     truth = np.asarray(world.top[uniq][:, :world.k], np.int64)
-    snaps = [dict(shift=0.0, offset=0, data=snapshot_scores(world, model, vec, truth, ctx["feats"]))]
+    base_pool = ctx["feats"].pool_ids
+    snaps = [dict(shift="none", offset=0, pool_overlap=1.0,
+                  data=snapshot_scores(world, model, vec, truth, ctx["feats"]))]
     log(f"[E14] snapshot 0 scored: {n} requests, {len(uniq)} unique queries")
     for share in shifts:
         offset = int(round(share * world.history_len))
         sw = shifted_world(world, offset)
-        snaps.append(dict(shift=share, offset=offset, data=snapshot_scores(sw, model, vec, truth)))
+        feats = iv.Features(sw, c=e10.NEAREST)
+        snaps.append(dict(shift=f"shift{share:g}", offset=offset, pool_overlap=pool_overlap(base_pool, feats.pool_ids),
+                          data=snapshot_scores(sw, model, vec, truth, feats)))
         log(f"[E14] snapshot shift {share:g} (offset {offset}) built and scored")
+    for share in drops:
+        feats = dropped_features(ctx["feats"], share)
+        snaps.append(dict(shift=f"drop{share:g}", offset=0, pool_overlap=pool_overlap(base_pool, feats.pool_ids),
+                          data=snapshot_scores(world, model, vec, truth, feats)))
+        log(f"[E14] snapshot drop {share:g} scored")
     for s in snaps:
         s["req"] = {key: (v[0][pos], v[1][pos]) if isinstance(v, tuple) else v[pos] for key, v in s["data"].items()}
         s["eligible"] = eligible_rows(n, world.history_len, s["offset"])
@@ -271,7 +301,8 @@ def run(world: w.World, request_limit: int = 0, seeds: int = SEEDS, shifts=SHIFT
         log(f"[E14] seed {seed} done")
     summary = summarize(rows, margin_rows, world, dict(n_requests=n, n_unique=len(uniq), hit_rate_policy=h, lam_policy=lam0,
                                                      W=W, eval_len=eval_len, a=p.a, T=p.T,
-                                                     offsets=[s["offset"] for s in snaps],
+                                                     offsets={s["shift"]: s["offset"] for s in snaps},
+                                                     pool_overlap={s["shift"]: s["pool_overlap"] for s in snaps},
                                                      n_windows={k: len(v) for k, _, v in plans}))
     return rows, summary
 
@@ -315,7 +346,7 @@ def window_rows(seed, kind, length, start, win, nxt, s, s0, lab, cls, arrival_fl
                   first_fail_ref=ref["first_fail"], **{f"{k}_ref": v for k, v in
                                                        applied(ref["lam"], r["score"][nxt], r["has"][nxt],
                                                                r["y"][nxt]).items()})
-    if s["shift"] > 0 and kind == "W":
+    if s["shift"] != "none" and kind == "W":
         b = s0["req"]
         ff0 = scan(edges, b[16][0][win][inwin], b[16][1][win][inwin], b["y"][win][inwin], wt[inwin], p.T, p.delta,
                    p.min_ess)["first_fail"]
@@ -401,7 +432,7 @@ def summarize(rows: list[dict], margin_rows: list[dict], world: w.World, info: d
     out = dict(info, workload=world.name, budget=world.budget, item_bytes={str(b): v for b, v in size.items()},
                native_info=quantize.native_info(world.q))
     out["n_independent_windows"] = info["n_requests"] / (1.5 * info["W"])
-    base = [r for r in rows if r["window"] == "W" and r["shift"] == 0.0]
+    base = [r for r in rows if r["window"] == "W" and r["shift"] == "none"]
     memory = {}
     for c in configs():
         if c["margin"] != PRIMARY["margin"]:
@@ -446,7 +477,7 @@ def summarize(rows: list[dict], margin_rows: list[dict], world: w.World, info: d
             entry[f"C{b}_crossed_but_below_share"] = wmean(mine, f"C{b}_crossed_but_below_share")
             entry[f"C{b}_margin_halfwidths"] = pct(np.concatenate([m[f"C{b}_margin_halfwidths"] for m in mine])
                                                    if mine else np.zeros(0))
-        shifted[f"{share:g}"] = entry
+        shifted[share] = entry
     out["after_shift"] = shifted
     cert = {}
     for kind in ("W", "W/2"):
@@ -455,7 +486,7 @@ def summarize(rows: list[dict], margin_rows: list[dict], world: w.World, info: d
                 key = config_key(c)
                 mine = [r for r in rows if r["window"] == kind and r["shift"] == share and r["config"] == key]
                 if mine:
-                    cert[f"{kind}|{share:g}|{key}"] = compare(mine, T, STRIDE_PARTS if kind == "W" else 1, rng)
+                    cert[f"{kind}|{share}|{key}"] = compare(mine, T, STRIDE_PARTS if kind == "W" else 1, rng)
     out["certification"] = cert
     out["verdict"] = verdict(out)
     return out
@@ -500,15 +531,25 @@ def compare(rows: list[dict], T: float, block: int, rng) -> dict:
 
 
 def verdict(out: dict) -> dict:
-    """The rule of thumb on the primary configuration (P 16-bit, C 4-bit, p 0.25, margin 0.05)."""
-    key = config_key(PRIMARY)
-    mem = out["memory"].get(key, {})
-    cert = out["certification"].get(f"W|0|{key}", {})
-    last = out["after_shift"].get(f"{max(SHIFTS):g}", {})
-    amb = last.get(f"C{PRIMARY['coarse']}_ambiguous_share", float("nan"))
-    return dict(config=key,
-                memory_ratio=mem.get("ratio_all16_over_tiered"), memory_ok=bool(mem.get("ratio_all16_over_tiered", 0) >= 3),
-                hit_diff=cert.get("hit_diff"), hit_ok=bool(abs(cert.get("hit_diff", np.inf)) <= 0.005),
-                under_T_ref=cert.get("under_T_ref"), under_T_tiered=cert.get("under_T_tiered"),
-                independent_windows=out["n_independent_windows"],
-                ambiguous_after_largest_shift=amb, ambiguous_ok=bool(amb <= 0.10))
+    """The rule of thumb per configuration at the primary margin: memory ratio at least 3, tiered hit rate within 0.5
+    point of the reference (with no change and after each change), no more under-T windows, at most 10% of C items
+    ambiguous after the largest shift and the largest drop."""
+    labels = sorted({k.split("|")[1] for k in out["certification"]})
+    largest = [f"shift{max(SHIFTS):g}", f"drop{max(SHIFTS):g}"]
+    per = {}
+    for c in configs():
+        if c["margin"] != PRIMARY["margin"]:
+            continue
+        key = config_key(c)
+        ratio = out["memory"].get(key, {}).get("ratio_all16_over_tiered", float("nan"))
+        cert = {lab: out["certification"].get(f"W|{lab}|{key}", {}) for lab in labels}
+        hit = {lab: v.get("hit_diff", float("nan")) for lab, v in cert.items()}
+        amb = {lab: out["after_shift"].get(lab, {}).get(f"C{c['coarse']}_ambiguous_share", float("nan"))
+               for lab in largest}
+        per[key] = dict(memory_ratio=ratio, memory_ok=bool(ratio >= 3), hit_diff=hit,
+                        hit_ok=bool(all(abs(v) <= 0.005 for v in hit.values())),
+                        hit_ok_without_change=bool(abs(hit.get("none", np.inf)) <= 0.005),
+                        under_T_ref={lab: v.get("under_T_ref") for lab, v in cert.items()},
+                        under_T_tiered={lab: v.get("under_T_tiered") for lab, v in cert.items()},
+                        ambiguous_after_largest=amb, ambiguous_ok={lab: bool(v <= 0.10) for lab, v in amb.items()})
+    return dict(primary=config_key(PRIMARY), independent_windows=out["n_independent_windows"], configs=per)

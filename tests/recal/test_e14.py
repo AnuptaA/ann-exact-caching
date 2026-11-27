@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from recal import prepare
-from recal.micro import e14, intervals, world as world_mod
+from recal.micro import e10, e14, intervals, world as world_mod
 
 PARAMS = {"H": 900, "cold_start": 500, "min_ess": 30.0}
 BUDGET = 0.6
@@ -107,22 +107,33 @@ def test_shifted_rescoring_excludes_items_inside_the_shifted_history():
 def test_run_rows_respect_classes_and_shifts(world, result):
     rows, summary = result
     assert rows and summary["W"] > 0
-    offsets = dict(zip([0.0] + [float(s) for s in e14.SHIFTS], summary["offsets"]))
+    offsets = summary["offsets"]
+    assert set(offsets) == {"none"} | {f"{k}{s:g}" for k in ("shift", "drop") for s in e14.SHIFTS}
+    assert all(0 < v <= 1 for v in summary["pool_overlap"].values())
     by = {}
     for r in rows:
-        if r["shift"] > 0:
-            assert r["start"] + r["W"] >= offsets[r["shift"]]
+        assert r["start"] + r["W"] >= offsets[r["shift"]]
         by.setdefault((r["window"], r["start"], r["config"]), {})[r["shift"]] = r
-    for shifts in by.values():
-        if 0.0 not in shifts:
+    for changes in by.values():
+        if "none" not in changes:
             continue
-        for share, r in shifts.items():
+        for label, r in changes.items():
             # rescored windows hold only items after the shifted history, with the arrival classes
-            assert r["n_B"] <= shifts[0.0]["n_B"] and r["n_P"] <= shifts[0.0]["n_P"]
-            assert r["n_C_kept"] <= shifts[0.0]["n_C_kept"]
+            assert r["n_B"] <= changes["none"]["n_B"] and r["n_P"] <= changes["none"]["n_P"]
+            assert r["n_C_kept"] <= changes["none"]["n_C_kept"]
+            if label.startswith("drop"):
+                assert r["n_P"] == changes["none"]["n_P"]
     for r in rows:
         assert r["n_P"] + r["n_C"] == r["n_B"] and r["n_C_kept"] <= r["n_C"]
-    assert set(summary["verdict"]) >= {"memory_ok", "hit_ok", "ambiguous_ok"}
+    assert summary["verdict"]["primary"] in summary["verdict"]["configs"]
+
+
+def test_dropping_entries_shrinks_the_cache(world):
+    feats = e10.context(world)["feats"]
+    fewer = e14.dropped_features(feats, 0.25)
+    assert len(fewer.centers) < len(feats.centers) and len(fewer.slots) == len(fewer.centers)
+    assert set(fewer.pool_ids.tolist()) <= set(feats.pool_ids.tolist())
+    assert len(feats.centers) == feats.table.n
 
 
 def test_e14_is_deterministic_for_a_seed(world, result):
