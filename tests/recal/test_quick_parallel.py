@@ -379,7 +379,7 @@ def test_provenance_version_is_in_every_hash(tmp_path, monkeypatch):
 
 
 def test_no_real_experiment_imports_the_runner_or_the_registry():
-    for e in ("E1", "E3", "E4", "E7", "E8", "E9", "E10", "E11", "E12", "E13", "E14", "intruder_check", "golden"):
+    for e in ("E1", "E3", "E4", "E7", "E8", "E9", "E10", "E11", "E12", "E13", "E14", "E15", "intruder_check", "golden"):
         files = provenance.source_files(e)
         assert "recal/micro/provenance.py" not in files and "scripts/micro/run.py" not in files
         assert f"recal/micro/{e.lower()}.py" in files and "recal/core/recal_core.cpp" in files
@@ -439,10 +439,10 @@ def test_runner_results_match_for_one_and_many_workers(tiny):
 
 def test_quick_tier_runs_the_middle_budget_on_a_sample_and_writes_its_own_folder(tiny):
     store = tiny / "store_quick"
-    assert run_cli(tiny, "--tier", "quick", "--experiments", "intruder_check,E1,E3,E4,E10,E11,E13", "--store",
+    assert run_cli(tiny, "--tier", "quick", "--experiments", "intruder_check,E1,E3,E4,E10,E11,E13,E15", "--store",
                    str(store), out="quick") == 0
     for e, name in (("E1", "e1"), ("E3", "e3"), ("E4", "e4"), ("E10", "e10"), ("E11", "e11"), ("E13", "e13"),
-                    ("intruder_check", "intruder_check")):
+                    ("E15", "e15"), ("intruder_check", "intruder_check")):
         body = json.loads((tiny / "quick" / e / "tiny-a-quick" / f"{name}.json").read_text())
         assert {r["budget"] for r in body["results"]["rows"]} == {0.6} and body["settings"]["tier"] == "quick"
         assert all(r["tier"] == "quick" for r in body["results"]["rows"])

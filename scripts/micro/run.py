@@ -6,7 +6,7 @@
 
 Needs the exact prepare stages (make prepare DATASET=<d> STAGES=fetch,prep; MedRAG also working_set). Workloads:
 SPACEV and TriviaQA run their Zipf 0.6 stream, LAION and MedRAG their one stream. Budgets are the workload's
-(MedRAG: the working-set budgets; E11: the smallest and the middle one; E14: the middle one). Results go to
+(MedRAG: the working-set budgets; E11: the smallest and the middle one; E14 and E15: the middle one). Results go to
 results/micro/<experiment>/<workload>/<experiment>.json (+ .csv); the quick tier writes to <workload>-quick.
 
 Work is checkpointed in units (one budget of an experiment, one index degree, one E9 run): each is written to
@@ -34,16 +34,16 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from recal import matrix, store as store_mod  # noqa: E402
-from recal.micro import (common, e1, e3, e4, e7, e8, e9, e10, e11, e12, e13, e14, golden, intruder_check,  # noqa: E402
+from recal.micro import (common, e1, e3, e4, e7, e8, e9, e10, e11, e12, e13, e14, e15, golden, intruder_check,  # noqa: E402
                          preflight, provenance, units as units_mod, world as world_mod)
 
-ORDER = ("intruder_check", "E1", "E3", "E4", "E7", "E8", "E9", "E10", "E11", "E12", "E13", "E14")
+ORDER = ("intruder_check", "E1", "E3", "E4", "E7", "E8", "E9", "E10", "E11", "E12", "E13", "E14", "E15")
 WORLD_BASED = tuple(e for e in ORDER if e != "E9")
 INDEX_UNITS = {"E7": ("degree", e7.DEGREES), "E13": ("degree", e13.DEGREES)}
 SPEND_NO_M = ("E1", "E3", "E4", "E10", "E12", "intruder_check")      # results that do not depend on M, only on the cache
 DEFAULT_WINDOW = e9.WINDOW
 DEFAULT_EXPERIMENTS = "E1,E3,E4,E7,E8,E9"
-QUICK_EXPERIMENTS = ("intruder_check", "E1", "E3", "E4", "E10", "E11", "E13")
+QUICK_EXPERIMENTS = ("intruder_check", "E1", "E3", "E4", "E10", "E11", "E13", "E15")
 QUICK_SAMPLE_REQUESTS = 2000
 QUICK_E11_REQUESTS = 35_000
 QUICK_E11_GRID = dict(shares=(0.01, 0.03), precisions=(8, 16), deltas=(0.05,))
@@ -93,7 +93,7 @@ def experiment_budgets(experiment: str, budgets: list[float], tier: str = "full"
     ordered = sorted(budgets)
     if tier == "quick":
         return [ordered[len(ordered) // 2]] if ordered else []
-    if experiment == "E14":
+    if experiment in ("E14", "E15"):
         return [ordered[len(ordered) // 2]] if ordered else []
     return e11.pick_budgets(budgets) if experiment == "E11" else list(budgets)
 
@@ -123,6 +123,9 @@ def settings_of(experiment: str, name: str, w: dict, budgets: list[float], param
         "E14": dict(seeds=e14.SEEDS, shifts=list(e14.SHIFTS), p_values=list(e14.P_VALUES), margins=list(e14.MARGINS),
                     coarse_bits=list(e14.COARSE_BITS), precise_bits=list(e14.PRECISE_BITS), primary=e14.PRIMARY,
                     ess_target=e14.ESS_TARGET, stride_parts=e14.STRIDE_PARTS, nearest=e10.NEAREST),
+        "E15": dict(c_grid=list(e15.C_GRID), c_fit=e15.C_FIT, c_fit_other=list(e15.C_FIT_OTHER),
+                    cap_multiples=list(e15.CAP_MULTIPLES), degrees=list(e15.DEGREES), efs=list(e15.EFS),
+                    ef_construction=e15.EF_CONSTRUCTION, max_queries=e10.MAX_QUERIES),
         "E13": dict(grid=e13.QUICK_GRID if quick else dict(cs=list(e13.CS), degrees=list(e13.DEGREES),
                                                           efs=list(e13.EFS)), max_queries=e13.MAX_QUERIES),
     }
@@ -241,8 +244,8 @@ def payload_of(experiment: str, world: world_mod.World, ctx: Context) -> dict:
         module = e4 if experiment == "E4" else intruder_check
         rows, diagnostics = module.run(world)
         extra["diagnostics"] = diagnostics
-    elif experiment == "E14":
-        rows, extra["summary"] = e14.run(world)
+    elif experiment in ("E14", "E15"):
+        rows, extra["summary"] = (e14 if experiment == "E14" else e15).run(world)
     elif experiment == "E11":
         grid = QUICK_E11_GRID if ctx.tier == "quick" else {}
         rows = e11.run(world, request_limit=QUICK_E11_REQUESTS if ctx.tier == "quick" else 0, **grid)

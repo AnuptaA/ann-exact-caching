@@ -237,6 +237,7 @@ rerun, refreshes `progress.json` (units done and total, queries per second, time
 | E11 | window memory against certification: shares of M, 8 or 16 bits (and native for int8 vectors), delta; per row the items and audited hits per calibration half, the effective sample sizes, the stretches, and whether min_ess alone blocks certification | `e11.csv` (bits, window_share_of_M, delta, items_per_half, W_requests, n_stretches, labeled_per_half, audited_hits_per_half, n_eff_served, n_eff_all_labeled, ess_min_certified, min_ess_blocks_share, certified_share, hit_rate, recall_of_hits, sampling_slack, quantization_slack, bound_gap_mean, in_sample); json summary over the rows that are not in_sample (smallest share that certifies, better precision) |
 | E12 | training the linear model on features computed once against the cache of the first half of the history | `e12.csv` (spearman, lam_fresh/stale, hit_rate_fresh/stale, recall_of_hits_fresh/stale, coefficients) |
 | E13 | the exact c nearest centers (8, 16, 32) against an HNSW over the centers (degree 8, 16; ef 32-256) | `e13.csv` (c, degree, ef, set_recall, best_fit_in_set_share, features_identical_share, feature diffs, us_per_query); json summary (smallest degree and ef for 99%) |
+| E15 | where the intruder rate gets its evidence: best fit and shells from the m or c nearest entries (V1, V2), a global exact count (V3, capped V4), an HNSW over the decoded shells (V5), the true top-500 count (V6, diagnostic); V0 is the core | `e15.csv` (variant, hit_rate, recall_of_hits, oracle_hit_rate, spearman_*, flips_vs_v3, us_per_query, censored_share); json summary (shell pool bytes, index memory, success rules) |
 | E7 (extended) | adds ef 512 and 1024, an exact rerank of the top 4K candidates, and the fast path's effect on the features and the hit or miss decision | `e7.csv` (+ rerank_exact_share, rerank_us_per_query, fast_unchanged_decision_share, fast_*_diff_p95) |
 
 ```bash
@@ -249,7 +250,7 @@ The intruder check goes first: its outcome (a fix in E4, or the quantization rep
 #### Quick tier, workers, hashes, inputs
 
 ```bash
-make micro DATASET=spacev TIER=quick EXPERIMENTS=intruder_check,E1,E3,E4,E10,E11,E13 WORKERS=16
+make micro DATASET=spacev TIER=quick EXPERIMENTS=intruder_check,E1,E3,E4,E10,E11,E13,E15 WORKERS=16
 make micro DATASET=spacev WORKERS=16 EXPERIMENTS=E1,E3,E4,E8,E10   # full tier, parallel (E7 needs WORKERS=1)
 make micro-inputs ACTION=push DATASET=spacev      # on the instance that prepared it
 make micro-inputs ACTION=pull DATASET=spacev      # on a fresh instance, instead of preparing
