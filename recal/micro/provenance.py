@@ -1,9 +1,10 @@
 """What a result was computed from: a hash of the code each experiment uses, of the prepared inputs and of the libraries.
 
 The hash replaces the commit in the config hash. A commit that changes no file an experiment uses keeps its units
-valid, and an edit that is not committed (or a rebuilt core) changes it.
+valid, and an edit that is not committed (or a rebuilt core) changes it. PROVENANCE_VERSION is in every hash.
 """
 
+import ast
 import hashlib
 import importlib.metadata
 import platform
@@ -15,32 +16,8 @@ ROOT = Path(recal.__file__).resolve().parents[1]
 LIBRARIES = ("numpy", "scipy", "scikit-learn", "hnswlib", "threadpoolctl")
 CORE_DIR = "recal/core"
 
-COMMON = (
-    "recal/accounting.py", "recal/backend.py", "recal/build.py", "recal/history.py", "recal/history_mode.py",
-    "recal/ksets.py", "recal/params.py", "recal/policy.py", "recal/records.py", "recal/sim.py", "recal/stored.py",
-    "recal/shell_quant.py", "recal/system.py", "recal/core/__init__.py", "recal/core/recal_core.cpp",
-    "recal/micro/common.py", "recal/micro/fit.py", "recal/micro/world.py", "recal/micro/topk.py",
-    "recal/micro/golden.py", "recal/micro/preflight.py", "recal/micro/units.py", "recal/micro/provenance.py",
-    "scripts/micro/run.py",
-)
-V11 = ("recal/micro/e10.py", "recal/micro/intervals.py", "recal/micro/e4.py", "recal/micro/e3.py",
-       "recal/micro/intruder_check.py", "recal/micro/quantize.py", "recal/micro/e1.py")
-EXTRA = {
-    "E1": ("recal/micro/e1.py",),
-    "E3": ("recal/micro/e3.py", "recal/micro/quantize.py", "recal/micro/e1.py"),
-    "E4": ("recal/micro/e4.py", "recal/micro/e3.py", "recal/micro/e1.py"),
-    "E7": ("recal/micro/e7.py", "recal/micro/e4.py") + V11,
-    "E8": ("recal/micro/e8.py", "recal/micro/e1.py"),
-    "E9": ("recal/micro/e9.py", "recal/lru.py", "recal/lru_build.py", "recal/analysis/rates.py",
-           "recal/analysis/guarantee.py"),
-    "intruder_check": ("recal/micro/intruder_check.py", "recal/micro/e4.py", "recal/micro/e3.py",
-                       "recal/micro/e1.py"),
-    "E10": V11,
-    "E11": V11 + ("recal/micro/e11.py",),
-    "E12": V11 + ("recal/micro/e12.py",),
-    "E13": V11 + ("recal/micro/e13.py",),
-    "E14": V11 + ("recal/micro/e11.py", "recal/micro/e14.py"),
-}
+PROVENANCE_VERSION = 1      # bump by hand when the meaning of a result changes without a source change
+CORE_SOURCE = "recal/core/recal_core.cpp"
 
 
 def file_digest(path: Path) -> str:
@@ -55,14 +32,56 @@ def core_binaries(root: Path = ROOT) -> list[Path]:
     return sorted((root / CORE_DIR).glob("_recal_core*.so"))
 
 
-def source_files(experiment: str) -> list[str]:
-    return sorted(set(COMMON) | set(EXTRA.get(experiment, ())) | {f"recal/micro/{experiment.lower()}.py"})
+def _module_file(root: Path, module: str) -> str | None:
+    base = Path(*module.split("."))
+    for rel in (base.with_suffix(".py"), base / "__init__.py"):
+        if (root / rel).is_file():
+            return rel.as_posix()
+    return None
+
+
+def _imports(root: Path, rel: str) -> set[str]:
+    """Modules under recal/ that the file imports (every import statement, including those inside functions)."""
+    tree = ast.parse((root / rel).read_text(), filename=rel)
+    package = rel.split("/")[:-1]
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = ".".join(package[:len(package) - node.level + 1]) if node.level else ""
+            module = ".".join(part for part in (base, node.module) if part)
+            names = [module] + [f"{module}.{alias.name}" for alias in node.names]
+        else:
+            continue
+        for name in names:
+            parts = name.split(".")
+            found.update(".".join(parts[:i]) for i in range(1, len(parts) + 1) if parts[0] == "recal")
+    return found
+
+
+def source_files(experiment: str, root: Path = ROOT) -> list[str]:
+    """The experiment's module and every recal module it imports, directly or not, plus the core source. The runner
+    and this registry are not imported by experiments, so adding an experiment changes no other hash."""
+    entry = f"recal/micro/{experiment.lower()}.py"
+    files = {CORE_SOURCE}
+    todo = [entry] if (root / entry).is_file() else []
+    files.add(entry)
+    while todo:
+        rel = todo.pop()
+        for module in _imports(root, rel):
+            path = _module_file(root, module)
+            if path is not None and path not in files:
+                files.add(path)
+                todo.append(path)
+    return sorted(files)
 
 
 def code_hash(experiment: str, root: Path = ROOT) -> str:
-    """Hash of the sources the experiment uses, the core source and the compiled core."""
-    h = hashlib.sha256()
-    for rel in source_files(experiment):
+    """Hash of the experiment's import closure under recal/, the core source, the compiled core and
+    PROVENANCE_VERSION."""
+    h = hashlib.sha256(f"provenance_version:{PROVENANCE_VERSION}".encode())
+    for rel in source_files(experiment, root):
         path = root / rel
         h.update(rel.encode())
         h.update(file_digest(path).encode() if path.exists() else b"missing")

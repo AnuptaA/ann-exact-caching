@@ -49,6 +49,17 @@ def same(a, b) -> bool:
     return json.dumps(a, sort_keys=True, default=str) == json.dumps(b, sort_keys=True, default=str)
 
 
+def close(a, b, rtol: float = 1e-9) -> bool:
+    """Structures equal, floats within rtol (BLAS summation order differs with the worker count)."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(close(a[k], b[k], rtol) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(close(x, y, rtol) for x, y in zip(a, b))
+    if isinstance(a, float) and isinstance(b, float):
+        return a == b or (a != a and b != b) or abs(a - b) <= rtol * max(abs(a), abs(b))
+    return a == b
+
+
 TIMING = ("us_per_query", "rerank_us_per_query", "build_s")
 
 
@@ -301,30 +312,77 @@ def test_preflight_stops_when_the_probe_golden_fails(tiny, monkeypatch):
 
 # ---- provenance and hashes ---------------------------------------------------------------------------------------
 
+FAKE_FILES = {
+    "recal/__init__.py": "",
+    "recal/micro/__init__.py": "",
+    "recal/build.py": "# build\n",
+    "recal/micro/world.py": "from recal import build\n",
+    "recal/micro/e1.py": "from recal.micro import world\n",
+    "recal/micro/e13.py": "from recal.micro import e1\n",
+    "recal/micro/e14.py": "from recal.micro import e1\nimport recal.micro.world\n",
+    "recal/core/recal_core.cpp": "// core\n",
+    "recal/unrelated.py": "x = 1\n",
+    "recal/micro/provenance.py": "# registry\n",
+    "scripts/micro/run.py": "# runner\n",
+}
+
+
 def fake_root(tmp_path):
     root = tmp_path / "repo"
-    for rel in set(provenance.COMMON) | {f for files in provenance.EXTRA.values() for f in files}:
+    for rel, text in FAKE_FILES.items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"# {rel}\n")
+        path.write_text(text)
     (root / "recal/core/_recal_core.fake.so").write_bytes(b"binary")
-    (root / "recal/unrelated.py").write_text("x = 1\n")
     return root
 
 
-def test_code_hash_follows_the_files_an_experiment_uses(tmp_path):
+def hashes(root, names=("E1", "E13", "E14")):
+    return {e: provenance.code_hash(e, root) for e in names}
+
+
+def test_code_hash_follows_the_import_closure_of_an_experiment(tmp_path):
     root = fake_root(tmp_path)
-    before = {e: provenance.code_hash(e, root) for e in ("E1", "E13")}
+    before = hashes(root)
+    assert provenance.source_files("E1", root) == [
+        "recal/__init__.py", "recal/build.py", "recal/core/recal_core.cpp", "recal/micro/__init__.py",
+        "recal/micro/e1.py", "recal/micro/world.py"]
     (root / "recal/unrelated.py").write_text("x = 2\n")
-    assert {e: provenance.code_hash(e, root) for e in before} == before
-    (root / "recal/micro/e13.py").write_text("# changed\n")
-    after = {e: provenance.code_hash(e, root) for e in before}
-    assert after["E1"] == before["E1"] and after["E13"] != before["E13"]
+    assert hashes(root) == before
+    (root / "recal/micro/e13.py").write_text("from recal.micro import e1\n# changed\n")
+    after = hashes(root)
+    assert after["E1"] == before["E1"] and after["E14"] == before["E14"] and after["E13"] != before["E13"]
     (root / "recal/build.py").write_text("# changed\n")
-    assert provenance.code_hash("E1", root) != before["E1"]
-    now = provenance.code_hash("E1", root)
+    assert all(hashes(root)[e] != after[e] for e in after)
+    now = hashes(root)
     (root / "recal/core/_recal_core.fake.so").write_bytes(b"rebuilt")
-    assert provenance.code_hash("E1", root) != now
+    assert all(hashes(root)[e] != now[e] for e in now)
+
+
+def test_adding_an_experiment_or_editing_the_runner_changes_no_other_hash(tmp_path):
+    root = fake_root(tmp_path)
+    before = hashes(root)
+    (root / "recal/micro/e15.py").write_text("from recal.micro import e1\n")
+    (root / "recal/micro/provenance.py").write_text("# registry with E15\n")
+    (root / "scripts/micro/run.py").write_text("# runner with E15\n")
+    assert hashes(root) == before
+    assert provenance.code_hash("E15", root) not in before.values()
+    for rel in ("recal/micro/provenance.py", "scripts/micro/run.py"):
+        assert all(rel not in provenance.source_files(e, root) for e in before)
+
+
+def test_provenance_version_is_in_every_hash(tmp_path, monkeypatch):
+    root = fake_root(tmp_path)
+    before = hashes(root)
+    monkeypatch.setattr(provenance, "PROVENANCE_VERSION", provenance.PROVENANCE_VERSION + 1)
+    assert all(hashes(root)[e] != before[e] for e in before)
+
+
+def test_no_real_experiment_imports_the_runner_or_the_registry():
+    for e in ("E1", "E3", "E4", "E7", "E8", "E9", "E10", "E11", "E12", "E13", "E14", "intruder_check", "golden"):
+        files = provenance.source_files(e)
+        assert "recal/micro/provenance.py" not in files and "scripts/micro/run.py" not in files
+        assert f"recal/micro/{e.lower()}.py" in files and "recal/core/recal_core.cpp" in files
 
 
 def test_unit_keys_depend_on_the_code_hash(tmp_path):
@@ -372,7 +430,7 @@ def test_runner_results_match_for_one_and_many_workers(tiny):
                 out=f"w{workers}")
     for e in ("E1", "E4", "E10"):
         rows = [json.loads((tiny / f"w{n}" / e / "tiny-a" / f"{e.lower()}.json").read_text()) for n in (1, 3)]
-        assert same(untimed(rows[0]["results"]), untimed(rows[1]["results"]))
+        assert close(untimed(rows[0]["results"]), untimed(rows[1]["results"]))
         assert rows[1]["runtime"]["workers"] == 3 and rows[0]["runtime"]["workers"] == 1
         assert rows[0]["runtime"]["libraries"]["numpy"] and rows[0]["config_hash"] == rows[1]["config_hash"]
 
