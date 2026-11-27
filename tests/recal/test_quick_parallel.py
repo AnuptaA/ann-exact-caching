@@ -439,10 +439,10 @@ def test_runner_results_match_for_one_and_many_workers(tiny):
 
 def test_quick_tier_runs_the_middle_budget_on_a_sample_and_writes_its_own_folder(tiny):
     store = tiny / "store_quick"
-    assert run_cli(tiny, "--tier", "quick", "--experiments", "intruder_check,E1,E3,E4,E10,E11,E13,E15", "--store",
+    assert run_cli(tiny, "--tier", "quick", "--experiments", "intruder_check,E1,E3,E4,E10,E11,E13,E14,E15", "--store",
                    str(store), out="quick") == 0
     for e, name in (("E1", "e1"), ("E3", "e3"), ("E4", "e4"), ("E10", "e10"), ("E11", "e11"), ("E13", "e13"),
-                    ("E15", "e15"), ("intruder_check", "intruder_check")):
+                    ("E14", "e14"), ("E15", "e15"), ("intruder_check", "intruder_check")):
         body = json.loads((tiny / "quick" / e / "tiny-a-quick" / f"{name}.json").read_text())
         assert {r["budget"] for r in body["results"]["rows"]} == {0.6} and body["settings"]["tier"] == "quick"
         assert all(r["tier"] == "quick" for r in body["results"]["rows"])
@@ -527,3 +527,23 @@ def test_summarize_reads_quick_folders_and_golden_units(tiny, tmp_path):
     run_cli(tiny, "--tier", "quick", "--experiments", "E1", "--store", str(store), out="qs")
     assert summarize.main(["--store", str(store), "--pulled", str(tmp_path / "p"), "--out", str(tmp_path / "t")]) == 0
     assert "tiny-a" in (tmp_path / "t" / "E1.csv").read_text()
+
+
+def test_e14_grid_flags_and_unit_keys():
+    import argparse
+    ns = lambda **kw: argparse.Namespace(**{"tier": "full", "e14_arms": None, "e14_coarse_bits": None, "e14_p": None,  # noqa: E731
+                                            "e14_margins": None, **kw})
+    assert micro_run.e14_grid_from(ns()) == micro_run.e14.FULL_GRID
+    quick = micro_run.e14_grid_from(ns(tier="quick"))
+    assert quick == micro_run.e14.QUICK_GRID and quick.arms == ("none", "drop0.1", "drop0.25")
+    custom = micro_run.e14_grid_from(ns(tier="quick", e14_arms="none,shift0.1", e14_coarse_bits="4,8", e14_p="0.5",
+                                        e14_margins="0,0.05"))
+    assert custom.arms == ("none", "shift0.1") and custom.coarse_bits == (4, 8) and custom.p_values == (0.5,)
+    with pytest.raises(SystemExit):
+        micro_run.e14_grid_from(ns(e14_arms="drop0.1"))
+    cfg = {"prep": "x", "stream": "s", "coord_bytes": 4, "budgets": [0.4]}
+    a = micro_run.settings_of("E14", "t", cfg, [0.4], PARAMS, 0, 5000, "quick", quick)
+    b = micro_run.settings_of("E14", "t", cfg, [0.4], PARAMS, 0, 5000, "quick", custom)
+    assert a["arms"] == ["none", "drop0.1", "drop0.25"] and a["coarse_bits"] == [8]
+    assert common.config_hash(a) != common.config_hash(b)
+    assert common.unit_hash(a, "b0.4") != common.unit_hash(b, "b0.4")

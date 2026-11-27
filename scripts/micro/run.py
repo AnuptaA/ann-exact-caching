@@ -43,7 +43,7 @@ INDEX_UNITS = {"E7": ("degree", e7.DEGREES), "E13": ("degree", e13.DEGREES)}
 SPEND_NO_M = ("E1", "E3", "E4", "E10", "E12", "intruder_check")      # results that do not depend on M, only on the cache
 DEFAULT_WINDOW = e9.WINDOW
 DEFAULT_EXPERIMENTS = "E1,E3,E4,E7,E8,E9"
-QUICK_EXPERIMENTS = ("intruder_check", "E1", "E3", "E4", "E10", "E11", "E13", "E15")
+QUICK_EXPERIMENTS = ("intruder_check", "E1", "E3", "E4", "E10", "E11", "E13", "E14", "E15")
 QUICK_SAMPLE_REQUESTS = 2000
 QUICK_E11_REQUESTS = 35_000
 QUICK_E11_GRID = dict(shares=(0.01, 0.03), precisions=(8, 16), deltas=(0.05,))
@@ -99,7 +99,7 @@ def experiment_budgets(experiment: str, budgets: list[float], tier: str = "full"
 
 
 def settings_of(experiment: str, name: str, w: dict, budgets: list[float], params: dict, max_requests: int,
-                window: int, tier: str = "full") -> dict:
+                window: int, tier: str = "full", e14_grid: e14.Grid | None = None) -> dict:
     s = dict(experiment=experiment, workload=name, prep=w["prep"], stream=w["stream"], coord_bytes=w["coord_bytes"],
              budgets=experiment_budgets(experiment, budgets, tier), k=10, target=world_mod.TARGET,
              delta=world_mod.DELTA, audit=world_mod.AUDIT, seed=0, history_frac=0.3, params=params,
@@ -120,9 +120,9 @@ def settings_of(experiment: str, name: str, w: dict, budgets: list[float], param
                                                             deltas=list(e11.DELTAS)),
                     request_limit=QUICK_E11_REQUESTS if quick else 0, nearest=e10.NEAREST),
         "E12": dict(earlier_share=e12.EARLIER_SHARE, nearest=e10.NEAREST),
-        "E14": dict(seeds=e14.SEEDS, shifts=list(e14.SHIFTS), p_values=list(e14.P_VALUES), margins=list(e14.MARGINS),
-                    coarse_bits=list(e14.COARSE_BITS), precise_bits=list(e14.PRECISE_BITS), primary=e14.PRIMARY,
-                    ess_target=e14.ESS_TARGET, stride_parts=e14.STRIDE_PARTS, nearest=e10.NEAREST),
+        "E14": dict(seeds=e14.SEEDS, precise_bits=list(e14.PRECISE_BITS), ess_target=e14.ESS_TARGET,
+                    stride_parts=e14.STRIDE_PARTS, nearest=e10.NEAREST, cell_budget=e14.CELL_BUDGET,
+                    **(e14_grid or (e14.QUICK_GRID if quick else e14.FULL_GRID)).key()),
         "E15": dict(c_grid=list(e15.C_GRID), c_fit=e15.C_FIT, c_fit_other=list(e15.C_FIT_OTHER),
                     cap_multiples=list(e15.CAP_MULTIPLES), degrees=list(e15.DEGREES), efs=list(e15.EFS),
                     ef_construction=e15.EF_CONSTRUCTION, max_queries=e10.MAX_QUERIES),
@@ -144,6 +144,7 @@ class Context:
     world_name: str = ""
     tier: str = "full"
     window: int = DEFAULT_WINDOW
+    e14_grid: e14.Grid = e14.FULL_GRID
 
     def push(self, experiment: str):
         """A function that pushes one file of the experiment's folder to the store, or None (no upload)."""
@@ -245,7 +246,7 @@ def payload_of(experiment: str, world: world_mod.World, ctx: Context) -> dict:
         rows, diagnostics = module.run(world)
         extra["diagnostics"] = diagnostics
     elif experiment in ("E14", "E15"):
-        rows, extra["summary"] = (e14 if experiment == "E14" else e15).run(world)
+        rows, extra["summary"] = e15.run(world) if experiment == "E15" else e14.run(world, grid=ctx.e14_grid)
     elif experiment == "E11":
         grid = QUICK_E11_GRID if ctx.tier == "quick" else {}
         rows = e11.run(world, request_limit=QUICK_E11_REQUESTS if ctx.tier == "quick" else 0, **grid)
@@ -364,14 +365,16 @@ def split_workers(workers: int, n_tasks: int, jobs: int | None, world_workers: i
 
 def run_workload(cfg: dict, name: str, w: dict, experiments: list[str], out_root: Path, store_url, upload: bool,
                  params: dict, max_requests: int, window: int, force: bool, workers: int = 1, probe: bool = True,
-                 tier: str = "full", jobs: int | None = None, world_workers: int | None = None) -> None:
+                 tier: str = "full", jobs: int | None = None, world_workers: int | None = None,
+                 e14_grid: e14.Grid | None = None) -> None:
+    e14_grid = e14_grid or (e14.QUICK_GRID if tier == "quick" else e14.FULL_GRID)
     budgets = budgets_for(cfg, name, w)
     folder = f"{name}-quick" if tier == "quick" else name
     names = list(experiments) + [GOLDEN]
-    settings = {e: settings_of(e, name, w, budgets, params, max_requests, window, tier) for e in experiments}
+    settings = {e: settings_of(e, name, w, budgets, params, max_requests, window, tier, e14_grid) for e in experiments}
     settings[GOLDEN] = dict(settings[experiments[0]], experiment=GOLDEN, code_hash=provenance.code_hash(GOLDEN))
     dirs = {e: common.out_dir(e, folder, out_root) for e in names}
-    ctx = Context(dirs, settings, store_url, upload, folder, name, tier, window)
+    ctx = Context(dirs, settings, store_url, upload, folder, name, tier, window, e14_grid)
     pending = []
     for e in experiments:
         if not force and common.is_fresh(dirs[e], e, settings[e]):
@@ -470,6 +473,23 @@ def time_features(cfg: dict, name: str, w: dict, experiments: list[str], params:
           f"experiments ({', '.join(experiments)}); this is an estimate.")
 
 
+def e14_grid_from(a) -> e14.Grid:
+    """The E14 grid: the tier's default (quick: 8-bit coarse, p 0.1 and 0.25, margin 0.05, no shift arms) with any
+    --e14-* flag replacing its field."""
+    base = e14.QUICK_GRID if a.tier == "quick" else e14.FULL_GRID
+
+    def parse(text, kind):
+        return tuple(kind(x) for x in text.split(",") if x.strip())
+
+    try:
+        return e14.Grid(arms=parse(a.e14_arms, str) if a.e14_arms else base.arms,
+                        coarse_bits=parse(a.e14_coarse_bits, int) if a.e14_coarse_bits else base.coarse_bits,
+                        p_values=parse(a.e14_p, float) if a.e14_p else base.p_values,
+                        margins=parse(a.e14_margins, float) if a.e14_margins else base.margins)
+    except ValueError as error:
+        raise SystemExit(f"E14 grid: {error}")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dataset", required=True)
@@ -488,12 +508,17 @@ def main(argv=None) -> int:
     ap.add_argument("--jobs", type=int, default=None, help="override: processes over budgets and E9 runs")
     ap.add_argument("--world-workers", type=int, default=None, help="override: forked processes per budget")
     ap.add_argument("--no-probe", action="store_true", help="skip the preflight build of a small cache")
+    ap.add_argument("--e14-arms", default=None, help=f"E14 change arms, comma list of {','.join(e14.ARMS)}")
+    ap.add_argument("--e14-coarse-bits", default=None, help="E14 coarse precisions, for example 4,8")
+    ap.add_argument("--e14-p", default=None, help="E14 keep probabilities, for example 0.1,0.25,0.5")
+    ap.add_argument("--e14-margins", default=None, help="E14 floor margins, for example 0,0.05")
     ap.add_argument("--time-features", action="store_true",
                     help="time a probe cache build and the core's feature pass, print the projection, then stop")
     a = ap.parse_args(argv)
     cfg = json.loads(a.config.read_text())
     experiments = parse_experiments(a.experiments)
     check_tier(experiments, a.tier)
+    grid = e14_grid_from(a)
     if a.time_features:
         for name, w in workloads_for(cfg, a.dataset).items():
             time_features(cfg, name, w, experiments, json.loads(a.params), a.tier, a.workers)
@@ -502,7 +527,7 @@ def main(argv=None) -> int:
         store_mod.open_store(a.store)       # fails now when the store is not configured
     for name, w in workloads_for(cfg, a.dataset).items():
         run_workload(cfg, name, w, experiments, a.out, a.store, not a.no_upload, json.loads(a.params),
-                     a.max_requests, a.window, a.force, a.workers, not a.no_probe, a.tier, a.jobs, a.world_workers)
+                     a.max_requests, a.window, a.force, a.workers, not a.no_probe, a.tier, a.jobs, a.world_workers, grid)
     return 0
 
 

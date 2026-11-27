@@ -18,6 +18,7 @@ removed (their lists leave the pool; shells stay as built), closer to gradual sw
 import copy
 import shutil
 import tempfile
+from dataclasses import dataclass
 from statistics import NormalDist
 
 import numpy as np
@@ -39,18 +40,58 @@ PRIMARY = dict(precise=16, coarse=4, p=0.25, margin=0.05)
 STRIDE_PARTS = 10
 UNDER_T_GAP = 0.01
 LOOSER_GAP = 0.005
-MAX_GRID = 20_000_000
+CELL_BUDGET = 400_000_000      # cells of the count grid evaluated exactly per call
+CHUNK_CELLS = 4_000_000
+FALLBACK_BLOCKS = 2_000_000
 BOOT = 2000
 QUANTILES = (5, 25, 50, 75, 95)
 
 
-def configs() -> list[dict]:
-    """Every precise/coarse/p combination at the primary margin, and the margin sweep at the primary p."""
-    out = [dict(precise=pb, coarse=cb, p=p, margin=PRIMARY["margin"])
-           for pb in PRECISE_BITS for cb in COARSE_BITS for p in P_VALUES]
-    out += [dict(precise=16, coarse=cb, p=PRIMARY["p"], margin=m)
-            for cb in COARSE_BITS for m in MARGINS if m != PRIMARY["margin"]]
-    return out
+ARMS = ("none", "drop0.1", "drop0.25", "shift0.1", "shift0.25")
+QUICK_ARMS = ("none", "drop0.1", "drop0.25")
+
+
+@dataclass(frozen=True)
+class Grid:
+    """What a run sweeps: change arms, coarse precisions, keep probabilities and margins."""
+    arms: tuple = ARMS
+    coarse_bits: tuple = COARSE_BITS
+    p_values: tuple = P_VALUES
+    margins: tuple = MARGINS
+
+    def __post_init__(self):
+        if "none" not in self.arms:
+            raise ValueError("the arms must include 'none'")
+        unknown = [a for a in self.arms if a not in ARMS]
+        if unknown:
+            raise ValueError(f"unknown arm(s) {unknown}; choose from {list(ARMS)}")
+
+    @property
+    def primary(self) -> dict:
+        """PRIMARY where the grid has its values, else the grid's first."""
+        pick = lambda want, have: want if want in have else have[0]  # noqa: E731
+        return dict(precise=PRIMARY["precise"], coarse=pick(PRIMARY["coarse"], self.coarse_bits),
+                    p=pick(PRIMARY["p"], self.p_values), margin=pick(PRIMARY["margin"], self.margins))
+
+    def shares(self, kind: str) -> list[float]:
+        return [float(a[len(kind):]) for a in self.arms if a.startswith(kind)]
+
+    def configs(self) -> list[dict]:
+        """Every precise/coarse/p combination at the primary margin, and the margin sweep at the primary p."""
+        pm = self.primary
+        out = [dict(precise=pb, coarse=cb, p=p, margin=pm["margin"])
+               for pb in PRECISE_BITS for cb in self.coarse_bits for p in self.p_values]
+        out += [dict(precise=16, coarse=cb, p=pm["p"], margin=m)
+                for cb in self.coarse_bits for m in self.margins if m != pm["margin"]]
+        return out
+
+    def key(self) -> dict:
+        return dict(arms=list(self.arms), coarse_bits=list(self.coarse_bits), p_values=list(self.p_values),
+                    margins=list(self.margins))
+
+
+FULL_GRID = Grid()
+QUICK_GRID = Grid(arms=QUICK_ARMS, coarse_bits=(8,), p_values=(0.1, 0.25), margins=(0.05,))
 
 
 def config_key(c: dict) -> str:
@@ -59,53 +100,129 @@ def config_key(c: dict) -> str:
 
 # ---- certification with any number of weight classes ------------------------------------------------------------
 
-def worst_case_bound(y: np.ndarray, wt: np.ndarray, certain: np.ndarray, ambiguous: np.ndarray, z: float):
-    """recal.micro.intervals.worst_case_bound for any number of distinct weights among the ambiguous items (here
-    1, 1/a and 1/p): the same bound, minimized over the count of ambiguous items taken from each weight class."""
-    yc, wc = y[certain], wt[certain]
+def _classes(y: np.ndarray, wt: np.ndarray, ambiguous: np.ndarray) -> list:
+    """(weight, sorted recalls) of the ambiguous items, one entry per distinct weight; never empty."""
     items = np.flatnonzero(ambiguous)
     weights = np.unique(wt[items]) if len(items) else np.zeros(0)
     classes = [(float(c), np.sort(y[items[wt[items] == c]])) for c in weights]
-    shape = [len(v) + 1 for _, v in classes]
-    if int(np.prod(shape)) > MAX_GRID:
-        raise ValueError(f"worst-case grid {shape} exceeds {MAX_GRID} cells")
-    ks = [np.arange(n).reshape([-1 if j == i else 1 for j in range(len(shape))]) for i, n in enumerate(shape)]
+    return classes or [(0.0, np.zeros(0))]
 
-    def prefix(values: np.ndarray, power: int) -> np.ndarray:
-        return np.r_[0.0, np.cumsum(values ** power)]
 
-    W, SW2 = wc.sum() + np.zeros(shape), (wc * wc).sum() + np.zeros(shape)
-    S1, S2 = (wc * yc).sum() + np.zeros(shape), (wc * yc * yc).sum() + np.zeros(shape)
-    for (c, v), k in zip(classes, ks):
-        W, SW2 = W + c * k, SW2 + c * c * k
-        S1, S2 = S1 + c * prefix(v, 1)[k], S2 + c * prefix(v, 2)[k]
-    nonempty = W > 0
+def _prefix(values: np.ndarray, power: int) -> np.ndarray:
+    return np.r_[0.0, np.cumsum(values ** power)]
+
+
+def worst_case_bound(y: np.ndarray, wt: np.ndarray, certain: np.ndarray, ambiguous: np.ndarray, z: float,
+                     cell_budget: int = CELL_BUDGET, chunk: int = CHUNK_CELLS, blocks: int = FALLBACK_BLOCKS):
+    """recal.micro.intervals.worst_case_bound for any number of distinct weights among the ambiguous items (here
+    1, 1/a and 1/p): the same bound, minimized over the count of ambiguous items taken from each weight class.
+
+    The grid of counts is evaluated exactly in chunks of `chunk` cells (bounded memory). Above `cell_budget` cells
+    the bound is relaxed over blocks of the grid (a valid lower bound on the minimum, bound_exact False). Returns
+    None when no non-empty set exists."""
+    yc, wc = y[certain], wt[certain]
+    classes = _classes(y, wt, ambiguous)
+    shape = tuple(len(v) + 1 for _, v in classes)
+    cells = int(np.prod(shape, dtype=np.float64))
+    n_amb = int(ambiguous.sum())
+    if cells > cell_budget:
+        out = _relaxed(yc, wc, classes, z, blocks)
+        return None if out is None else dict(out, n_ambiguous=n_amb, cells=cells, bound_exact=False)
+    prefix1 = [_prefix(v, 1) for _, v in classes]
+    prefix2 = [_prefix(v, 2) for _, v in classes]
+    W0, SW20, S10, S20 = wc.sum(), (wc * wc).sum(), (wc * yc).sum(), (wc * yc * yc).sum()
+
+    def sums(flat: np.ndarray):
+        ks = np.unravel_index(flat, shape)
+        W, SW2, S1, S2 = W0 + np.zeros(len(flat)), SW20 + np.zeros(len(flat)), S10 + np.zeros(len(flat)), \
+            S20 + np.zeros(len(flat))
+        for (c, _), k, p1, p2 in zip(classes, ks, prefix1, prefix2):
+            W, SW2, S1, S2 = W + c * k, SW2 + c * c * k, S1 + c * p1[k], S2 + c * p2[k]
+        return ks, W, SW2, S1, S2
+
+    best_feasible, t, min_ess, found = np.inf, 0.0, np.inf, False
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for lo in range(0, cells, chunk):
+            flat = np.arange(lo, min(cells, lo + chunk))
+            _, W, SW2, S1, S2 = sums(flat)
+            nonempty = W > 0
+            if not nonempty.any():
+                continue
+            found = True
+            mean, ess = S1 / W, W * W / SW2
+            denom = np.maximum(W - SW2 / W, 1e-12)
+            g = np.maximum(S2 - W * mean ** 2, 0.0)
+            feasible = np.where(nonempty, mean - z * np.sqrt(g / denom) / np.sqrt(ess), np.inf)
+            i = int(np.argmin(feasible))
+            if feasible[i] < best_feasible:
+                best_feasible, t = float(feasible[i]), float(mean[i])
+            min_ess = min(min_ess, float(np.where(nonempty, ess, np.inf).min()))
+        if not found:
+            return None
+        sorted_dev = [_prefix(np.sort((v - t) ** 2)[::-1], 1) for _, v in classes]
+        R0 = (wc * (yc - t) ** 2).sum()
+        lcb = np.inf
+        for lo in range(0, cells, chunk):
+            flat = np.arange(lo, min(cells, lo + chunk))
+            ks, W, SW2, S1, _ = sums(flat)
+            nonempty = W > 0
+            R = R0 + np.zeros(len(flat))
+            for (c, _), k, q in zip(classes, ks, sorted_dev):
+                R = R + c * q[k]
+            denom = np.maximum(W - SW2 / W, 1e-12)
+            bound = np.where(nonempty, S1 / W - z * np.sqrt(R / denom) / np.sqrt(W * W / SW2), np.inf)
+            lcb = min(lcb, float(bound.min()))
+    return dict(lcb=lcb, lcb_prefix=best_feasible, ess=min_ess, n_ambiguous=n_amb, cells=cells, bound_exact=True)
+
+
+def _relaxed(yc: np.ndarray, wc: np.ndarray, classes: list, z: float, blocks: int):
+    """A lower bound on the minimum of the worst-case bound over blocks of the count grid.
+
+    Within a block (counts between k_lo and k_hi per class) W, SW2, S1 and R only grow with the counts, so
+    mean >= S1(k_lo) / W(k_hi) and the slack is at most z sqrt(R(k_hi) SW2(k_hi) / (denom_lo W(k_lo)^2)) with
+    denom_lo = W(k_lo) - SW2(k_hi) / W(k_lo); a non-positive denom_lo gives -inf. R uses t = the mean of all
+    possible items (any constant bounds g). The effective sample size is at least W(k_lo)^2 / SW2(k_hi)."""
+    per = max(2, int(blocks ** (1.0 / len(classes))))
+    lo_k, hi_k = [], []
+    for _, v in classes:
+        edges = np.unique(np.round(np.linspace(0, len(v), min(len(v) + 1, per) + 1)).astype(np.int64))
+        lo_k.append(edges[:-1] if len(edges) > 1 else edges)
+        hi_k.append(edges[1:] if len(edges) > 1 else edges)
+    shape = [len(a) for a in lo_k]
+    axes = [np.arange(n).reshape([-1 if j == i else 1 for j in range(len(shape))]) for i, n in enumerate(shape)]
+    all_y = np.concatenate([yc] + [v for _, v in classes])
+    all_w = np.concatenate([wc] + [np.full(len(v), c) for c, v in classes])
+    t = float((all_w * all_y).sum() / all_w.sum()) if all_w.sum() > 0 else 0.0
+    W0, SW20, S10, R0 = wc.sum(), (wc * wc).sum(), (wc * yc).sum(), (wc * (yc - t) ** 2).sum()
+    Wl, Wh, SW2h, S1l, Rh = (W0 + np.zeros(shape), W0 + np.zeros(shape), SW20 + np.zeros(shape),
+                             S10 + np.zeros(shape), R0 + np.zeros(shape))
+    for (c, v), lo, hi, ax in zip(classes, lo_k, hi_k, axes):
+        p1, q = _prefix(v, 1), _prefix(np.sort((v - t) ** 2)[::-1], 1)
+        Wl, Wh = Wl + c * lo[ax], Wh + c * hi[ax]
+        SW2h, S1l, Rh = SW2h + c * c * hi[ax], S1l + c * p1[lo[ax]], Rh + c * q[hi[ax]]
+    nonempty = Wh > 0
     if not nonempty.any():
         return None
     with np.errstate(divide="ignore", invalid="ignore"):
-        mean, ess = S1 / W, W * W / SW2
-        denom = np.maximum(W - SW2 / W, 1e-12)
-        g = np.maximum(S2 - W * mean ** 2, 0.0)
-        feasible = np.where(nonempty, mean - z * np.sqrt(g / denom) / np.sqrt(ess), np.inf)
-        best = np.unravel_index(np.argmin(feasible), feasible.shape)
-        t = float(mean[best])
-        R = (wc * (yc - t) ** 2).sum() + np.zeros(shape)
-        for (c, v), k in zip(classes, ks):
-            R = R + c * prefix(np.sort((v - t) ** 2)[::-1], 1)[k]
-        bound = np.where(nonempty, S1 / W - z * np.sqrt(R / denom) / np.sqrt(ess), np.inf)
-    return dict(lcb=float(bound.min()), lcb_prefix=float(feasible[best]),
-                ess=float(np.where(nonempty, ess, np.inf).min()), n_ambiguous=int(len(items)))
+        denom = Wl - SW2h / Wl
+        slack = np.where(denom > 0, z * np.sqrt(Rh * SW2h / (np.maximum(denom, 1e-12) * Wl * Wl)), np.inf)
+        bound = np.where(nonempty, S1l / Wh - slack, np.inf)
+        ess = np.where(nonempty & (Wl > 0), Wl * Wl / SW2h, 0.0)
+    return dict(lcb=float(bound.min()), lcb_prefix=float("nan"), ess=float(np.where(nonempty, ess, np.inf).min()))
 
 
 def scan(edges: np.ndarray, low: np.ndarray, high: np.ndarray, y: np.ndarray, wt: np.ndarray, target: float,
-         delta: float, min_ess: float) -> dict:
+         delta: float, min_ess: float, **bound_options) -> dict:
     """certify_worst_case's scan (strictest first, skip low ESS, stop at the first failure); also returns the
     first failing threshold (None when none fails)."""
     z = NormalDist().inv_cdf(1.0 - delta)
-    out = dict(lam=None, first_fail=None, ess=0.0, n_ambiguous=0)
+    out = dict(lam=None, first_fail=None, ess=0.0, n_ambiguous=0, bound_exact=True, cells=0)
     for lam in np.asarray(edges)[::-1]:
         certain = low >= lam
-        stats = worst_case_bound(y, wt, certain, (high >= lam) & ~certain, z)
+        stats = worst_case_bound(y, wt, certain, (high >= lam) & ~certain, z, **bound_options)
+        if stats is not None:
+            out["bound_exact"] &= stats["bound_exact"]
+            out["cells"] = max(out["cells"], stats["cells"])
         if stats is None or not np.isfinite(stats["ess"]) or stats["ess"] < min_ess:
             continue
         if stats["lcb"] >= target:
@@ -211,13 +328,14 @@ def pool_overlap(a: np.ndarray, b: np.ndarray) -> float:
     return float(len(np.intersect1d(a, b)) / max(len(a), 1))
 
 
-def snapshot_scores(world: w.World, model: dict, vec: np.ndarray, truth: np.ndarray, feats=None) -> dict:
+def snapshot_scores(world: w.World, model: dict, vec: np.ndarray, truth: np.ndarray, feats=None,
+                    coarse_bits=COARSE_BITS) -> dict:
     """Exact score, candidate, recall and the score interval of each copy (4, 8, 16 bits, native) per unique query."""
     feats = feats if feats is not None else iv.Features(world, c=e10.NEAREST)
     data = e10.labeled_set(world, feats, model, vec, truth, np.ones(len(vec)))
     ctx = dict(feats=feats, model=model)
     out = dict(score=data["score"], has=data["has"], y=data["y"])
-    for bits in COARSE_BITS + PRECISE_BITS:
+    for bits in tuple(coarse_bits) + PRECISE_BITS:
         d = e10.interval_detail(ctx, data, bits)
         out[bits] = (np.where(data["has"], d["low"], -np.inf), np.where(data["has"], d["high"], -np.inf))
     return out
@@ -230,7 +348,7 @@ def eligible_rows(n_held: int, history_len: int, offset: int) -> np.ndarray:
 
 # ---- the run -----------------------------------------------------------------------------------------------------
 
-def run(world: w.World, request_limit: int = 0, seeds: int = SEEDS, shifts=SHIFTS, drops=SHIFTS,
+def run(world: w.World, request_limit: int = 0, seeds: int = SEEDS, grid: Grid = FULL_GRID,
         ess_target: float = ESS_TARGET, log=print) -> tuple[list[dict], dict]:
     ctx = e10.context(world)
     if ctx["model"] is None or not ctx["cal"]["has"].any():
@@ -250,19 +368,19 @@ def run(world: w.World, request_limit: int = 0, seeds: int = SEEDS, shifts=SHIFT
     truth = np.asarray(world.top[uniq][:, :world.k], np.int64)
     base_pool = ctx["feats"].pool_ids
     snaps = [dict(shift="none", offset=0, pool_overlap=1.0,
-                  data=snapshot_scores(world, model, vec, truth, ctx["feats"]))]
+                  data=snapshot_scores(world, model, vec, truth, ctx["feats"], grid.coarse_bits))]
     log(f"[E14] snapshot 0 scored: {n} requests, {len(uniq)} unique queries")
-    for share in shifts:
+    for share in grid.shares("shift"):
         offset = int(round(share * world.history_len))
         sw = shifted_world(world, offset)
         feats = iv.Features(sw, c=e10.NEAREST)
         snaps.append(dict(shift=f"shift{share:g}", offset=offset, pool_overlap=pool_overlap(base_pool, feats.pool_ids),
-                          data=snapshot_scores(sw, model, vec, truth, feats)))
+                          data=snapshot_scores(sw, model, vec, truth, feats, grid.coarse_bits)))
         log(f"[E14] snapshot shift {share:g} (offset {offset}) built and scored")
-    for share in drops:
+    for share in grid.shares("drop"):
         feats = dropped_features(ctx["feats"], share)
         snaps.append(dict(shift=f"drop{share:g}", offset=0, pool_overlap=pool_overlap(base_pool, feats.pool_ids),
-                          data=snapshot_scores(world, model, vec, truth, feats)))
+                          data=snapshot_scores(world, model, vec, truth, feats, grid.coarse_bits)))
         log(f"[E14] snapshot drop {share:g} scored")
     for s in snaps:
         s["req"] = {key: (v[0][pos], v[1][pos]) if isinstance(v, tuple) else v[pos] for key, v in s["data"].items()}
@@ -282,13 +400,15 @@ def run(world: w.World, request_limit: int = 0, seeds: int = SEEDS, shifts=SHIFT
         ff_arrival = arrival_first_fail(n, W, max(W // STRIDE_PARTS, 1), lab["B"], lo16, hi16, base["y"], lab["weight"],
                                         edges, p, cal_fail)
         cls = {}
-        for m in MARGINS:
+        primary = grid.primary
+        for m in grid.margins:
             floor = np.where(np.isnan(ff_arrival), -np.inf, ff_arrival - m)
-            for pv in P_VALUES:
+            for pv in grid.p_values:
                 cls[(m, pv)] = classes(lab, base["score"], floor, d["keep"], pv)
-            if m == PRIMARY["margin"]:
+            if m == primary["margin"]:
                 arrival_floor = floor
-        margin_rows.append(arrival_margins(seed, lab, base, arrival_floor, cls[(PRIMARY["margin"], PRIMARY["p"])]))
+        margin_rows.append(arrival_margins(seed, lab, base, arrival_floor, cls[(primary["margin"], primary["p"])],
+                                           grid.coarse_bits))
         for kind, length, starts in plans:
             for start in starts:
                 win = slice(start, start + length)
@@ -297,17 +417,22 @@ def run(world: w.World, request_limit: int = 0, seeds: int = SEEDS, shifts=SHIFT
                     if start + length < s["offset"]:
                         continue                       # the next stretch would be scored against its own history
                     rows += window_rows(seed, kind, length, start, win, nxt, s, snaps[0], lab, cls, arrival_floor,
-                                        edges, p, margin_rows)
+                                        edges, p, margin_rows, grid)
         log(f"[E14] seed {seed} done")
     summary = summarize(rows, margin_rows, world, dict(n_requests=n, n_unique=len(uniq), hit_rate_policy=h, lam_policy=lam0,
                                                      W=W, eval_len=eval_len, a=p.a, T=p.T,
                                                      offsets={s["shift"]: s["offset"] for s in snaps},
                                                      pool_overlap={s["shift"]: s["pool_overlap"] for s in snaps},
-                                                     n_windows={k: len(v) for k, _, v in plans}))
+                                                     n_windows={k: len(v) for k, _, v in plans}), grid)
+    for r in rows:
+        r["workload"], r["budget"] = world.name, world.budget
+    b = summary["bound"]
+    log(f"[E14] windows={b['n_windows']} effective_windows={b['effective_windows']:.2f} "
+        f"exact_bound_share={b['exact_bound_share']:.3f} max_cells={b['max_cells']}")
     return rows, summary
 
 
-def arrival_margins(seed: int, lab: dict, base: dict, floor: np.ndarray, cl: dict) -> dict:
+def arrival_margins(seed: int, lab: dict, base: dict, floor: np.ndarray, cl: dict, coarse_bits=COARSE_BITS) -> dict:
     """Score minus floor at arrival for half-B items (the primary margin), and the class shares."""
     B = lab["B"]
     gap = base["score"][B] - floor[B]
@@ -316,7 +441,7 @@ def arrival_margins(seed: int, lab: dict, base: dict, floor: np.ndarray, cl: dic
                share_C=float(cl["C"][B].mean()) if B.any() else np.nan,
                share_audited=float(lab["audited"][B].mean()) if B.any() else np.nan,
                score_minus_floor=pct(gap))
-    for bits in COARSE_BITS:
+    for bits in coarse_bits:
         lo, hi = base[bits]
         C = cl["C"]
         half = (hi[C] - lo[C]) / 2.0
@@ -333,7 +458,8 @@ def pct(values: np.ndarray) -> dict:
     return {f"p{q}": float(np.percentile(v, q)) for q in QUANTILES} | dict(n=int(len(v))) if len(v) else dict(n=0)
 
 
-def window_rows(seed, kind, length, start, win, nxt, s, s0, lab, cls, arrival_floor, edges, p, margin_rows) -> list:
+def window_rows(seed, kind, length, start, win, nxt, s, s0, lab, cls, arrival_floor, edges, p, margin_rows,
+                grid: Grid = FULL_GRID) -> list:
     """Reference and every tiered configuration on one window under one snapshot, applied to the next stretch."""
     r = s["req"]
     elig = s["eligible"]
@@ -343,7 +469,8 @@ def window_rows(seed, kind, length, start, win, nxt, s, s0, lab, cls, arrival_fl
     ref = scan(edges, lo16[inwin], hi16[inwin], y[inwin], wt[inwin], p.T, p.delta, p.min_ess)
     common = dict(seed=seed, window=kind, W=length, start=start, shift=s["shift"], n_B=int(inwin.sum()),
                   n_A=int((lab["A"][win] & elig[win]).sum()), lam_ref=ref["lam"], ess_ref=ref["ess"],
-                  first_fail_ref=ref["first_fail"], **{f"{k}_ref": v for k, v in
+                  first_fail_ref=ref["first_fail"], bound_exact_ref=ref["bound_exact"],
+                  cells_ref=ref["cells"], **{f"{k}_ref": v for k, v in
                                                        applied(ref["lam"], r["score"][nxt], r["has"][nxt],
                                                                r["y"][nxt]).items()})
     if s["shift"] != "none" and kind == "W":
@@ -351,9 +478,9 @@ def window_rows(seed, kind, length, start, win, nxt, s, s0, lab, cls, arrival_fl
         ff0 = scan(edges, b[16][0][win][inwin], b[16][1][win][inwin], b["y"][win][inwin], wt[inwin], p.T, p.delta,
                    p.min_ess)["first_fail"]
         common["first_fail_same_items_shift0"] = ff0
-        margin_rows.append(shift_margins(seed, start, s, win, inwin, cls, ref["first_fail"], ff0, arrival_floor))
+        margin_rows.append(shift_margins(seed, start, s, win, inwin, cls, ref["first_fail"], ff0, arrival_floor, grid))
     out = []
-    for c in configs():
+    for c in grid.configs():
         cl = cls[(c["margin"], c["p"])]
         P, kept = cl["P"][win] & inwin, cl["kept"][win] & inwin
         use = P | kept
@@ -365,7 +492,7 @@ def window_rows(seed, kind, length, start, win, nxt, s, s0, lab, cls, arrival_fl
         res = applied(t["lam"], r["score"][nxt], r["has"][nxt], r["y"][nxt])
         out.append(dict(common, config=config_key(c), **c, n_P=int(P.sum()), n_C=int((cl["C"][win] & inwin).sum()),
                         n_C_kept=int(kept.sum()), lam=t["lam"], ess=t["ess"], n_ambiguous=t["n_ambiguous"],
-                        **res))
+                        bound_exact=t["bound_exact"], cells=t["cells"], **res))
     return out
 
 
@@ -374,11 +501,12 @@ def lowest_finite(values: np.ndarray) -> float:
     return float(v.min()) if len(v) else np.nan
 
 
-def shift_margins(seed, start, s, win, inwin, cls, ff_new, ff_old, arrival_floor) -> dict:
+def shift_margins(seed, start, s, win, inwin, cls, ff_new, ff_old, arrival_floor, grid: Grid = FULL_GRID) -> dict:
     """C items (primary margin) under the shifted cache: is the new interval's upper end below the new floor?"""
     r = s["req"]
-    m = PRIMARY["margin"]
-    C = cls[(m, PRIMARY["p"])]["C"][win] & inwin
+    primary = grid.primary
+    m = primary["margin"]
+    C = cls[(m, primary["p"])]["C"][win] & inwin
     floor = floor_of(ff_new, m)
     out = dict(kind="shift", seed=seed, start=start, shift=s["shift"], n_C=int(C.sum()), first_fail_new=ff_new,
                first_fail_old_same_items=ff_old, floor_new=floor,
@@ -388,7 +516,7 @@ def shift_margins(seed, start, s, win, inwin, cls, ff_new, ff_old, arrival_floor
     if ff_new is None:      # no failing threshold under the new cache: no floor, every item may matter
         out["crossed_share"] = np.nan
         C = np.zeros_like(C)
-    for bits in COARSE_BITS:
+    for bits in grid.coarse_bits:
         lo, hi = r[bits][0][win][C], r[bits][1][win][C]
         half = (hi - lo) / 2.0
         below = hi < floor
@@ -424,8 +552,10 @@ def block_bootstrap(values: np.ndarray, block: int, rng) -> tuple[float, float]:
     return float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
 
 
-def summarize(rows: list[dict], margin_rows: list[dict], world: w.World, info: dict) -> dict:
+def summarize(rows: list[dict], margin_rows: list[dict], world: w.World, info: dict,
+              grid: Grid = FULL_GRID) -> dict:
     T = info["T"]
+    primary = grid.primary
     dim, k = world.db.shape[1], world.k
     size = item_bytes(dim, k)
     rng = np.random.default_rng(14)
@@ -434,8 +564,8 @@ def summarize(rows: list[dict], margin_rows: list[dict], world: w.World, info: d
     out["n_independent_windows"] = info["n_requests"] / (1.5 * info["W"])
     base = [r for r in rows if r["window"] == "W" and r["shift"] == "none"]
     memory = {}
-    for c in configs():
-        if c["margin"] != PRIMARY["margin"]:
+    for c in grid.configs():
+        if c["margin"] != primary["margin"]:
             continue
         mine = [r for r in base if r["config"] == config_key(c)]
         nA, nB = np.mean([r["n_A"] for r in mine]), np.mean([r["n_B"] for r in mine])
@@ -454,9 +584,9 @@ def summarize(rows: list[dict], margin_rows: list[dict], world: w.World, info: d
                           score_minus_floor_seed0=arrival[0]["score_minus_floor"] if arrival else {},
                           **{f"C{b}_upper_reaches_floor_share": float(np.mean([m[f"C{b}_upper_reaches_floor_share"]
                                                                                for m in arrival]))
-                             for b in COARSE_BITS},
+                             for b in grid.coarse_bits},
                           **{f"C{b}_floor_minus_upper_halfwidths_seed0": arrival[0][f"C{b}_floor_minus_upper_halfwidths"]
-                             for b in COARSE_BITS if arrival})
+                             for b in grid.coarse_bits if arrival})
     shifted = {}
     for share in sorted({m["shift"] for m in margin_rows if m["kind"] == "shift"}):
         mine = [m for m in margin_rows if m["kind"] == "shift" and m["shift"] == share]
@@ -471,7 +601,7 @@ def summarize(rows: list[dict], margin_rows: list[dict], world: w.World, info: d
                      implied_margin_p95=float(np.percentile(np.maximum(-drift[np.isfinite(drift)], 0), 95))
                      if np.isfinite(drift).any() else float("nan"),
                      new_floor_minus_lowest_arrival_floor=pct(arr))
-        for b in COARSE_BITS:
+        for b in grid.coarse_bits:
             entry[f"C{b}_below_floor_share"] = wmean(mine, f"C{b}_below_floor_share")
             entry[f"C{b}_ambiguous_share"] = wmean(mine, f"C{b}_ambiguous_share")
             entry[f"C{b}_crossed_but_below_share"] = wmean(mine, f"C{b}_crossed_but_below_share")
@@ -482,14 +612,29 @@ def summarize(rows: list[dict], margin_rows: list[dict], world: w.World, info: d
     cert = {}
     for kind in ("W", "W/2"):
         for share in sorted({r["shift"] for r in rows}):
-            for c in configs():
+            for c in grid.configs():
                 key = config_key(c)
                 mine = [r for r in rows if r["window"] == kind and r["shift"] == share and r["config"] == key]
                 if mine:
                     cert[f"{kind}|{share}|{key}"] = compare(mine, T, STRIDE_PARTS if kind == "W" else 1, rng)
     out["certification"] = cert
-    out["verdict"] = verdict(out)
+    out["grid"] = grid.key()
+    out["bound"] = bound_summary(rows, out["n_independent_windows"])
+    out["verdict"] = verdict(out, grid)
     return out
+
+
+def bound_summary(rows: list[dict], independent: float) -> dict:
+    """Windows (kind, start), the effective window count and the share of windows (per seed and arm) whose
+    certifications all used the exact bound; the largest grid seen."""
+    windows_w = {r["start"] for r in rows if r["window"] == "W"}
+    keys = {}
+    for r in rows:
+        k = (r["seed"], r["window"], r["start"], r["shift"])
+        keys[k] = keys.get(k, r["bound_exact_ref"]) and r["bound_exact_ref"] and r["bound_exact"]
+    return dict(n_windows=len(windows_w), n_window_arm_seeds=len(keys), effective_windows=independent,
+                exact_bound_share=float(np.mean(list(keys.values()))) if keys else float("nan"),
+                max_cells=int(max([r["cells"] for r in rows] + [r["cells_ref"] for r in rows] + [0])))
 
 
 def wmean(rows: list[dict], key: str) -> float:
@@ -530,15 +675,16 @@ def compare(rows: list[dict], T: float, block: int, rng) -> dict:
         looser_share=float(np.mean([r["lam"] < r["lam_ref"] - LOOSER_GAP for r in both])) if both else float("nan"))
 
 
-def verdict(out: dict) -> dict:
+def verdict(out: dict, grid: Grid = FULL_GRID) -> dict:
     """The rule of thumb per configuration at the primary margin: memory ratio at least 3, tiered hit rate within 0.5
     point of the reference (with no change and after each change), no more under-T windows, at most 10% of C items
     ambiguous after the largest shift and the largest drop."""
     labels = sorted({k.split("|")[1] for k in out["certification"]})
-    largest = [f"shift{max(SHIFTS):g}", f"drop{max(SHIFTS):g}"]
+    primary = grid.primary
+    largest = [f"{kind}{max(grid.shares(kind)):g}" for kind in ("shift", "drop") if grid.shares(kind)]
     per = {}
-    for c in configs():
-        if c["margin"] != PRIMARY["margin"]:
+    for c in grid.configs():
+        if c["margin"] != primary["margin"]:
             continue
         key = config_key(c)
         ratio = out["memory"].get(key, {}).get("ratio_all16_over_tiered", float("nan"))
@@ -552,4 +698,4 @@ def verdict(out: dict) -> dict:
                         under_T_ref={lab: v.get("under_T_ref") for lab, v in cert.items()},
                         under_T_tiered={lab: v.get("under_T_tiered") for lab, v in cert.items()},
                         ambiguous_after_largest=amb, ambiguous_ok={lab: bool(v <= 0.10) for lab, v in amb.items()})
-    return dict(primary=config_key(PRIMARY), independent_windows=out["n_independent_windows"], configs=per)
+    return dict(primary=config_key(primary), independent_windows=out["n_independent_windows"], configs=per)
