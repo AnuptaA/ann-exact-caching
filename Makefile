@@ -365,7 +365,7 @@ prepare:
 	$(RECAL_PY) -m scripts.prepare --config $(MATRIX) --dataset $(DATASET) $(if $(STAGES),--stages $(STAGES),)
 
 # make micro DATASET=<spacev|triviaqa|medrag|laion> [EXPERIMENTS=E1,E3,...] [TIER=quick] [WORKERS=16] [MICRO_FLAGS=...]:
-# micro-experiments (default E1 E3 E4 E7 E8 E9; also intruder_check E10 E11 E12 E13), units pushed to micro/ as they
+# micro-experiments (default E1 E3 E4 E7 E8 E9; also intruder_check E10 E11 E12 E13 E14), units pushed to micro/ as they
 # finish. TIER=quick runs the middle budget on a sample of 2,000 held-out requests (intruder_check E1 E3 E4 E10 E11 E13).
 # make micro-inputs ACTION=<push|pull|verify> DATASET=<d>: the prepared inputs in the store (a fresh instance pulls them).
 MICRO_EXPERIMENTS = E1,E3,E4,E7,E8,E9

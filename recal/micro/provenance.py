@@ -39,6 +39,7 @@ EXTRA = {
     "E11": V11 + ("recal/micro/e11.py",),
     "E12": V11 + ("recal/micro/e12.py",),
     "E13": V11 + ("recal/micro/e13.py",),
+    "E14": V11 + ("recal/micro/e11.py", "recal/micro/e14.py"),
 }
 
 
